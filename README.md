@@ -2,7 +2,7 @@
 
 This ticket implements the accessible setup and representative whole-site and goal-focused reports. It does not start a browser assessment; every report value and evidence item is sample data and is labeled as such. Entered goals remain free text and appear verbatim in the report, but the representative contact-form sample is not evidence about the entered goal.
 
-Goal-focused setup accepts free-text goals about keyboard interactions and outcomes on the controlled local site. Remote targets, other input modes, security or privacy evaluations, visual checks, requests to override safeguards or run code, and goals without a recognizable keyboard interaction are rejected before a sample report is shown. Accepted text is preserved exactly. The representative contact-form result is sample data, not evidence about the configured goal.
+Goal-focused setup accepts free-text goals describing concrete keyboard interactions with named controls on the controlled local site. Remote targets, other input modes, security or privacy evaluations, visual checks, requests to override safeguards or run code, and goals without a recognizable action on a named control are rejected before a sample report is shown. Accepted text is preserved exactly. The representative contact-form result is sample data, not evidence about the configured goal.
 
 Serve the page from the repository root so its JavaScript modules load:
 

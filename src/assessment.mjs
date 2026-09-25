@@ -9,6 +9,7 @@ const REMOTE_TARGET_PATTERN = /\b(?:remote|external|off[- ]site|off[- ]target|th
 const OTHER_INPUT_MODE_PATTERN = /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i;
 const SECURITY_RESULT_PATTERN = /\b(?:securely|safely|privately|confidentially|encrypt\w*|vulnerab\w*|insecure\w*)\b|\b(?:is|are|be|remains?|becomes?|seems?|stays?)\s+(?:not\s+)?(?:secure|safe|private|confidential|encrypted|vulnerable)\b/i;
 const SECURITY_TOPIC_PATTERN = /\b(?:security|privacy)\b/i;
+const SECURITY_CONTROL_LABEL_PATTERN = /\b(?:security|privacy)(?:\s+(?:policy|settings?))?\s+(?:link|button|field|menu|page|tab|control|element|dialog|policy|settings?)\b/i;
 const SECURITY_EVALUATION_PATTERN = /\b(?:assess|audit|evaluate|review|analyze|measure|score|rate|inspect|determine|ensure)\b/i;
 const SECURITY_CHECK_PATTERN = /\b(?:check|test|verify|confirm)\b/i;
 const SECURITY_CRITERION_PATTERN = /\b(?:adequat\w*|compliance|conformance|risk|posture)\b/i;
@@ -16,19 +17,15 @@ const SENSITIVE_DATA_PATTERN = /\b(?:passwords?|credentials?|authentication|auth
 const SENSITIVE_DATA_HANDLING_PATTERN = /\b(?:strength|policy|stor\w*|transmit\w*|protect\w*|hash\w*|expos\w*|leak\w*|share\w*)\b/i;
 const NON_KEYBOARD_CRITERIA_PATTERN = /\b(?:color|colour)\s+contrast\b|\b(?:alt(?:ernative)?\s+text|image descriptions?)\b|\bwcag\s+(?:conformance|compliance)\b/i;
 const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter|space|arrow keys?|shift[-+ ]?tab|focus|navigate|navigation)\b/i;
-const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element)\b/i;
+const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element|settings?)\b/i;
 const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:focus|navigate|move|reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
 
 const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed and will not be reinterpreted.";
-const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts free-text goals about keyboard interactions and outcomes on the controlled local site. It cannot assess remote or off-site targets, other input modes, security or privacy evaluations, visual criteria, or other non-keyboard criteria. This goal will not be reinterpreted.";
+const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts free-text goals describing concrete keyboard interactions with named controls on the controlled local site. It cannot assess remote or off-site targets, other input modes, security or privacy evaluations, visual criteria, or other non-keyboard criteria. This goal will not be reinterpreted.";
 const SECURITY_GOAL_ERROR = "Unsupported security/privacy goal: this preview cannot assess whether a site or form is secure, private, or handles sensitive data safely. It accepts keyboard interactions and outcomes only; this goal will not be reinterpreted.";
 
-/** describesKeyboardGoal recognizes explicit keyboard evidence or a keyboard action tied to a site control. */
+/** describesKeyboardGoal requires a concrete action on a named control; keyboard input is the assessment profile. */
 function describesKeyboardGoal(candidate) {
-  // The keyboard profile is fixed, so an explicit keyboard/focus cue is sufficient to establish this goal's mode.
-  if (KEYBOARD_GOAL_CUE_PATTERN.test(candidate)) return true;
-
-  // Without that cue, require both a concrete interaction and a named control so a vague outcome is not inferred.
   return hasActionOnSiteControl(candidate);
 }
 
@@ -37,10 +34,9 @@ function hasActionOnSiteControl(candidate) {
   return IMPLICIT_KEYBOARD_ACTION_PATTERN.test(candidate) && SITE_CONTROL_PATTERN.test(candidate);
 }
 
-/** describesKeyboardControlInteraction distinguishes acting on a control from merely mentioning a keyboard. */
-function describesKeyboardControlInteraction(candidate) {
-  return KEYBOARD_GOAL_CUE_PATTERN.test(candidate)
-    && hasActionOnSiteControl(candidate);
+/** targetsSecurityControlLabel allows sensitive words only when they name the control being operated. */
+function targetsSecurityControlLabel(candidate) {
+  return hasActionOnSiteControl(candidate) && SECURITY_CONTROL_LABEL_PATTERN.test(candidate);
 }
 
 /** describesSecurityAssessment looks for security assertions, not security-related control names. */
@@ -52,7 +48,7 @@ function describesSecurityAssessment(candidate) {
   const evaluatesSecurityTopic = SECURITY_TOPIC_PATTERN.test(candidate)
     && (SECURITY_EVALUATION_PATTERN.test(candidate)
       || SECURITY_CRITERION_PATTERN.test(candidate)
-      || (SECURITY_CHECK_PATTERN.test(candidate) && !describesKeyboardControlInteraction(candidate)));
+      || (SECURITY_CHECK_PATTERN.test(candidate) && !targetsSecurityControlLabel(candidate)));
 
   // Sensitive fields are not themselves security requests; their handling must be the assessment subject.
   const evaluatesSensitiveDataHandling = SENSITIVE_DATA_PATTERN.test(candidate)

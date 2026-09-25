@@ -136,6 +136,8 @@ function unsupportedAssessmentCriteriaAreNotReinterpreted() {
     { goal: "Use Tab to verify the privacy of the form", security: true },
     { goal: "Use Tab to assess the security of the contact form", security: true },
     { goal: "Use Tab to focus the contact form and assess its security", security: true },
+    { goal: "Use Tab to check whether the form's error messages are clear", security: false },
+    { goal: "Use the keyboard to assess whether the form is easy to understand", security: false },
     { goal: "Review the contact form's error messages for clarity", security: false },
   ];
 
@@ -147,7 +149,7 @@ function unsupportedAssessmentCriteriaAreNotReinterpreted() {
     if (security) {
       assert.match(result.message, /Unsupported security\/privacy goal/i);
     } else {
-      assert.match(result.message, /keyboard interactions and outcomes/i);
+      assert.match(result.message, /concrete keyboard interactions with named controls/i);
     }
   }
 }
@@ -358,8 +360,9 @@ function goalSetupAndReportExposeScope() {
   assert.ok(reportMarkup.includes('data-sample-fact="scopeLabel"'));
   assert.ok(reportMarkup.includes("Representative sample — not live assessment"));
   assert.ok(reportMarkup.includes("not evidence about that goal"));
-  assert.ok(reportMarkup.includes("free-text keyboard interactions and outcomes"));
-  assert.ok(reportMarkup.includes("goals without a keyboard interaction"));
+  assert.ok(reportMarkup.includes("concrete keyboard interactions with named controls"));
+  assert.ok(reportMarkup.includes("goals without a recognizable action on a named control"));
+  assert.ok(reportMarkup.includes("security or privacy evaluations"));
   assert.ok(reportMarkup.includes("requests to override safeguards or run code are rejected"));
   assert.ok(mainSource.includes("validateAssessmentGoal(goalInput.value)"));
   assert.ok(mainSource.includes("{ ...GOAL_FOCUSED_SAMPLE, goal }"));
