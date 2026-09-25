@@ -27,6 +27,27 @@ const comparisonSection = document.querySelector("#sample-comparison");
 const comparisonHeading = document.querySelector("#comparison-heading");
 let recordUrl;
 
+const ASSESSMENT_EVIDENCE_PRESENTATION = {
+  action: {
+    label: "keyboard action",
+    shortLabel: "action",
+    describeRecord: ({ key, target, result }) => `${key} at ${target}: ${result}`,
+    describeChange: (change) => (
+      `Keyboard action at ${change.target}: original “${change.original.result}” (${change.original.outcome}), updated “${change.updated.result}” (${change.updated.outcome}).`
+    ),
+    describeFailure: (record) => record.result,
+  },
+  focus: {
+    label: "focus observation",
+    shortLabel: "focus",
+    describeRecord: ({ target, role, indicator }) => `${target} (${role}): ${indicator}`,
+    describeChange: (change) => (
+      `Focus observation at ${change.target}: original “${change.original.indicator}”, updated “${change.updated.indicator}” (${formatEvidenceDirection(change.direction)}).`
+    ),
+    describeFailure: (record) => record.indicator,
+  },
+};
+
 /** formatScopeLabel gives a stable presentation label to the stored assessment-scope value. */
 function formatScopeLabel(scope) {
   return scope === "whole-site" ? "Whole site" : "Goal focused";
@@ -192,6 +213,20 @@ function createEvidenceLink(reference) {
   link.textContent = reference.id;
   link.setAttribute("aria-label", `${reference.id}: ${reference.label}`);
   return link;
+}
+
+/** comparisonEvidenceLink labels a reference to its source report's underlying evidence. */
+function comparisonEvidenceLink(version, record) {
+  const reportName = version === "original" ? "Original" : "Updated";
+  return { version, id: record.id, label: `${reportName} ${record.id}` };
+}
+
+/** comparisonEvidencePair links a changed item to both reports with consistent labels. */
+function comparisonEvidencePair(original, updated) {
+  return [
+    comparisonEvidenceLink("original", original),
+    comparisonEvidenceLink("updated", updated),
+  ];
 }
 
 /** renderEvidenceReferences attaches the same sample citations to both the explanation and proposed fix. */
@@ -510,64 +545,42 @@ function renderComparisonEvidence(evidence) {
   };
 
   for (const change of evidence.assessmentChanges) {
+    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[change.kind];
     if (change.change !== "changed") {
       const version = change.change === "added" ? "updated" : "original";
       const reportName = version === "updated" ? "Updated" : "Original";
       const record = change.record;
-      const evidenceName = change.kind === "action" ? "keyboard action" : "focus observation";
-      const details = change.kind === "action"
-        ? `${record.key} at ${record.target}: ${record.result}`
-        : `${record.target} (${record.role}): ${record.indicator}`;
       const addition = record.outcome === "passed"
-        ? `a passing ${evidenceName}`
-        : `a ${evidenceName} without a recorded outcome`;
+        ? `a passing ${presentation.label}`
+        : `a ${presentation.label} without a recorded outcome`;
       const description = change.change === "added"
-        ? `${reportName} report adds ${addition}: ${details}.`
-        : `Original report has no matching updated ${evidenceName}: ${details} (${record.outcome ?? "outcome not recorded"}).`;
-      addEvidenceItem(description, [{ version, id: record.id, label: `${reportName} ${record.id}` }]);
+        ? `${reportName} report adds ${addition}: ${presentation.describeRecord(record)}.`
+        : `Original report has no matching updated ${presentation.label}: ${presentation.describeRecord(record)} (${record.outcome ?? "outcome not recorded"}).`;
+      addEvidenceItem(description, [comparisonEvidenceLink(version, record)]);
       continue;
     }
 
-    if (change.kind === "action") {
-      addEvidenceItem(
-        `Keyboard action at ${change.target}: original “${change.original.result}” (${change.original.outcome}), updated “${change.updated.result}” (${change.updated.outcome}).`,
-        [
-          { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
-          { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
-        ],
-      );
-    } else {
-      addEvidenceItem(
-        `Focus observation at ${change.target}: original “${change.original.indicator}”, updated “${change.updated.indicator}” (${formatEvidenceDirection(change.direction)}).`,
-        [
-          { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
-          { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
-        ],
-      );
-    }
+    addEvidenceItem(presentation.describeChange(change), comparisonEvidencePair(change.original, change.updated));
   }
   for (const failure of evidence.persistentFailures) {
+    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
     addEvidenceItem(
-      `Both reports record a failed ${failure.kind} check at ${failure.target}.`,
-      [
-        { version: "original", id: failure.original.id, label: `Original ${failure.original.id}` },
-        { version: "updated", id: failure.updated.id, label: `Updated ${failure.updated.id}` },
-      ],
+      `Both reports record a failed ${presentation.shortLabel} check at ${failure.target}.`,
+      comparisonEvidencePair(failure.original, failure.updated),
     );
   }
   for (const failure of evidence.additionalUpdatedFailures) {
-    const evidenceDescription = failure.kind === "action"
-      ? `keyboard action: ${failure.record.result}`
-      : `focus observation: ${failure.record.indicator}`;
+    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
     addEvidenceItem(
-      `Updated report adds a failed ${evidenceDescription} at ${failure.target}.`,
-      [{ version: "updated", id: failure.record.id, label: `Updated ${failure.record.id}` }],
+      `Updated report adds a failed ${presentation.label}: ${presentation.describeFailure(failure.record)} at ${failure.target}.`,
+      [comparisonEvidenceLink("updated", failure.record)],
     );
   }
   for (const failure of evidence.unpairedOriginalFailures) {
+    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
     addEvidenceItem(
-      `Original failed ${failure.kind} evidence at ${failure.target} has no matching updated observation; its outcome is unknown.`,
-      [{ version: "original", id: failure.record.id, label: `Original ${failure.record.id}` }],
+      `Original failed ${presentation.shortLabel} evidence at ${failure.target} has no matching updated observation; its outcome is unknown.`,
+      [comparisonEvidenceLink("original", failure.record)],
     );
   }
   for (const change of evidence.supportingChanges) {
@@ -600,17 +613,14 @@ function appendSupportingEvidenceDifference(addEvidenceItem, change) {
     if (change.change === "changed") {
       addEvidenceItem(
         `Recovery evidence ${change.original.id} changed: original “${change.original.text}”, updated “${change.updated.text}”.`,
-        [
-          { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
-          { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
-        ],
+        comparisonEvidencePair(change.original, change.updated),
       );
     } else {
       const version = change.change === "added" ? "updated" : "original";
       const record = change.record;
       addEvidenceItem(
         `${version === "updated" ? "Updated" : "Original"} report ${change.change} recovery evidence ${record.id}: ${record.text}.`,
-        [{ version, id: record.id, label: `${version === "updated" ? "Updated" : "Original"} ${record.id}` }],
+        [comparisonEvidenceLink(version, record)],
       );
     }
     return;
@@ -621,15 +631,8 @@ function appendSupportingEvidenceDifference(addEvidenceItem, change) {
     const updated = change.updated;
     const record = change.record;
     const links = change.change === "changed"
-      ? [
-        { version: "original", id: original.id, label: `Original ${original.id}` },
-        { version: "updated", id: updated.id, label: `Updated ${updated.id}` },
-      ]
-      : [{
-        version: change.change === "added" ? "updated" : "original",
-        id: record.id,
-        label: `${change.change === "added" ? "Updated" : "Original"} ${record.id}`,
-      }];
+      ? comparisonEvidencePair(original, updated)
+      : [comparisonEvidenceLink(change.change === "added" ? "updated" : "original", record)];
     const description = change.change === "changed"
       ? `Citation ${original.id} changed label from “${original.label}” to “${updated.label}”.`
       : `${change.change === "added" ? "Updated" : "Original"} report ${change.change} evidence citation ${record.id}: ${record.label}.`;
@@ -646,16 +649,13 @@ function appendSupportingEvidenceDifference(addEvidenceItem, change) {
   if (change.change === "changed") {
     addEvidenceItem(
       `Screenshot mockup changed (${change.changedFields.join(", ")}): original ${describeScreenshot(original)}, updated ${describeScreenshot(updated)}.`,
-      [
-        { version: "original", id: original.id, label: `Original ${original.id}` },
-        { version: "updated", id: updated.id, label: `Updated ${updated.id}` },
-      ],
+      comparisonEvidencePair(original, updated),
     );
   } else {
     const version = change.change === "added" ? "updated" : "original";
     addEvidenceItem(
       `${version === "updated" ? "Updated" : "Original"} report ${change.change} screenshot mockup ${record.id}: ${describeScreenshot(record)}.`,
-      [{ version, id: record.id, label: `${version === "updated" ? "Updated" : "Original"} ${record.id}` }],
+      [comparisonEvidenceLink(version, record)],
     );
   }
 }
