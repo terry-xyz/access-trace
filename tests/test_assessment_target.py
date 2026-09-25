@@ -229,6 +229,101 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertIsNone(completed["evidenceHandoff"]["progress"]["goal"])
 
     def test_whole_site_continues_after_a_website_action_makes_no_progress(self):
+        class DeterministicBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.focus = "document"
+
+            def observe(self):
+                focus = {
+                    "document": {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    },
+                    "name": {
+                        "role": "textbox",
+                        "accessibleName": "Name",
+                        "tag": "input",
+                        "stableId": "name",
+                        "isStable": True,
+                    },
+                    "email": {
+                        "role": "textbox",
+                        "accessibleName": "Email",
+                        "tag": "input",
+                        "stableId": "email",
+                        "isStable": True,
+                    },
+                    "message": {
+                        "role": "textbox",
+                        "accessibleName": "Message",
+                        "tag": "textarea",
+                        "stableId": "message",
+                        "isStable": True,
+                    },
+                    "submit": {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    },
+                }[self.focus]
+                controls = [
+                    {
+                        "role": "textbox",
+                        "accessibleName": field.title(),
+                        "tag": "textarea" if field == "message" else "input",
+                        "stableId": field,
+                        "focusable": True,
+                        "isStable": True,
+                    }
+                    for field in ("name", "email", "message")
+                ]
+                controls.append(
+                    {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "focusable": True,
+                        "isStable": True,
+                    }
+                )
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": focus,
+                    "controls": controls,
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if key == "Tab":
+                    self.focus = {
+                        "document": "name",
+                        "name": "email",
+                        "email": "message",
+                        "message": "submit",
+                    }.get(self.focus, "submit")
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
         class WholeSitePlanner:
             attempted_noop = False
 
@@ -247,9 +342,10 @@ class AssessmentTargetTests(unittest.TestCase):
             {"targetUrl": self.base_url + "/demo/fixed"},
         )
 
-        status, completed = self.request(
-            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
-        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", DeterministicBrowser):
+            status, completed = self.request(
+                "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+            )
 
         self.assertEqual(200, status)
         self.assertEqual("COMPLETED", completed["status"])
@@ -491,6 +587,35 @@ class AssessmentTargetTests(unittest.TestCase):
         )
 
     def test_agent_failed_handoff_keeps_agent_context_separate_from_browser_failure(self):
+        class StableBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+
+            def observe(self):
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    },
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
+                }
+
+            def close(self):
+                return None
+
         class FailingPlanner:
             def next_action(self, context):
                 raise PlannerError("planner unavailable")
@@ -502,9 +627,10 @@ class AssessmentTargetTests(unittest.TestCase):
             {"targetUrl": self.base_url + "/demo/fixed"},
         )
 
-        _, result = self.request(
-            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
-        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", StableBrowser):
+            _, result = self.request(
+                "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+            )
 
         handoff = result["evidenceHandoff"]
         self.assertEqual("INCONCLUSIVE", handoff["terminal"]["status"])
