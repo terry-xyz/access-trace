@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import threading
 import unittest
@@ -46,6 +47,7 @@ class DeterministicTestPlanner:
 
 class AssessmentTargetTests(unittest.TestCase):
     def setUp(self):
+        self.repo_root = Path(__file__).resolve().parents[1]
         self.run_directory = Path(tempfile.mkdtemp())
         self.server = create_server(
             "127.0.0.1",
@@ -290,13 +292,115 @@ class AssessmentTargetTests(unittest.TestCase):
         )
 
         serialized = json.dumps(observation)
-        self.assertLessEqual(len(observation["url"]), 256)
+        self.assertIsNone(observation["url"])
         self.assertLessEqual(len(observation["title"]), 80)
         self.assertNotIn(oversized, serialized)
         self.assertLessEqual(len(observation["focus"]["stableId"]), 80)
         self.assertLessEqual(len(observation["controls"][0]["accessibleName"]), 80)
         self.assertIsInstance(observation["controls"][0]["characterCount"], int)
         self.assertIsInstance(observation["controls"][0]["acceptedInput"], bool)
+
+        reflected = redacted_observation(
+            {
+                "url": (
+                    self.base_url
+                    + "/demo/fixed/Avery%20Example?name=Avery%20Example&email=avery%40example.test"
+                ),
+                "title": "Sent Avery%20Example avery%40example.test",
+                "focus": {},
+                "controls": [],
+                "successMatched": False,
+                "lifecycle": {},
+            },
+            self.base_url + "/demo/fixed",
+        )
+
+        reflected_serialized = json.dumps(reflected)
+        self.assertEqual(self.base_url + "/demo/fixed", reflected["url"])
+        self.assertEqual("[redacted]", reflected["title"])
+        self.assertNotIn("Avery Example", reflected_serialized)
+        self.assertNotIn("avery@example.test", reflected_serialized)
+        self.assertNotIn("Avery%20Example", reflected_serialized)
+        self.assertNotIn("avery%40example.test", reflected_serialized)
+        self.assertFalse(reflected["lifecycle"]["offLoopbackRedirect"])
+        self.assertEqual([], reflected["warnings"])
+
+    def test_codex_planner_rejects_a_forged_editable_focus(self):
+        context = {
+            "pageEvidence": {
+                "focus": {
+                    "role": "button",
+                    "tag": "button",
+                    "stableId": "name",
+                    "isStable": True,
+                    "acceptedInput": False,
+                }
+            }
+        }
+        planner = CodexPlanner(
+            invoke=lambda prompt: (
+                '{"kind":"type","field":"name","text":"fictional"}'
+            )
+        )
+
+        with self.assertRaises(PlannerError):
+            planner.next_action(context)
+
+    def test_codex_planner_cannot_read_repository_and_cleans_workspace(self):
+        sandbox_exec = shutil.which("sandbox-exec")
+        if sandbox_exec is None:
+            self.skipTest("sandbox-exec is required for the production planner boundary")
+
+        sentinel = self.repo_root / "planner-boundary-sentinel"
+        command_directory = Path(tempfile.mkdtemp(prefix="planner-command-"))
+        working_command = command_directory / "working-codex"
+        working_command.write_text(
+            "#!/bin/sh\n"
+            "/usr/bin/printf '{\"kind\":\"key\",\"key\":\"Tab\"}'\n"
+        )
+        working_command.chmod(working_command.stat().st_mode | 0o111)
+        probe_command = command_directory / "probe-codex"
+        probe_command.write_text(
+            "#!/bin/sh\n"
+            "if /bin/cat '" + str(sentinel) + "' >/dev/null 2>&1; then\n"
+            "  /usr/bin/printf '{\"kind\":\"type\",\"field\":\"name\",\"text\":\"sentinel-read\"}'\n"
+            "else\n"
+            "  /usr/bin/printf '{\"kind\":\"key\",\"key\":\"Tab\"}'\n"
+            "fi\n"
+        )
+        probe_command.chmod(probe_command.stat().st_mode | 0o111)
+        sentinel.write_text("repository secret")
+        before = set(Path(tempfile.gettempdir()).glob("access-trace-planner-*"))
+
+        try:
+            context = {
+                "pageEvidence": {
+                    "focus": {
+                        "role": "textbox",
+                        "tag": "input",
+                        "stableId": "name",
+                        "isStable": True,
+                    }
+                }
+            }
+            self.assertEqual(
+                {"kind": "key", "key": "Tab"},
+                CodexPlanner(command=str(working_command), timeout=2).next_action(context),
+            )
+            try:
+                probe_action = CodexPlanner(command=str(probe_command), timeout=2).next_action(
+                    context
+                )
+            except PlannerError:
+                probe_action = None
+            if probe_action is not None:
+                self.assertEqual({"kind": "key", "key": "Tab"}, probe_action)
+        finally:
+            sentinel.unlink(missing_ok=True)
+            shutil.rmtree(command_directory)
+
+        after = set(Path(tempfile.gettempdir()).glob("access-trace-planner-*"))
+        self.assertEqual(before, after)
 
     def test_completed_requires_a_persisted_png_screenshot(self):
         run = create_run(

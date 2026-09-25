@@ -4,6 +4,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from .browser import (
     BrowserActionError,
@@ -11,7 +12,7 @@ from .browser import (
     BrowserError,
     IsolatedKeyboardBrowser,
 )
-from .domain import SUPPORTED_GOAL, utc_now
+from .domain import DEMO_TITLE, LOOPBACK_HOSTS, SUPPORTED_GOAL, utc_now
 from .planner import CodexPlanner, PlannerError, validate_action
 
 
@@ -19,7 +20,6 @@ MAX_INTERACTIONS = 16
 BROWSER_RUN_LOCK = threading.Lock()
 
 
-MAX_PAGE_URL_LENGTH = 256
 MAX_PAGE_STRING_LENGTH = 80
 MAX_CHARACTER_COUNT = 100_000
 MAX_CONTROLS = 8
@@ -99,10 +99,39 @@ def _goal_progress(observation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _redacted_url(raw_url: Any, target_url: str) -> Optional[str]:
+    if not isinstance(raw_url, str):
+        return None
+    try:
+        observed = urlsplit(raw_url)
+        target = urlsplit(target_url)
+        observed_port = observed.port
+        target_port = target.port
+    except ValueError:
+        return None
+    same_loopback_origin = (
+        observed.hostname in LOOPBACK_HOSTS
+        and target.hostname in LOOPBACK_HOSTS
+    )
+    if (
+        observed.scheme != target.scheme
+        or not (observed.hostname == target.hostname or same_loopback_origin)
+        or observed_port != target_port
+    ):
+        return None
+    return target_url
+
+
+def _redacted_title(raw_title: Any) -> Optional[str]:
+    if raw_title == DEMO_TITLE:
+        return DEMO_TITLE
+    if isinstance(raw_title, str):
+        return "[redacted]"
+    return None
+
+
 def redacted_observation(raw: Dict[str, Any], target_url: str) -> Dict[str, Any]:
-    url = _bounded_page_string(raw.get("url"), MAX_PAGE_URL_LENGTH)
-    parsed_target = target_url.split("/demo/", 1)[0]
-    bounded_url = url
+    bounded_url = _redacted_url(raw.get("url"), target_url)
     raw_lifecycle = raw.get("lifecycle", {})
     if not isinstance(raw_lifecycle, dict):
         raw_lifecycle = {}
@@ -120,7 +149,7 @@ def redacted_observation(raw: Dict[str, Any], target_url: str) -> Dict[str, Any]
         "kind": "settled-observation",
         "observedAt": utc_now(),
         "url": bounded_url,
-        "title": _bounded_page_string(raw.get("title")),
+        "title": _redacted_title(raw.get("title")),
         "focus": _focus_snapshot(raw),
         "controls": [],
         "warnings": [],
@@ -151,7 +180,7 @@ def redacted_observation(raw: Dict[str, Any], target_url: str) -> Dict[str, Any]
             )
         safe_control.setdefault("focusable", True)
         observation["controls"].append(safe_control)
-    if not isinstance(bounded_url, str) or not bounded_url.startswith(parsed_target + "/demo/"):
+    if bounded_url is None:
         observation["warnings"].append({"kind": "off-loopback-redirect"})
         observation["lifecycle"]["offLoopbackRedirect"] = True
     return observation
