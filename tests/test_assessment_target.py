@@ -221,6 +221,12 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertTrue(all(context["assessmentScope"] == "whole-site" for context in planner_contexts))
         self.assertTrue(all(context["goal"] is None for context in planner_contexts))
         self.assertNotIn("Message sent", json.dumps(completed["observations"][-1]["coverage"]))
+        self.assertEqual("COMPLETED", completed["evidenceHandoff"]["terminal"]["status"])
+        self.assertEqual(
+            completed["observations"][-1]["coverage"],
+            completed["evidenceHandoff"]["progress"]["coverage"],
+        )
+        self.assertIsNone(completed["evidenceHandoff"]["progress"]["goal"])
 
     def test_whole_site_continues_after_a_website_action_makes_no_progress(self):
         class WholeSitePlanner:
@@ -334,6 +340,179 @@ class AssessmentTargetTests(unittest.TestCase):
 
         self.assertEqual(200, status)
         self.assertEqual(created, fetched)
+
+    def test_run_exposes_a_versioned_report_ready_evidence_handoff(self):
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+        )
+
+        handoff = created["evidenceHandoff"]
+
+        self.assertEqual("access-trace.evidence.v1", handoff["schema"])
+        self.assertEqual(created["id"], handoff["runId"])
+        self.assertEqual(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "targetVersion": "fixed",
+                "assessmentScope": "goal-focused",
+                "goal": "Submit the contact form",
+                "successCondition": "Message sent",
+                "simulationMode": True,
+                "interactionProfile": "keyboard-only",
+            },
+            handoff["assessment"],
+        )
+        self.assertEqual("IN_PROGRESS", handoff["terminal"]["status"])
+        self.assertEqual(1, len(handoff["observations"]))
+        self.assertEqual(1, len(handoff["focusObservations"]))
+        self.assertEqual([], handoff["actions"])
+        self.assertIsNone(handoff["observations"][0]["focus"]["acceptedInput"])
+        self.assertIsNone(handoff["observations"][0]["controls"][0]["acceptedInput"])
+        self.assertEqual(
+            [{"kind": "observation", "sequence": 1}],
+            handoff["evidenceReferences"],
+        )
+        self.assertFalse(handoff["privacy"]["rawValuesRetained"])
+        self.assertFalse(handoff["privacy"]["pasteDataRetained"])
+        self.assertFalse(handoff["privacy"]["pageSourceRetained"])
+        self.assertIsNone(handoff["reporting"]["explanation"])
+        self.assertIsNone(handoff["reporting"]["proposedFix"])
+        self.assertIsNone(handoff["reporting"]["confidence"])
+        self.assertEqual(
+            {
+                "assessmentScope": "goal-focused",
+                "goal": "Submit the contact form",
+                "successCondition": "Message sent",
+                "simulationMode": True,
+                "interactionProfile": "keyboard-only",
+            },
+            handoff["comparison"]["settings"],
+        )
+        self.assertEqual(1, handoff["comparison"]["runCount"])
+        serialized = json.dumps(handoff)
+        self.assertNotIn("Avery Example", serialized)
+        self.assertNotIn("avery@example.test", serialized)
+        self.assertNotIn("A fictional message", serialized)
+
+    def test_completed_handoff_keeps_ordered_redacted_evidence_and_stopping_reference(self):
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+        )
+
+        _, completed = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+        )
+
+        handoff = completed["evidenceHandoff"]
+        self.assertEqual("COMPLETED", handoff["terminal"]["status"])
+        self.assertEqual(completed["interactionCount"], handoff["interactionCount"])
+        self.assertEqual(len(completed["actions"]), len(handoff["actions"]))
+        self.assertEqual(len(completed["observations"]), len(handoff["observations"]))
+        self.assertEqual(
+            "name", handoff["actions"][0]["focusAfter"]["stableId"]
+        )
+        self.assertEqual(
+            "name", handoff["actions"][1]["focusBefore"]["stableId"]
+        )
+        controls = {
+            control["stableId"]: control
+            for control in handoff["observations"][-1]["controls"]
+            if control.get("stableId") in {"name", "email", "message"}
+        }
+        self.assertEqual({"name", "email", "message"}, set(controls))
+        self.assertTrue(all(controls[field]["acceptedInput"] for field in controls))
+        self.assertTrue(all(controls[field]["characterCount"] > 0 for field in controls))
+        self.assertTrue(all(controls[field]["validationState"] == "valid" for field in controls))
+        self.assertTrue(handoff["stopping"]["point"]["successMatched"])
+        self.assertEqual(
+            completed["stoppingScreenshotRef"],
+            handoff["stopping"]["screenshotRef"],
+        )
+        self.assertIn(
+            {
+                "kind": "stopping-screenshot",
+                "ref": completed["stoppingScreenshotRef"],
+                "redacted": True,
+            },
+            handoff["evidenceReferences"],
+        )
+        self.assertTrue(handoff["privacy"]["stoppingScreenshotRedacted"])
+        self.assertEqual(
+            completed,
+            json.loads((self.run_directory / (created["id"] + ".json")).read_text()),
+        )
+        serialized = json.dumps(handoff)
+        self.assertNotIn("Avery Example", serialized)
+        self.assertNotIn("avery@example.test", serialized)
+        self.assertNotIn("A fictional message", serialized)
+
+    def test_blocked_handoff_keeps_recovery_and_terminal_context(self):
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+                "simulationMode": False,
+            },
+        )
+
+        _, blocked = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+        )
+
+        handoff = blocked["evidenceHandoff"]
+        self.assertEqual("BLOCKED", handoff["terminal"]["status"])
+        self.assertEqual(
+            blocked["recoveryEvidence"], handoff["terminal"]["recoveryEvidence"]
+        )
+        self.assertEqual("submit", handoff["stopping"]["point"]["focus"]["stableId"])
+        self.assertFalse(handoff["stopping"]["point"]["successMatched"])
+        self.assertEqual(False, handoff["assessment"]["simulationMode"])
+        self.assertEqual(
+            {
+                "assessmentScope": "goal-focused",
+                "goal": "Submit the contact form",
+                "successCondition": "Message sent",
+                "simulationMode": False,
+                "interactionProfile": "keyboard-only",
+            },
+            handoff["comparison"]["settings"],
+        )
+
+    def test_agent_failed_handoff_keeps_agent_context_separate_from_browser_failure(self):
+        class FailingPlanner:
+            def next_action(self, context):
+                raise PlannerError("planner unavailable")
+
+        self.server.planner_factory = FailingPlanner
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {"targetUrl": self.base_url + "/demo/fixed"},
+        )
+
+        _, result = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+        )
+
+        handoff = result["evidenceHandoff"]
+        self.assertEqual("INCONCLUSIVE", handoff["terminal"]["status"])
+        self.assertEqual("planner-failure", handoff["terminal"]["agentFailure"]["kind"])
+        self.assertIsNone(handoff["terminal"]["browserFailure"])
+        self.assertEqual("whole-site", handoff["assessment"]["assessmentScope"])
+        self.assertIsNone(handoff["assessment"]["goal"])
+        self.assertIsNone(handoff["progress"]["goal"])
 
     def test_fixed_contact_goal_completes_with_redacted_keyboard_evidence(self):
         _, created = self.request(

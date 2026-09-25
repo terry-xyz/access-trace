@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
+from .evidence import attach_evidence_handoff
+
 
 SUPPORTED_GOAL = "Submit the contact form"
 INTERACTION_PROFILE = "keyboard-only"
@@ -204,7 +206,7 @@ def create_run(
     now = utc_now()
     run_id = str(uuid.uuid4())
     observation = first_observation(run_request)
-    return {
+    run = {
         "schemaVersion": 1,
         "id": run_id,
         "status": "IN_PROGRESS",
@@ -236,3 +238,4 @@ def create_run(
         "agentFailure": None,
         "browserFailure": None,
     }
+    return attach_evidence_handoff(run)

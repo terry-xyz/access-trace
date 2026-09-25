@@ -28,7 +28,11 @@ broken target can be blocked only after repeated semantic Submit evidence,
 failed Enter and Space activation, and relevant recovery. The durable record
 keeps field character counts, validation metadata, recovery evidence, and a
 redacted stopping screenshot reference, never typed field values or clipboard
-contents, and cleanup must be verified.
+contents, and cleanup must be verified. Each record also exposes a versioned
+`evidenceHandoff` projection (`access-trace.evidence.v1`) with normalized
+assessment settings, ordered actions, focus observations, terminal context,
+evidence references, comparison settings, and privacy metadata for downstream
+report work.
 Whole-site completion requires the declared controlled-page focus coverage to
 be complete; it does not use “Message sent” as a universal success signal.
 Unsupported goals remain in the record and finish inconclusively rather than

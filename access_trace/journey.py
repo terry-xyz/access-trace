@@ -14,6 +14,7 @@ from .browser import (
     IsolatedKeyboardBrowser,
 )
 from .domain import DEMO_TITLE, LOOPBACK_HOSTS, SUPPORTED_GOAL, utc_now
+from .evidence import attach_evidence_handoff
 from .planner import CodexPlanner, PlannerError, validate_action
 
 
@@ -91,6 +92,10 @@ def _bounded_character_count(value: Any) -> int:
     return max(0, min(count, MAX_CHARACTER_COUNT))
 
 
+def _optional_bool(value: Any) -> Optional[bool]:
+    return None if value is None else bool(value)
+
+
 def _focus_snapshot(observation: Dict[str, Any]) -> Dict[str, Any]:
     focus = observation.get("focus", {})
     if not isinstance(focus, dict):
@@ -102,7 +107,7 @@ def _focus_snapshot(observation: Dict[str, Any]) -> Dict[str, Any]:
         "stableId": _bounded_page_string(focus.get("stableId")),
         "isStable": bool(focus.get("isStable")),
         "characterCount": _bounded_character_count(focus.get("characterCount", 0)),
-        "acceptedInput": bool(focus.get("acceptedInput")),
+        "acceptedInput": _optional_bool(focus.get("acceptedInput")),
         "validationState": _bounded_page_string(
             focus.get("validationState", "not-observed")
         ),
@@ -140,7 +145,7 @@ def _goal_progress(
             "characterCount": _bounded_character_count(
                 control.get("characterCount", 0)
             ),
-            "acceptedInput": bool(control.get("acceptedInput")),
+            "acceptedInput": _optional_bool(control.get("acceptedInput")),
             "validationState": _bounded_page_string(
                 control.get("validationState", "not-observed")
             ),
@@ -347,7 +352,11 @@ def redacted_observation(
                 safe_control[key] = _bounded_page_string(control[key])
         for key in ("focusable", "isStable", "acceptedInput"):
             if key in control:
-                safe_control[key] = bool(control[key])
+                safe_control[key] = (
+                    _optional_bool(control[key])
+                    if key == "acceptedInput"
+                    else bool(control[key])
+                )
         if "characterCount" in control:
             safe_control["characterCount"] = _bounded_character_count(
                 control["characterCount"]
@@ -417,6 +426,7 @@ def _set_terminal_state(
         "coverage": observation["coverage"],
         "observedAt": observation["observedAt"],
     }
+    attach_evidence_handoff(run)
 
 
 def _is_submit_focus(observation: Dict[str, Any]) -> bool:
@@ -1193,3 +1203,4 @@ def _execute_assessment(
                 }
         run["browserSession"]["closedAt"] = utc_now()
         run["updatedAt"] = utc_now()
+        attach_evidence_handoff(run)

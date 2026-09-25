@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Optional
 
+from .evidence import attach_evidence_handoff
+
 
 class RunStore:
     def __init__(self, directory: Path):
@@ -13,6 +15,7 @@ class RunStore:
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def save(self, run: Dict) -> None:
+        attach_evidence_handoff(run)
         destination = self.directory / (run["id"] + ".json")
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=".run-", suffix=".json", dir=str(self.directory)
