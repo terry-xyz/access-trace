@@ -7,12 +7,18 @@ const metrics = [
   { name: "Focus order", passed: 3, attempted: 4 },
 ];
 
-let passed = 0;
-let attempted = 0;
-for (const metric of metrics) {
-  passed += metric.passed;
-  attempted += metric.attempted;
+/** sumMetricTotals keeps each sample score tied to the passed and attempted counts in its metrics. */
+function sumMetricTotals(sampleMetrics) {
+  return sampleMetrics.reduce(
+    (totals, metric) => ({
+      passed: totals.passed + metric.passed,
+      attempted: totals.attempted + metric.attempted,
+    }),
+    { passed: 0, attempted: 0 },
+  );
 }
+
+const { passed, attempted } = sumMetricTotals(metrics);
 
 export const WHOLE_SITE_SAMPLE = Object.freeze({
   runId: "SAMPLE-WS-01",
@@ -88,13 +94,7 @@ const updatedWholeSiteMetrics = [
   { name: "Focus order", passed: 4, attempted: 4 },
 ];
 
-const updatedWholeSiteTotals = updatedWholeSiteMetrics.reduce(
-  (totals, metric) => ({
-    passed: totals.passed + metric.passed,
-    attempted: totals.attempted + metric.attempted,
-  }),
-  { passed: 0, attempted: 0 },
-);
+const updatedWholeSiteTotals = sumMetricTotals(updatedWholeSiteMetrics);
 
 /** AGENT_UPDATED_WHOLE_SITE_SAMPLE shows a higher score alongside a visible label regression. */
 export const AGENT_UPDATED_WHOLE_SITE_SAMPLE = Object.freeze({
@@ -168,13 +168,7 @@ const goalMetrics = [
   { name: "Form labels and instructions", passed: 4, attempted: 4 },
 ];
 
-const goalTotals = goalMetrics.reduce(
-  (totals, metric) => ({
-    passed: totals.passed + metric.passed,
-    attempted: totals.attempted + metric.attempted,
-  }),
-  { passed: 0, attempted: 0 },
-);
+const goalTotals = sumMetricTotals(goalMetrics);
 
 /** GOAL_FOCUSED_SAMPLE shows a completed sample goal with a website failure and a recovered agent failure. */
 export const GOAL_FOCUSED_SAMPLE = Object.freeze({
@@ -249,13 +243,7 @@ const updatedGoalMetrics = [
   { name: "Form labels and instructions", passed: 3, attempted: 4 },
 ];
 
-const updatedGoalTotals = updatedGoalMetrics.reduce(
-  (totals, metric) => ({
-    passed: totals.passed + metric.passed,
-    attempted: totals.attempted + metric.attempted,
-  }),
-  { passed: 0, attempted: 0 },
-);
+const updatedGoalTotals = sumMetricTotals(updatedGoalMetrics);
 
 /** AGENT_UPDATED_GOAL_FOCUSED_SAMPLE retains a completed task and exposes its label regression. */
 export const AGENT_UPDATED_GOAL_FOCUSED_SAMPLE = Object.freeze({
