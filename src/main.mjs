@@ -785,9 +785,7 @@ function appendComparisonScreenshot(parent, sampleScreenshot, evidenceId) {
   const focusedItems = sampleScreenshot.navigation
     .filter((entry) => entry.focused)
     .map(({ label }) => label);
-  const navigationSummary = sampleScreenshot.navigation
-    .map(({ label, focused }) => `${label}${focused ? " (focused)" : ""}`)
-    .join(", ");
+  const navigationSummary = describeSampleNavigation(sampleScreenshot.navigation);
   const figure = document.createElement("figure");
   figure.id = evidenceId;
   figure.className = "sample-capture comparison-report-screenshot";
