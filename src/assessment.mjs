@@ -17,7 +17,7 @@ const SENSITIVE_DATA_HANDLING_PATTERN = /\b(?:strength|policy|stor\w*|transmit\w
 const NON_KEYBOARD_CRITERIA_PATTERN = /\b(?:color|colour)\s+contrast\b|\b(?:alt(?:ernative)?\s+text|image descriptions?)\b|\bwcag\s+(?:conformance|compliance)\b/i;
 const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter|space|arrow keys?|shift[-+ ]?tab|focus|navigate|navigation)\b/i;
 const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element)\b/i;
-const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:tab(?:bing)?|focus|navigate|move|reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
+const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:focus|navigate|move|reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
 
 const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed and will not be reinterpreted.";
 const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts free-text goals about keyboard interactions and outcomes on the controlled local site. It cannot assess remote or off-site targets, other input modes, security or privacy evaluations, visual criteria, or other non-keyboard criteria. This goal will not be reinterpreted.";
