@@ -9,7 +9,14 @@ const REMOTE_TARGET_PATTERN = /\b(?:remote|external|off[- ]site|off[- ]target|th
 const OTHER_INPUT_MODE_PATTERN = /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i;
 const SECURITY_RESULT_PATTERN = /\b(?:securely|safely|privately|confidentially|encrypt\w*|vulnerab\w*|insecure\w*)\b|\b(?:is|are|be|remains?|becomes?|seems?|stays?)\s+(?:not\s+)?(?:secure|safe|private|confidential|encrypted|vulnerable)\b/i;
 const SECURITY_TOPIC_PATTERN = /\b(?:security|privacy)\b/i;
-const SECURITY_CONTROL_LABEL_PATTERN = /\b(?:security|privacy)(?:\s+(?:policy|settings?))?\s+(?:link|button|field|menu|page|tab|control|element|dialog|policy|settings?)\b/i;
+const SECURITY_LABEL_MODIFIERS = "policy|settings?";
+const SECURITY_LABEL_CONTROL_WORDS = `page|menu|link|button|field|control|element|dialog|tab|${SECURITY_LABEL_MODIFIERS}`;
+const SITE_CONTROL_WORDS = `site|website|form|navigation|${SECURITY_LABEL_CONTROL_WORDS}`;
+const SITE_CONTROL_PATTERN = new RegExp(`\\b(?:${SITE_CONTROL_WORDS})\\b`, "i");
+const SECURITY_CONTROL_LABEL_PATTERN = new RegExp(
+  `\\b(?:security|privacy)(?:\\s+(?:${SECURITY_LABEL_MODIFIERS}))?\\s+(?:${SECURITY_LABEL_CONTROL_WORDS})\\b`,
+  "i",
+);
 const SECURITY_EVALUATION_PATTERN = /\b(?:assess|audit|evaluate|review|analyze|measure|score|rate|inspect|determine|ensure)\b/i;
 const SECURITY_CHECK_PATTERN = /\b(?:check|test|verify|confirm)\b/i;
 const SECURITY_CRITERION_PATTERN = /\b(?:adequat\w*|compliance|conformance|risk|posture)\b/i;
@@ -17,7 +24,6 @@ const SENSITIVE_DATA_PATTERN = /\b(?:passwords?|credentials?|authentication|auth
 const SENSITIVE_DATA_HANDLING_PATTERN = /\b(?:strength|policy|stor\w*|transmit\w*|protect\w*|hash\w*|expos\w*|leak\w*|share\w*)\b/i;
 const NON_KEYBOARD_CRITERIA_PATTERN = /\b(?:color|colour)\s+contrast\b|\b(?:alt(?:ernative)?\s+text|image descriptions?)\b|\bwcag\s+(?:conformance|compliance)\b/i;
 const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter|space|arrow keys?|shift[-+ ]?tab|focus|navigate|navigation)\b/i;
-const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element|settings?)\b/i;
 const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:focus|navigate|move|reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
 
 const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed and will not be reinterpreted.";
