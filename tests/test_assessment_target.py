@@ -542,6 +542,112 @@ class AssessmentTargetTests(unittest.TestCase):
             ["Enter", "Space"], result["recoveryEvidence"][0]["attemptedActivations"]
         )
 
+    def test_barrier_probe_focus_drift_cannot_complete_or_block_the_run(self):
+        class FocusDriftBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.focus = "submit"
+                self.failed_enter = False
+                self.success = False
+
+            def observe(self):
+                if self.focus == "submit":
+                    focus = {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    }
+                else:
+                    focus = {
+                        "role": "textbox",
+                        "accessibleName": "Message",
+                        "tag": "textarea",
+                        "stableId": "message",
+                        "isStable": True,
+                        "characterCount": 16,
+                        "acceptedInput": True,
+                        "validationState": "valid",
+                    }
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": focus,
+                    "controls": [
+                        {
+                            "role": "textbox",
+                            "accessibleName": field.title(),
+                            "tag": "textarea" if field == "message" else "input",
+                            "stableId": field,
+                            "focusable": True,
+                            "isStable": True,
+                            "characterCount": 16,
+                            "acceptedInput": True,
+                            "validationState": "valid",
+                        }
+                        for field in ("name", "email", "message")
+                    ]
+                    + [
+                        {
+                            "role": "button",
+                            "accessibleName": "Submit",
+                            "tag": "button",
+                            "stableId": "submit",
+                            "focusable": True,
+                            "isStable": True,
+                        }
+                    ],
+                    "successMatched": self.success,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if key == "Enter" and not self.failed_enter:
+                    self.failed_enter = True
+                    self.focus = "message"
+                    raise BrowserActionError("focus drift during barrier probe")
+                if key == "Enter":
+                    self.focus = "submit"
+                elif key == "Space":
+                    self.success = True
+                elif key == "Shift+Tab":
+                    self.focus = "message"
+                elif key == "Tab":
+                    self.focus = "submit"
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", FocusDriftBrowser
+        ):
+            result = execute_contact_goal(run, self.run_directory, planner=mock.Mock())
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertIsNone(result["browserFailure"])
+        self.assertTrue(result["observations"][-1]["success"]["matched"])
+        self.assertFalse(result["recoveryEvidence"][0]["activationFocusConsistent"])
+        self.assertEqual("submit", result["stoppingPoint"]["focus"]["stableId"])
+        self.assertIsNone(result["stoppingScreenshotRef"])
+
     def test_missing_lifecycle_evidence_cannot_preserve_a_successful_observation(self):
         class MissingLifecycleBrowser:
             def __init__(self, target_url):

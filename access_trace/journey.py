@@ -733,6 +733,7 @@ def _classify_broken_barrier(
 ) -> Tuple[str, Dict[str, Any]]:
     """Probe a semantic Submit stopping point before calling it a barrier."""
     activation_actions = []
+    activation_focus_consistent = True
     recovery_actions = []
     overlay_seen = False
     current = initial_submit
@@ -744,6 +745,7 @@ def _classify_broken_barrier(
 
     for key in ("Enter", "Space"):
         before = current
+        action_start = len(run["actions"])
         current = _settle_barrier_action(
             run,
             browser,
@@ -752,8 +754,42 @@ def _classify_broken_barrier(
             typed_values,
             covered_focus_ids,
         )
+        activation_attempts = run["actions"][action_start:]
+        activation_focus_consistent = activation_focus_consistent and bool(
+            activation_attempts
+        ) and all(
+            action.get("kind") == "key"
+            and action.get("key") == key
+            and _same_submit_focus(
+                initial_submit, {"focus": action.get("focusBefore", {})}
+            )
+            for action in activation_attempts
+        )
         activation_actions.append(key)
         if current["success"]["matched"]:
+            if not activation_focus_consistent:
+                run.setdefault("recoveryEvidence", []).append(
+                    {
+                        "kind": "submit-barrier-recovery",
+                        "attemptedActivations": activation_actions,
+                        "activationFocusConsistent": False,
+                        "actions": recovery_actions,
+                        "initialFocus": _focus_snapshot(initial_submit),
+                        "finalFocus": current["focus"],
+                        "unchangedProgress": _unchanged_goal_progress(
+                            initial_submit, current
+                        ),
+                        "sameSubmitFocus": _same_submit_focus(
+                            initial_submit, current
+                        ),
+                        "successMatched": True,
+                    }
+                )
+                _append_warning(
+                    run["warnings"], {"kind": "barrier-evidence-inconclusive"}
+                )
+                _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                return "inconclusive", current
             if _complete_if_verified(
                 run, current, started, browser, evidence_directory
             ):
@@ -792,6 +828,7 @@ def _classify_broken_barrier(
     recovery_record = {
         "kind": "submit-barrier-recovery",
         "attemptedActivations": activation_actions,
+        "activationFocusConsistent": activation_focus_consistent,
         "actions": recovery_actions,
         "initialFocus": _focus_snapshot(initial_submit),
         "finalFocus": _focus_snapshot(current),
@@ -811,6 +848,7 @@ def _classify_broken_barrier(
         and not current["success"]["matched"]
         and unchanged_progress
         and same_submit_focus
+        and activation_focus_consistent
     ):
         _persist_stopping_screenshot(run, browser, evidence_directory)
         _set_terminal_state(run, "BLOCKED", current, started)
