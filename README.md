@@ -24,6 +24,9 @@ the bounded keyboard journey using the Codex planner, and persists the terminal
 result. The durable
 record keeps field character counts, validation metadata, and a redacted
 stopping screenshot reference, never typed field values or clipboard contents.
+The production planner uses a direct no-tools model request configured with
+`CODEX_PLANNER_ENDPOINT`, `CODEX_PLANNER_MODEL`, and
+`CODEX_PLANNER_API_KEY`; missing configuration yields an inconclusive run.
 
 The current lifecycle implements the fixed contact-form completion path. Broken
 barrier classification, whole-site coverage, failure handling, and report

@@ -3,8 +3,8 @@
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
-from urllib.parse import urlsplit
+from typing import Any, Dict, Iterable, Optional, Tuple
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from .browser import (
     BrowserActionError,
@@ -20,6 +20,7 @@ MAX_INTERACTIONS = 16
 BROWSER_RUN_LOCK = threading.Lock()
 
 
+MAX_PAGE_URL_LENGTH = 256
 MAX_PAGE_STRING_LENGTH = 80
 MAX_CHARACTER_COUNT = 100_000
 MAX_CONTROLS = 8
@@ -99,16 +100,18 @@ def _goal_progress(observation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _redacted_url(raw_url: Any, target_url: str) -> Optional[str]:
+def _redacted_url(
+    raw_url: Any, target_url: str, sensitive_values: Iterable[str]
+) -> Tuple[Optional[str], Optional[str]]:
     if not isinstance(raw_url, str):
-        return None
+        return None, "off-loopback-redirect"
     try:
-        observed = urlsplit(raw_url)
+        observed = urlsplit(raw_url[:4096])
         target = urlsplit(target_url)
         observed_port = observed.port
         target_port = target.port
     except ValueError:
-        return None
+        return None, "off-loopback-redirect"
     same_loopback_origin = (
         observed.hostname in LOOPBACK_HOSTS
         and target.hostname in LOOPBACK_HOSTS
@@ -118,8 +121,33 @@ def _redacted_url(raw_url: Any, target_url: str) -> Optional[str]:
         or not (observed.hostname == target.hostname or same_loopback_origin)
         or observed_port != target_port
     ):
-        return None
-    return target_url
+        return None, "off-loopback-redirect"
+    if observed.hostname is None:
+        return None, "off-loopback-redirect"
+    safe_host = observed.hostname
+    if ":" in safe_host:
+        safe_host = "[" + safe_host + "]"
+    safe_netloc = safe_host
+    if observed_port is not None:
+        safe_netloc += ":" + str(observed_port)
+    original_path = observed.path or "/"
+    observed_path = original_path[:MAX_PAGE_URL_LENGTH]
+    decoded_path = unquote(original_path[:MAX_PAGE_URL_LENGTH])
+    if any(
+        isinstance(value, str) and value and (value in observed_path or value in decoded_path)
+        for value in sensitive_values
+    ):
+        observed_path = "/[redacted-path]"
+    safe_url = urlunsplit(
+        (observed.scheme, safe_netloc, observed_path, "", "")
+    )
+    safe_url = safe_url[:MAX_PAGE_URL_LENGTH]
+    navigation_warning = (
+        "navigation-redirect"
+        if original_path != (target.path or "/")
+        else None
+    )
+    return safe_url, navigation_warning
 
 
 def _redacted_title(raw_title: Any) -> Optional[str]:
@@ -130,8 +158,14 @@ def _redacted_title(raw_title: Any) -> Optional[str]:
     return None
 
 
-def redacted_observation(raw: Dict[str, Any], target_url: str) -> Dict[str, Any]:
-    bounded_url = _redacted_url(raw.get("url"), target_url)
+def redacted_observation(
+    raw: Dict[str, Any],
+    target_url: str,
+    sensitive_values: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    bounded_url, navigation_warning = _redacted_url(
+        raw.get("url"), target_url, sensitive_values or ()
+    )
     raw_lifecycle = raw.get("lifecycle", {})
     if not isinstance(raw_lifecycle, dict):
         raw_lifecycle = {}
@@ -143,6 +177,7 @@ def redacted_observation(raw: Dict[str, Any], target_url: str) -> Dict[str, Any]
             "popupObserved",
             "crashed",
             "offLoopbackRedirect",
+            "navigationRedirect",
         )
     }
     observation = {
@@ -183,6 +218,9 @@ def redacted_observation(raw: Dict[str, Any], target_url: str) -> Dict[str, Any]
     if bounded_url is None:
         observation["warnings"].append({"kind": "off-loopback-redirect"})
         observation["lifecycle"]["offLoopbackRedirect"] = True
+    elif navigation_warning is not None:
+        observation["warnings"].append({"kind": navigation_warning})
+        observation["lifecycle"]["navigationRedirect"] = True
     return observation
 
 
@@ -311,11 +349,18 @@ def _execute_fixed_goal(
         return run
     planner = planner or CodexPlanner()
     browser: Optional[IsolatedKeyboardBrowser] = None
+    typed_values: Dict[str, str] = {}
     try:
         browser = IsolatedKeyboardBrowser(run["targetUrl"])
         current_raw = browser.observe()
-        current = _redacted_observation(current_raw, run["targetUrl"])
+        current = _redacted_observation(
+            current_raw, run["targetUrl"], typed_values.values()
+        )
         run["observations"] = [current]
+        if current["lifecycle"].get("offLoopbackRedirect") or current["lifecycle"].get(
+            "navigationRedirect"
+        ):
+            raise BrowserError("browser navigated away from the controlled target")
 
         for _ in range(MAX_INTERACTIONS):
             bounded_for_planner = {
@@ -358,21 +403,26 @@ def _execute_fixed_goal(
                     browser.press_key(action["key"])
                 else:
                     browser.type_text(action["text"])
+                    typed_values[action["field"]] = action["text"]
             except BrowserActionError:
                 _append_action(run, action, before, "failed")
                 try:
                     current = _redacted_observation(
-                        browser.observe(), run["targetUrl"]
+                        browser.observe(), run["targetUrl"], typed_values.values()
                     )
                     run["observations"].append(current)
                 except BrowserError:
                     pass
                 raise
             _append_action(run, action, before, "delivered")
-            current = _redacted_observation(browser.observe(), run["targetUrl"])
+            current = _redacted_observation(
+                browser.observe(), run["targetUrl"], typed_values.values()
+            )
             run["observations"].append(current)
-            if current["lifecycle"].get("offLoopbackRedirect"):
-                raise BrowserError("browser left the controlled local target")
+            if current["lifecycle"].get("offLoopbackRedirect") or current[
+                "lifecycle"
+            ].get("navigationRedirect"):
+                raise BrowserError("browser navigated away from the controlled target")
             if _complete_if_verified(
                 run, current, started, browser, evidence_directory
             ):

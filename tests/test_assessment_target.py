@@ -1,5 +1,5 @@
 import json
-import shutil
+import os
 import tempfile
 import threading
 import unittest
@@ -45,9 +45,25 @@ class DeterministicTestPlanner:
         return {"kind": "key", "key": "Tab"}
 
 
+class FakePlannerTransport:
+    def __init__(self, output):
+        self.output = output
+        self.calls = []
+
+    def __call__(self, endpoint, headers, body, timeout):
+        self.calls.append(
+            {
+                "endpoint": endpoint,
+                "headers": headers,
+                "body": body,
+                "timeout": timeout,
+            }
+        )
+        return json.dumps({"output_text": self.output}).encode("utf-8")
+
+
 class AssessmentTargetTests(unittest.TestCase):
     def setUp(self):
-        self.repo_root = Path(__file__).resolve().parents[1]
         self.run_directory = Path(tempfile.mkdtemp())
         self.server = create_server(
             "127.0.0.1",
@@ -260,7 +276,7 @@ class AssessmentTargetTests(unittest.TestCase):
         oversized = "x" * 10000
         observation = redacted_observation(
             {
-                "url": "http://127.0.0.1:1234/demo/fixed/" + oversized,
+                "url": self.base_url + "/demo/fixed/" + oversized,
                 "title": oversized,
                 "focus": {
                     "role": oversized,
@@ -292,7 +308,7 @@ class AssessmentTargetTests(unittest.TestCase):
         )
 
         serialized = json.dumps(observation)
-        self.assertIsNone(observation["url"])
+        self.assertLessEqual(len(observation["url"]), 256)
         self.assertLessEqual(len(observation["title"]), 80)
         self.assertNotIn(oversized, serialized)
         self.assertLessEqual(len(observation["focus"]["stableId"]), 80)
@@ -304,7 +320,7 @@ class AssessmentTargetTests(unittest.TestCase):
             {
                 "url": (
                     self.base_url
-                    + "/demo/fixed/Avery%20Example?name=Avery%20Example&email=avery%40example.test"
+                    + "/demo/fixed?name=Avery%20Example&email=avery%40example.test#message=A%20fictional%20message"
                 ),
                 "title": "Sent Avery%20Example avery%40example.test",
                 "focus": {},
@@ -313,6 +329,11 @@ class AssessmentTargetTests(unittest.TestCase):
                 "lifecycle": {},
             },
             self.base_url + "/demo/fixed",
+            sensitive_values=(
+                "Avery Example",
+                "avery@example.test",
+                "A fictional message",
+            ),
         )
 
         reflected_serialized = json.dumps(reflected)
@@ -324,6 +345,40 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertNotIn("avery%40example.test", reflected_serialized)
         self.assertFalse(reflected["lifecycle"]["offLoopbackRedirect"])
         self.assertEqual([], reflected["warnings"])
+
+        path_reflected = redacted_observation(
+            {
+                "url": self.base_url + "/demo/fixed/Avery%20Example",
+                "title": "AccessTrace Contact form",
+                "focus": {},
+                "controls": [],
+                "successMatched": False,
+                "lifecycle": {},
+            },
+            self.base_url + "/demo/fixed",
+            sensitive_values=("Avery Example",),
+        )
+        self.assertEqual(self.base_url + "/[redacted-path]", path_reflected["url"])
+        self.assertTrue(path_reflected["lifecycle"]["navigationRedirect"])
+        self.assertEqual([{"kind": "navigation-redirect"}], path_reflected["warnings"])
+
+        for settled_path in ("/demo/broken", "/other/path"):
+            redirected = redacted_observation(
+                {
+                    "url": self.base_url + settled_path + "?token=secret#fragment",
+                    "title": "AccessTrace Contact form",
+                    "focus": {},
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {},
+                },
+                self.base_url + "/demo/fixed",
+            )
+            self.assertEqual(self.base_url + settled_path, redirected["url"])
+            self.assertTrue(redirected["lifecycle"]["navigationRedirect"])
+            self.assertEqual(
+                [{"kind": "navigation-redirect"}], redirected["warnings"]
+            )
 
     def test_codex_planner_rejects_a_forged_editable_focus(self):
         context = {
@@ -338,72 +393,16 @@ class AssessmentTargetTests(unittest.TestCase):
             }
         }
         planner = CodexPlanner(
-            invoke=lambda prompt: (
+            endpoint="https://planner.example/v1/responses",
+            model="planner-test-model",
+            api_key="planner-test-secret",
+            transport=FakePlannerTransport(
                 '{"kind":"type","field":"name","text":"fictional"}'
-            )
+            ),
         )
 
         with self.assertRaises(PlannerError):
             planner.next_action(context)
-
-    def test_codex_planner_cannot_read_repository_and_cleans_workspace(self):
-        sandbox_exec = shutil.which("sandbox-exec")
-        if sandbox_exec is None:
-            self.skipTest("sandbox-exec is required for the production planner boundary")
-
-        sentinel = self.repo_root / "planner-boundary-sentinel"
-        command_directory = Path(tempfile.mkdtemp(prefix="planner-command-"))
-        working_command = command_directory / "working-codex"
-        working_command.write_text(
-            "#!/bin/sh\n"
-            "/usr/bin/printf '{\"kind\":\"key\",\"key\":\"Tab\"}'\n"
-        )
-        working_command.chmod(working_command.stat().st_mode | 0o111)
-        probe_command = command_directory / "probe-codex"
-        probe_command.write_text(
-            "#!/bin/sh\n"
-            "if /bin/cat '" + str(sentinel) + "' >/dev/null 2>&1; then\n"
-            "  /usr/bin/printf '{\"kind\":\"type\",\"field\":\"name\",\"text\":\"sentinel-read\"}'\n"
-            "else\n"
-            "  /usr/bin/printf '{\"kind\":\"key\",\"key\":\"Tab\"}'\n"
-            "fi\n"
-        )
-        probe_command.chmod(probe_command.stat().st_mode | 0o111)
-        timeout_command = command_directory / "timeout-codex"
-        timeout_command.write_text("#!/bin/sh\n/bin/sleep 5\n")
-        timeout_command.chmod(timeout_command.stat().st_mode | 0o111)
-        sentinel.write_text("repository secret")
-        before = set(Path(tempfile.gettempdir()).glob("access-trace-planner-*"))
-
-        try:
-            context = {
-                "pageEvidence": {
-                    "focus": {
-                        "role": "textbox",
-                        "tag": "input",
-                        "stableId": "name",
-                        "isStable": True,
-                    }
-                }
-            }
-            self.assertEqual(
-                {"kind": "key", "key": "Tab"},
-                CodexPlanner(command=str(working_command), timeout=2).next_action(context),
-            )
-            probe_action = CodexPlanner(command=str(probe_command), timeout=2).next_action(
-                context
-            )
-            self.assertEqual({"kind": "key", "key": "Tab"}, probe_action)
-            with self.assertRaises(PlannerError):
-                CodexPlanner(command=str(timeout_command), timeout=0.1).next_action(
-                    context
-                )
-        finally:
-            sentinel.unlink(missing_ok=True)
-            shutil.rmtree(command_directory)
-
-        after = set(Path(tempfile.gettempdir()).glob("access-trace-planner-*"))
-        self.assertEqual(before, after)
 
     def test_completed_requires_a_persisted_png_screenshot(self):
         run = create_run(
@@ -440,8 +439,65 @@ class AssessmentTargetTests(unittest.TestCase):
         finally:
             server.server_close()
 
+    def test_codex_planner_fails_truthfully_without_direct_model_configuration(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CODEX_PLANNER_ENDPOINT": "",
+                "CODEX_PLANNER_MODEL": "",
+                "CODEX_PLANNER_API_KEY": "",
+            },
+        ):
+            with self.assertRaises(PlannerError):
+                CodexPlanner().next_action({"pageEvidence": {"focus": {}}})
+
+    def test_same_origin_path_redirect_makes_execution_inconclusive(self):
+        class RedirectingBrowser:
+            def __init__(self, target_url):
+                self.url = target_url.replace("/demo/fixed", "/demo/broken")
+
+            def observe(self):
+                return {
+                    "url": self.url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    },
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {},
+                }
+
+            def close(self):
+                return None
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", RedirectingBrowser
+        ):
+            result = execute_fixed_goal(
+                run,
+                self.run_directory,
+                planner=DeterministicTestPlanner(),
+            )
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertTrue(result["observations"][0]["lifecycle"]["navigationRedirect"])
+        self.assertIn(
+            {"kind": "navigation-redirect"}, result["observations"][0]["warnings"]
+        )
+
     def test_codex_planner_validates_the_action_boundary(self):
-        planner = CodexPlanner(invoke=lambda prompt: '{"kind":"key","key":"Tab"}')
         context = {
             "goal": "Submit the contact form",
             "successCondition": "Message sent",
@@ -469,7 +525,35 @@ class AssessmentTargetTests(unittest.TestCase):
             "recentHistory": [],
         }
 
+        transport = FakePlannerTransport('{"kind":"key","key":"Tab"}')
+        planner = CodexPlanner(
+            endpoint="https://planner.example/v1/responses",
+            model="planner-test-model",
+            api_key="planner-test-secret",
+            transport=transport,
+        )
         self.assertEqual({"kind": "key", "key": "Tab"}, planner.next_action(context))
+
+        request = transport.calls[0]
+        body = json.loads(request["body"])
+        self.assertEqual("https://planner.example/v1/responses", request["endpoint"])
+        self.assertEqual("Bearer planner-test-secret", request["headers"]["Authorization"])
+        self.assertNotIn("tools", body)
+        self.assertEqual("planner-test-model", body["model"])
+        self.assertTrue(body["text"]["format"]["strict"])
+        self.assertNotIn("planner-test-secret", json.dumps(body))
+        self.assertLessEqual(len(body["input"]), 12_000)
+
+        echoed_credential = CodexPlanner(
+            endpoint="https://planner.example/v1/responses",
+            model="planner-test-model",
+            api_key="planner-test-secret",
+            transport=FakePlannerTransport(
+                '{"kind":"key","key":"Tab"} planner-test-secret'
+            ),
+        )
+        with self.assertRaises(PlannerError):
+            echoed_credential.next_action(context)
 
         type_context = json.loads(json.dumps(context))
         type_context["pageEvidence"]["focus"].update(
@@ -482,19 +566,36 @@ class AssessmentTargetTests(unittest.TestCase):
             }
         )
         type_planner = CodexPlanner(
-            invoke=lambda prompt: '{"kind":"type","field":"name","text":"fictional"}'
+            endpoint="https://planner.example/v1/responses",
+            model="planner-test-model",
+            api_key="planner-test-secret",
+            transport=FakePlannerTransport(
+                '{"kind":"type","field":"name","text":"fictional"}'
+            ),
         )
         self.assertEqual(
             {"kind": "type", "field": "name", "text": "fictional"},
             type_planner.next_action(type_context),
         )
 
-        invalid = CodexPlanner(invoke=lambda prompt: '{"kind":"click","selector":"#submit"}')
+        invalid = CodexPlanner(
+            endpoint="https://planner.example/v1/responses",
+            model="planner-test-model",
+            api_key="planner-test-secret",
+            transport=FakePlannerTransport(
+                '{"kind":"click","selector":"#submit"}'
+            ),
+        )
         with self.assertRaises(PlannerError):
             invalid.next_action(context)
 
         extra_field = CodexPlanner(
-            invoke=lambda prompt: '{"kind":"key","key":"Tab","extra":"ignored"}'
+            endpoint="https://planner.example/v1/responses",
+            model="planner-test-model",
+            api_key="planner-test-secret",
+            transport=FakePlannerTransport(
+                '{"kind":"key","key":"Tab","extra":"ignored"}'
+            ),
         )
         with self.assertRaises(PlannerError):
             extra_field.next_action(context)
