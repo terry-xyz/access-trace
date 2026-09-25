@@ -87,7 +87,14 @@ def _sandbox_profile(workspace: Path, project_root: Path) -> str:
         return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
     rules = ["(version 1)", "(allow default)"]
-    blocked_paths = [Path.home().parent, project_root]
+    blocked_paths = [
+        Path.home().parent,
+        project_root,
+        Path("/Volumes"),
+        Path("/Network"),
+        Path("/tmp"),
+        Path("/var/folders"),
+    ]
     rules.extend(
         rule
         for path in blocked_paths
@@ -172,17 +179,23 @@ def validate_action(action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str
         raise PlannerError("Codex planner action must be an object")
     kind = action.get("kind")
     if kind == "complete":
+        if set(action) != {"kind"}:
+            raise PlannerError("Codex planner action contains unknown fields")
         return {"kind": "complete"}
     if kind == "key":
+        if set(action) != {"kind", "key"}:
+            raise PlannerError("Codex planner action contains unknown fields")
         key = action.get("key")
         if key not in PERMITTED_KEYS:
             raise PlannerError("Codex planner selected a disallowed key")
         return {"kind": "key", "key": key}
     if kind != "type":
         raise PlannerError("Codex planner selected an unknown action")
+    if set(action) != {"kind", "field", "text"}:
+        raise PlannerError("Codex planner action contains unknown fields")
 
     field = action.get("field")
-    text = action.get("text", action.get("value"))
+    text = action["text"]
     focus = context.get("pageEvidence", {}).get("focus", {})
     if (
         not isinstance(field, str)
@@ -201,7 +214,7 @@ def validate_action(action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str
         or any(character in text for character in "\r\n\t")
     ):
         raise PlannerError("Codex planner text was not bounded plain text")
-    return {"kind": "type", "field": field, "value": text}
+    return {"kind": "type", "field": field, "text": text}
 
 
 class CodexPlanner:

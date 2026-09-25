@@ -208,7 +208,7 @@ def _append_action(
             "sequence": sequence,
             "kind": "type",
             "field": action["field"],
-            "characterCount": len(action["value"]),
+            "characterCount": len(action["text"]),
             "retained": False,
             "allowed": True,
             "status": status,
@@ -357,7 +357,7 @@ def _execute_fixed_goal(
                 if action["kind"] == "key":
                     browser.press_key(action["key"])
                 else:
-                    browser.type_text(action["value"])
+                    browser.type_text(action["text"])
             except BrowserActionError:
                 _append_action(run, action, before, "failed")
                 try:

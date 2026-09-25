@@ -369,6 +369,9 @@ class AssessmentTargetTests(unittest.TestCase):
             "fi\n"
         )
         probe_command.chmod(probe_command.stat().st_mode | 0o111)
+        timeout_command = command_directory / "timeout-codex"
+        timeout_command.write_text("#!/bin/sh\n/bin/sleep 5\n")
+        timeout_command.chmod(timeout_command.stat().st_mode | 0o111)
         sentinel.write_text("repository secret")
         before = set(Path(tempfile.gettempdir()).glob("access-trace-planner-*"))
 
@@ -387,14 +390,14 @@ class AssessmentTargetTests(unittest.TestCase):
                 {"kind": "key", "key": "Tab"},
                 CodexPlanner(command=str(working_command), timeout=2).next_action(context),
             )
-            try:
-                probe_action = CodexPlanner(command=str(probe_command), timeout=2).next_action(
+            probe_action = CodexPlanner(command=str(probe_command), timeout=2).next_action(
+                context
+            )
+            self.assertEqual({"kind": "key", "key": "Tab"}, probe_action)
+            with self.assertRaises(PlannerError):
+                CodexPlanner(command=str(timeout_command), timeout=0.1).next_action(
                     context
                 )
-            except PlannerError:
-                probe_action = None
-            if probe_action is not None:
-                self.assertEqual({"kind": "key", "key": "Tab"}, probe_action)
         finally:
             sentinel.unlink(missing_ok=True)
             shutil.rmtree(command_directory)
@@ -482,13 +485,19 @@ class AssessmentTargetTests(unittest.TestCase):
             invoke=lambda prompt: '{"kind":"type","field":"name","text":"fictional"}'
         )
         self.assertEqual(
-            {"kind": "type", "field": "name", "value": "fictional"},
+            {"kind": "type", "field": "name", "text": "fictional"},
             type_planner.next_action(type_context),
         )
 
         invalid = CodexPlanner(invoke=lambda prompt: '{"kind":"click","selector":"#submit"}')
         with self.assertRaises(PlannerError):
             invalid.next_action(context)
+
+        extra_field = CodexPlanner(
+            invoke=lambda prompt: '{"kind":"key","key":"Tab","extra":"ignored"}'
+        )
+        with self.assertRaises(PlannerError):
+            extra_field.next_action(context)
 
     def test_browser_cleanup_removes_profile_and_reports_failure(self):
         profile = Path(tempfile.mkdtemp())
