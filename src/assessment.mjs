@@ -15,7 +15,7 @@ const SENSITIVE_DATA_HANDLING_PATTERN = /\b(?:strength|policy|stor\w*|transmit\w
 const NON_KEYBOARD_CRITERIA_PATTERN = /\b(?:color|colour)\s+contrast\b|\b(?:alt(?:ernative)?\s+text|image descriptions?)\b|\bwcag\s+(?:conformance|compliance)\b/i;
 const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter|space|arrow keys?|shift[-+ ]?tab|focus|navigate|navigation)\b/i;
 const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element)\b/i;
-const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
+const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:tab(?:bing)?|focus|navigate|move|reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
 
 const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed and will not be reinterpreted.";
 const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts free-text goals about keyboard interactions and outcomes on the controlled local site. It cannot assess remote or off-site targets, other input modes, security or visual criteria, or other non-keyboard criteria. This goal will not be reinterpreted.";
@@ -30,6 +30,13 @@ function describesKeyboardGoal(candidate) {
   return IMPLICIT_KEYBOARD_ACTION_PATTERN.test(candidate) && SITE_CONTROL_PATTERN.test(candidate);
 }
 
+/** describesKeyboardControlInteraction distinguishes acting on a control from merely mentioning a keyboard. */
+function describesKeyboardControlInteraction(candidate) {
+  return KEYBOARD_GOAL_CUE_PATTERN.test(candidate)
+    && IMPLICIT_KEYBOARD_ACTION_PATTERN.test(candidate)
+    && SITE_CONTROL_PATTERN.test(candidate);
+}
+
 /** describesSecurityAssessment looks for security assertions, not security-related control names. */
 function describesSecurityAssessment(candidate) {
   // Explicit security outcomes are out of scope, while words used only as control labels are not.
@@ -38,7 +45,7 @@ function describesSecurityAssessment(candidate) {
   // Security/privacy topics are criteria only when evaluated rather than targeted by a keyboard action.
   const evaluatesSecurityTopic = SECURITY_EVALUATION_PATTERN.test(candidate)
     && SECURITY_TOPIC_PATTERN.test(candidate)
-    && !describesKeyboardGoal(candidate);
+    && !describesKeyboardControlInteraction(candidate);
 
   // Sensitive fields are not themselves security requests; their handling must be the assessment subject.
   const evaluatesSensitiveDataHandling = SENSITIVE_DATA_PATTERN.test(candidate)

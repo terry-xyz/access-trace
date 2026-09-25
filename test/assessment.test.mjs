@@ -86,6 +86,7 @@ function keyboardGoalPhrasingAcceptsMultipleOutcomes() {
   const menuGoal = "Check that I can reach the menu and open it with the keyboard.";
   const passwordFieldGoal = "Using only the keyboard, reach the password field on the contact form";
   const privacyLinkGoal = "Use Tab to focus the Privacy Policy link";
+  const privacyReachabilityGoal = "Check whether I can reach the Privacy Policy link with Tab";
   const secureAccountButtonGoal = "Use Tab to focus the Secure Account button";
 
   assert.equal(validateAssessmentGoal(formGoal).valid, true);
@@ -96,6 +97,8 @@ function keyboardGoalPhrasingAcceptsMultipleOutcomes() {
   assert.equal(validateAssessmentGoal(passwordFieldGoal).goal, passwordFieldGoal);
   assert.equal(validateAssessmentGoal(privacyLinkGoal).valid, true);
   assert.equal(validateAssessmentGoal(privacyLinkGoal).goal, privacyLinkGoal);
+  assert.equal(validateAssessmentGoal(privacyReachabilityGoal).valid, true);
+  assert.equal(validateAssessmentGoal(privacyReachabilityGoal).goal, privacyReachabilityGoal);
   assert.equal(validateAssessmentGoal(secureAccountButtonGoal).valid, true);
   assert.equal(validateAssessmentGoal(secureAccountButtonGoal).goal, secureAccountButtonGoal);
 }
@@ -123,20 +126,22 @@ test("remote and non-keyboard goals are rejected with an explicit scope explanat
 /** unsupportedAssessmentCriteriaAreNotReinterpreted rejects security and unlisted non-keyboard goals. */
 function unsupportedAssessmentCriteriaAreNotReinterpreted() {
   const unsupportedGoals = [
-    "Check whether the contact form sends submissions securely",
-    "Check whether passwords are stored safely",
-    "Assess whether the privacy policy protects personal data",
-    "Check whether the form is secure",
-    "Review the contact form's error messages for clarity",
+    { goal: "Check whether the contact form sends submissions securely", security: true },
+    { goal: "Check whether passwords are stored safely", security: true },
+    { goal: "Assess whether the privacy policy protects personal data", security: true },
+    { goal: "Check whether the form is secure", security: true },
+    { goal: "Use the keyboard to assess whether security is adequate", security: true },
+    { goal: "Use Tab to evaluate privacy policy compliance", security: true },
+    { goal: "Review the contact form's error messages for clarity", security: false },
   ];
 
-  for (const goal of unsupportedGoals) {
+  for (const { goal, security } of unsupportedGoals) {
     const result = validateAssessmentGoal(goal);
     assert.equal(result.valid, false, `${goal} should be rejected`);
     assert.equal(result.reason, "unsupported");
     assert.match(result.message, /not be reinterpreted/i);
-    if (/securely|passwords|privacy policy protects|form is secure/.test(goal)) {
-      assert.match(result.message, /cannot assess whether a site or form is secure/i);
+    if (security) {
+      assert.match(result.message, /Unsupported security\/privacy goal/i);
     } else {
       assert.match(result.message, /keyboard interactions and outcomes/i);
     }
