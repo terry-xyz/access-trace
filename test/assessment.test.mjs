@@ -61,10 +61,11 @@ test("a supplied goal selects a goal-focused assessment", suppliedGoalSelectsGoa
 
 /** configuredGoalsKeepTheirMeaning preserves valid free text and rejects clearly out-of-scope requests. */
 function configuredGoalsKeepTheirMeaning() {
-  assert.deepEqual(validateAssessmentGoal("  Submit the contact form  "), {
+  const goal = "  Submit the contact form  ";
+  assert.deepEqual(validateAssessmentGoal(goal), {
     valid: true,
     scope: "goal-focused",
-    goal: "Submit the contact form",
+    goal,
     reason: "",
     message: "",
   });
@@ -79,16 +80,57 @@ function configuredGoalsKeepTheirMeaning() {
 }
 test("a valid free-text goal is preserved while an empty goal remains whole-site", configuredGoalsKeepTheirMeaning);
 
+/** keyboardGoalPhrasingAcceptsMultipleOutcomes keeps general keyboard goals outside the sample site scenario. */
+function keyboardGoalPhrasingAcceptsMultipleOutcomes() {
+  const formGoal = " Please fill out and submit the contact form using only Tab and Enter. ";
+  const menuGoal = "Check that I can reach the menu and open it with the keyboard.";
+
+  assert.equal(validateAssessmentGoal(formGoal).valid, true);
+  assert.equal(validateAssessmentGoal(formGoal).goal, formGoal);
+  assert.equal(validateAssessmentGoal(menuGoal).valid, true);
+  assert.equal(validateAssessmentGoal(menuGoal).goal, menuGoal);
+}
+test("supported free-text keyboard goals keep their exact phrasing across different controls", keyboardGoalPhrasingAcceptsMultipleOutcomes);
+
 /** unsupportedGoalsAreExplained rejects remote or non-keyboard scope before showing a sample. */
 function unsupportedGoalsAreExplained() {
-  const result = validateAssessmentGoal("Use a mouse to assess https://example.com");
-  assert.equal(result.valid, false);
-  assert.equal(result.scope, "goal-focused");
-  assert.equal(result.reason, "unsupported");
-  assert.match(result.message, /controlled local demo/i);
-  assert.match(result.message, /keyboard/i);
+  for (const goal of [
+    "Use a mouse to assess https://example.com",
+    "Use the keyboard to navigate the remote site",
+    "Use the keyboard to navigate an external website",
+    "Use the keyboard on a third-party website",
+    "Use the keyboard to navigate an off-target application",
+  ]) {
+    const result = validateAssessmentGoal(goal);
+    assert.equal(result.valid, false, `${goal} should be rejected`);
+    assert.equal(result.scope, "goal-focused");
+    assert.equal(result.reason, "unsupported");
+    assert.match(result.message, /controlled local site/i);
+    assert.match(result.message, /keyboard/i);
+  }
 }
 test("remote and non-keyboard goals are rejected with an explicit scope explanation", unsupportedGoalsAreExplained);
+
+/** unsupportedAssessmentCriteriaAreNotReinterpreted rejects security and unlisted non-keyboard goals. */
+function unsupportedAssessmentCriteriaAreNotReinterpreted() {
+  const unsupportedGoals = [
+    "Check whether the contact form sends submissions securely",
+    "Review the contact form's error messages for clarity",
+  ];
+
+  for (const goal of unsupportedGoals) {
+    const result = validateAssessmentGoal(goal);
+    assert.equal(result.valid, false, `${goal} should be rejected`);
+    assert.equal(result.reason, "unsupported");
+    assert.match(result.message, /not be reinterpreted/i);
+    if (/securely/.test(goal)) {
+      assert.match(result.message, /cannot assess whether a site or form is secure/i);
+    } else {
+      assert.match(result.message, /keyboard interactions and outcomes/i);
+    }
+  }
+}
+test("security and other non-keyboard criteria are rejected rather than reinterpreted", unsupportedAssessmentCriteriaAreNotReinterpreted);
 
 /** unsupportedContentGoalsAreExplained rejects non-keyboard checks with accurate category wording. */
 function unsupportedContentGoalsAreExplained() {
@@ -96,9 +138,7 @@ function unsupportedContentGoalsAreExplained() {
     const result = validateAssessmentGoal(goal);
     assert.equal(result.valid, false, `${goal} should be rejected`);
     assert.equal(result.reason, "unsupported");
-  assert.match(result.message, /keyboard interaction/i);
-  assert.match(result.message, /non-keyboard criteria/i);
-  assert.match(result.message, /alternative text/i);
+    assert.match(result.message, /visual criteria|other non-keyboard criteria/i);
   }
 }
 test("non-keyboard accessibility goals are rejected with accurate scope wording", unsupportedContentGoalsAreExplained);
@@ -109,6 +149,7 @@ function unsafeGoalsAreExplained() {
   assert.equal(result.valid, false);
   assert.equal(result.reason, "unsafe");
   assert.match(result.message, /safeguards/i);
+  assert.match(result.message, /not be reinterpreted/i);
 }
 test("unsafe goals are rejected with an explanation instead of being reinterpreted", unsafeGoalsAreExplained);
 
@@ -295,9 +336,9 @@ function goalSetupAndReportExposeScope() {
   assert.ok(reportMarkup.includes('data-sample-fact="goalSummary"'));
   assert.ok(reportMarkup.includes('data-sample-fact="scopeLabel"'));
   assert.ok(reportMarkup.includes("Representative sample — not live assessment"));
-  assert.ok(reportMarkup.includes("may not match the supplied goal"));
-  assert.ok(reportMarkup.includes("Remote URLs, other interaction modes"));
-  assert.ok(reportMarkup.includes("non-keyboard criteria such as color contrast and alternative text"));
+  assert.ok(reportMarkup.includes("not evidence about that goal"));
+  assert.ok(reportMarkup.includes("free-text keyboard interactions and outcomes"));
+  assert.ok(reportMarkup.includes("goals without a keyboard interaction"));
   assert.ok(reportMarkup.includes("requests to override safeguards or run code are rejected"));
   assert.ok(mainSource.includes("validateAssessmentGoal(goalInput.value)"));
   assert.ok(mainSource.includes("{ ...GOAL_FOCUSED_SAMPLE, goal }"));

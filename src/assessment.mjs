@@ -5,16 +5,26 @@ const UNSAFE_GOAL_PATTERNS = [
   /\b(?:ignore|override|disregard)\b.*\b(?:instructions|rules|safeguards|guardrails)\b/i,
   /\b(?:run|execute)\b.*\b(?:javascript|shell commands?|arbitrary code)\b/i,
 ];
-const UNSUPPORTED_GOAL_PATTERNS = [
-  /https?:\/\/\S+/i,
-  /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i,
-  /\b(?:color|colour)\s+contrast\b/i,
-  /\b(?:alt(?:ernative)?\s+text|image descriptions?)\b/i,
-  /\b(?:wcag (?:conformance|compliance)|full accessibility (?:audit|assessment|score))\b/i,
-];
+const REMOTE_TARGET_PATTERN = /\b(?:remote|external|off[- ]site|off[- ]target|third[- ]party)\b|\b(?:another|other)\s+(?:site|website)\b|(?:https?:\/\/|www\.)\S+/i;
+const OTHER_INPUT_MODE_PATTERN = /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i;
+const SECURITY_GOAL_PATTERN = /\b(?:secure\w*|security|privacy|encrypt\w*|credentials?|passwords?|authentication|authorization)\b/i;
+const NON_KEYBOARD_CRITERIA_PATTERN = /\b(?:color|colour)\s+contrast\b|\b(?:alt(?:ernative)?\s+text|image descriptions?)\b|\bwcag\s+(?:conformance|compliance)\b/i;
+const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter|space|arrow keys?|shift[-+ ]?tab|focus|navigate|navigation)\b/i;
+const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element)\b/i;
+const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
 
-const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed.";
-const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview only covers keyboard interaction with the controlled local demo. It cannot assess remote sites, other interaction modes, non-keyboard criteria such as color contrast or alternative text, or overall conformance.";
+const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed and will not be reinterpreted.";
+const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts free-text goals about keyboard interactions and outcomes on the controlled local site. It cannot assess remote or off-site targets, other input modes, security or visual criteria, or other non-keyboard criteria. This goal will not be reinterpreted.";
+const SECURITY_GOAL_ERROR = "Unsupported security goal: this preview cannot assess whether a site or form is secure. It accepts keyboard interactions and outcomes only; this goal will not be reinterpreted.";
+
+/** describesKeyboardGoal recognizes explicit keyboard evidence or a keyboard action tied to a site control. */
+function describesKeyboardGoal(candidate) {
+  // The keyboard profile is fixed, so an explicit keyboard/focus cue is sufficient to establish this goal's mode.
+  if (KEYBOARD_GOAL_CUE_PATTERN.test(candidate)) return true;
+
+  // Without that cue, require both a concrete interaction and a named control so a vague outcome is not inferred.
+  return IMPLICIT_KEYBOARD_ACTION_PATTERN.test(candidate) && SITE_CONTROL_PATTERN.test(candidate);
+}
 
 /** validateTargetUrl accepts only the normalized controlled endpoint so other loopback services remain out of scope. */
 export function validateTargetUrl(value) {
@@ -51,36 +61,51 @@ export function getAssessmentScope(goal) {
     : "whole-site";
 }
 
-/** validateAssessmentGoal keeps free text intact and rejects only clearly unsafe or out-of-bound requests. */
+/** validateAssessmentGoal preserves valid free text when it describes a keyboard task within the local-site boundary. */
 export function validateAssessmentGoal(value) {
-  const goal = typeof value === "string" ? value.trim() : "";
-  const scope = getAssessmentScope(goal);
+  const rawGoal = typeof value === "string" ? value : "";
+  const candidate = rawGoal.trim();
+  const scope = getAssessmentScope(rawGoal);
 
   if (scope === "whole-site") {
     return { valid: true, scope, goal: "", reason: "", message: "" };
   }
 
-  if (UNSAFE_GOAL_PATTERNS.some((pattern) => pattern.test(goal))) {
+  if (UNSAFE_GOAL_PATTERNS.some((pattern) => pattern.test(candidate))) {
     return {
       valid: false,
       scope,
-      goal,
+      goal: rawGoal,
       reason: "unsafe",
       message: UNSAFE_GOAL_ERROR,
     };
   }
 
-  if (UNSUPPORTED_GOAL_PATTERNS.some((pattern) => pattern.test(goal))) {
+  if (SECURITY_GOAL_PATTERN.test(candidate)) {
     return {
       valid: false,
       scope,
-      goal,
+      goal: rawGoal,
+      reason: "unsupported",
+      message: SECURITY_GOAL_ERROR,
+    };
+  }
+
+  const describesOutOfScopeGoal = REMOTE_TARGET_PATTERN.test(candidate)
+    || OTHER_INPUT_MODE_PATTERN.test(candidate)
+    || NON_KEYBOARD_CRITERIA_PATTERN.test(candidate);
+
+  if (describesOutOfScopeGoal || !describesKeyboardGoal(candidate)) {
+    return {
+      valid: false,
+      scope,
+      goal: rawGoal,
       reason: "unsupported",
       message: UNSUPPORTED_GOAL_ERROR,
     };
   }
 
-  return { valid: true, scope, goal, reason: "", message: "" };
+  return { valid: true, scope, goal: rawGoal, reason: "", message: "" };
 }
 
 /** calculateWebsiteScore reports the passed-to-attempted website-check ratio without grading agent failures. */

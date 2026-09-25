@@ -1,8 +1,8 @@
 # AccessTrace report preview
 
-This ticket implements the accessible setup and representative whole-site and goal-focused reports. It does not start a browser assessment; every report value and evidence item is sample data and is labeled as such. Entered goals are shown in the report, but the representative goal sample may not match the entered goal.
+This ticket implements the accessible setup and representative whole-site and goal-focused reports. It does not start a browser assessment; every report value and evidence item is sample data and is labeled as such. Entered goals remain free text and appear verbatim in the report, but the representative contact-form sample is not evidence about the entered goal.
 
-Goals are limited to keyboard assessment of the controlled local demo. Remote URLs, non-keyboard interaction modes, non-keyboard criteria such as color contrast and alternative text, full-conformance requests, and requests to override safeguards or run code are rejected before a sample report is shown.
+Goal-focused setup accepts free-text goals about keyboard interactions and outcomes on the controlled local site. Remote targets, other input modes, security or visual checks, requests to override safeguards or run code, and goals without a recognizable keyboard interaction are rejected before a sample report is shown. Accepted text is preserved exactly. The representative contact-form result is sample data, not evidence about the configured goal.
 
 Serve the page from the repository root so its JavaScript modules load:
 
