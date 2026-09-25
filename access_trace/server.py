@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlsplit
 
 from .demo import demo_page, landing_page
 from .domain import CONTROLLED_SCHEME, ValidationError, create_run
+from .journey import execute_fixed_goal
 from .store import RunStore
 
 
@@ -65,6 +66,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802 - required by BaseHTTPRequestHandler
         path = urlsplit(self.path).path
+        if path.startswith("/api/runs/") and path.endswith("/execute"):
+            self.execute_run(path)
+            return
         if path != "/api/runs":
             self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Not found"}})
             return
@@ -86,6 +90,30 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json(HTTPStatus.CREATED, run)
+
+    def execute_run(self, path: str):
+        raw_run_id = path[len("/api/runs/") : -len("/execute")].rstrip("/")
+        run_id = unquote(raw_run_id)
+        if not RUN_ID_PATTERN.fullmatch(run_id):
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+            return
+        run = self.server.run_store.get(run_id)
+        if run is None:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+            return
+        if run.get("status") != "IN_PROGRESS":
+            self.send_json(
+                HTTPStatus.CONFLICT,
+                {"error": {"message": "Run has already reached a terminal state"}},
+            )
+            return
+        try:
+            completed = execute_fixed_goal(run, self.server.run_store.directory)
+            self.server.run_store.save(completed)
+        except ValueError as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
+            return
+        self.send_json(HTTPStatus.OK, completed)
 
     def get_run(self, raw_run_id: str):
         run_id = unquote(raw_run_id)

@@ -114,7 +114,20 @@ form.addEventListener("submit", async function (event) {
     body: JSON.stringify(payload)
   });
   const result = await response.json();
-  status.textContent = response.ok ? "Run " + result.id + " started." : result.error.message;
+  if (!response.ok) {
+    status.textContent = result.error.message;
+    return;
+  }
+  if (result.targetVersion !== "fixed" || result.goal !== "Submit the contact form") {
+    status.textContent = "Run " + result.id + " started.";
+    return;
+  }
+  status.textContent = "Running keyboard journey…";
+  const execution = await fetch("/api/runs/" + result.id + "/execute", {method: "POST"});
+  const executed = await execution.json();
+  status.textContent = execution.ok
+    ? "Run " + executed.id + " " + executed.status.toLowerCase() + "."
+    : executed.error.message;
 });
 </script>"""
     return _page_shell("AccessTrace local assessment", body, script)

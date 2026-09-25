@@ -22,7 +22,7 @@ class AssessmentTargetTests(unittest.TestCase):
         self.thread.join(timeout=2)
         self.server.server_close()
 
-    def request(self, method, path, payload=None):
+    def request(self, method, path, payload=None, timeout=2):
         body = None
         headers = {}
         if payload is not None:
@@ -34,7 +34,7 @@ class AssessmentTargetTests(unittest.TestCase):
             headers=headers,
             method=method,
         )
-        with urlopen(request, timeout=2) as response:
+        with urlopen(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
     def test_demo_versions_expose_the_same_form_and_distinct_submit_behaviour(self):
@@ -153,6 +153,48 @@ class AssessmentTargetTests(unittest.TestCase):
 
         self.assertEqual(200, status)
         self.assertEqual(created, fetched)
+
+    def test_fixed_contact_goal_completes_with_redacted_keyboard_evidence(self):
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+        )
+
+        status, completed = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=10
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual("COMPLETED", completed["status"])
+        self.assertTrue(completed["simulationMode"])
+        self.assertGreater(completed["durationMs"], 0)
+        self.assertEqual(completed["interactionCount"], len(completed["actions"]))
+        self.assertGreaterEqual(len(completed["observations"]), 7)
+        self.assertEqual("Message sent", completed["stoppingPoint"]["successCondition"])
+        self.assertTrue(completed["stoppingPoint"]["successMatched"])
+        screenshot = self.run_directory / completed["stoppingScreenshotRef"]
+        self.assertTrue(screenshot.is_file())
+        self.assertTrue(screenshot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+
+        action_kinds = [action["kind"] for action in completed["actions"]]
+        self.assertEqual(["key", "type", "key", "type", "key", "type", "key", "key"], action_kinds)
+        self.assertEqual("Enter", completed["actions"][-1]["key"])
+        self.assertTrue(completed["observations"][-1]["success"]["matched"])
+        self.assertEqual("button", completed["observations"][-1]["focus"]["tag"])
+        self.assertEqual("Submit", completed["observations"][-1]["focus"]["accessibleName"])
+        self.assertTrue(all("text" not in action for action in completed["actions"]))
+        self.assertIn("characterCount", json.dumps(completed))
+        self.assertNotIn("Avery Example", json.dumps(completed))
+        self.assertNotIn("avery@example.test", json.dumps(completed))
+        self.assertNotIn("A fictional message", json.dumps(completed))
+        self.assertNotIn("clipboard", json.dumps(completed).lower())
+
+        stored = self.run_directory / (created["id"] + ".json")
+        self.assertEqual(completed, json.loads(stored.read_text()))
 
     def test_non_local_or_unrecognized_targets_are_rejected(self):
         for target_url in (

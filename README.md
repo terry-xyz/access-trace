@@ -18,8 +18,12 @@ Then open <http://127.0.0.1:8080/>. The controlled targets are:
 Start a run with `POST /api/runs` and a JSON body containing `targetUrl`, an
 optional `goal`, and optional boolean `simulationMode` (default `true`). The
 record is written as redacted JSON under `.access-trace/runs/` and can be read
-back with `GET /api/runs/<id>`.
+back with `GET /api/runs/<id>`. For the supported fixed contact-form goal,
+`POST /api/runs/<id>/execute` starts a fresh isolated Chrome session, performs
+the bounded keyboard journey, and persists the terminal result. The durable
+record keeps field character counts, validation metadata, and a redacted
+stopping screenshot reference, never typed field values or clipboard contents.
 
-This ticket stops at the fresh run and first observation. Journey planning,
-keyboard execution, terminal classification, and report integration are later
-work.
+The current lifecycle implements the fixed contact-form completion path. Broken
+barrier classification, whole-site coverage, failure handling, and report
+integration are later work.
