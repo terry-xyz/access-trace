@@ -13,6 +13,7 @@ import {
 
 const pageMarkup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const mainSource = readFileSync(new URL("../src/main.mjs", import.meta.url), "utf8");
+const styleSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
 const sharedSettings = {
   targetUrl: WHOLE_SITE_SAMPLE.target,
@@ -54,11 +55,45 @@ function lowConsistencyComparisonExplainsBothScoresAndKeepsConflictingMetricsVis
   assert.equal(labelMetric.passedDelta, -1);
   assert.equal(labelMetric.direction, "regressed");
 
-  const productsFocusChange = comparison.evidence.focusChanges.find((change) => change.target === "Products");
+  const productsFocusChange = comparison.evidence.assessmentChanges.find((change) => change.kind === "focus" && change.target === "Products");
   assert.equal(productsFocusChange.direction, "improved");
   assert.ok(comparison.evidence.additionalUpdatedFailures.some((action) => action.target === "Message field"));
 }
 test("a low-consistency comparison shows the higher score without hiding a metric regression", lowConsistencyComparisonExplainsBothScoresAndKeepsConflictingMetricsVisible);
+
+/** comparisonSummarizesDifferencesAcrossRecoveryScreenshotAndCitations. */
+function comparisonSummarizesDifferencesAcrossRecoveryScreenshotAndCitations() {
+  const comparison = buildSiteComparison(
+    withSettings(WHOLE_SITE_SAMPLE),
+    withSettings(AGENT_UPDATED_WHOLE_SITE_SAMPLE),
+  );
+  const supportingChanges = comparison.evidence.supportingChanges;
+
+  for (const kind of ["recovery", "screenshot", "reference"]) {
+    assert.ok(supportingChanges.some((change) => change.kind === kind), `${kind} differences should be modeled`);
+  }
+  const screenshotChange = supportingChanges.find((change) => change.kind === "screenshot");
+  assert.equal(screenshotChange.change, "changed");
+  assert.ok(screenshotChange.changedFields.includes("navigation"));
+  assert.ok(supportingChanges.some((change) => change.kind === "recovery" && change.change === "added"));
+  assert.ok(supportingChanges.some((change) => change.kind === "reference" && change.change === "removed"));
+}
+test("comparison models recovery, screenshot, and evidence-reference differences", comparisonSummarizesDifferencesAcrossRecoveryScreenshotAndCitations);
+
+/** comparisonMetricTableCanBeReachedAndOperatedAtNarrowWidths. */
+function comparisonMetricTableCanBeReachedAndOperatedAtNarrowWidths() {
+  const metricsPanel = pageMarkup.match(/<section class="report-panel comparison-metrics-panel"[\s\S]*?<\/section>/)?.[0];
+
+  assert.ok(metricsPanel);
+  assert.match(metricsPanel, /<div class="table-scroll comparison-metrics-scroll"[^>]*role="region"[^>]*tabindex="0"/);
+  assert.match(metricsPanel, /aria-labelledby="comparison-metrics-heading"/);
+  assert.match(metricsPanel, /aria-describedby="comparison-metrics-scroll-help"/);
+  assert.match(metricsPanel, /id="comparison-metrics-scroll-help"[^>]*>[^<]*scroll horizontally[^<]*/i);
+  assert.equal([...metricsPanel.matchAll(/<th scope="col">/g)].length, 5);
+  assert.match(styleSource, /\.table-scroll \{ overflow-x: auto;/);
+  assert.match(styleSource, /\.comparison-metrics-scroll:focus-visible/);
+}
+test("the five-column metric table is keyboard-scrollable with an accessible cue", comparisonMetricTableCanBeReachedAndOperatedAtNarrowWidths);
 
 /** evidenceWithoutRegressionsCanSupportAnImprovedOutcome. */
 function evidenceWithoutRegressionsCanSupportAnImprovedOutcome() {
@@ -234,5 +269,8 @@ function setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable() {
   assert.match(mainSource, /browserConditions: "Same controlled local browser conditions"/);
   assert.match(mainSource, /runsPerVersion: 1/);
   assert.match(mainSource, /evidence\.persistentFailures/);
+  assert.match(mainSource, /appendComparisonParagraph\(fragment, "Duration", sample\.duration\)/);
+  assert.match(mainSource, /appendComparisonParagraph\(fragment, "Interaction count", String\(sample\.interactionCount\)\)/);
+  assert.match(mainSource, /appendComparisonScreenshot\(/);
 }
 test("setup flows into an explicitly labeled comparison with both underlying reports available", setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable);

@@ -348,6 +348,8 @@ button, input, textarea { font: inherit; }
 .comparison-evidence-changes a { margin-left: 0.2rem; font-weight: 700; }
 .comparison-metrics-panel h3, .comparison-settings-panel h3 { margin-top: 0.22rem; }
 .comparison-metrics-panel caption { padding: 0.55rem 0.35rem; color: #5c6980; font-size: 0.72rem; text-align: left; }
+.table-scroll-instruction { margin: 0.4rem 0 0; color: #5c6980; font-size: 0.72rem; }
+.comparison-metrics-scroll:focus-visible { outline: 3px solid #142c8c; outline-offset: 3px; }
 .comparison-metrics-panel td, .comparison-metrics-panel th { white-space: nowrap; }
 .comparison-metrics-panel td:first-child { white-space: normal; }
 .metric-direction { display: inline-flex; border-radius: 99px; background: #eef1f6; color: #46546b; padding: 0.18rem 0.48rem; font-size: 0.66rem; font-weight: 740; }

@@ -11,6 +11,52 @@ const COMPARISON_SETTING_FIELDS = [
   "runsPerVersion",
 ];
 
+const EVIDENCE_COLLECTION_DESCRIPTORS = [
+  {
+    kind: "action",
+    isAssessment: true,
+    recordsFrom: (report) => report.orderedActions ?? [],
+    keyForRecord: (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
+    fields: [
+      { name: "result", value: (action) => action.result },
+      { name: "outcome", value: (action) => action.outcome },
+    ],
+  },
+  {
+    kind: "focus",
+    isAssessment: true,
+    recordsFrom: (report) => report.focusObservations ?? [],
+    keyForRecord: (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
+    fields: [
+      { name: "indicator", value: (observation) => observation.indicator },
+      { name: "outcome", value: (observation) => observation.outcome },
+    ],
+  },
+  {
+    kind: "recovery",
+    recordsFrom: (report) => report.recoveryEvidence ?? [],
+    keyForRecord: (record) => normalizeEvidenceText(record.id),
+    fields: [{ name: "text", value: (record) => record.text }],
+  },
+  {
+    kind: "screenshot",
+    recordsFrom: (report) => report.screenshot ? [report.screenshot] : [],
+    keyForRecord: () => "version-screenshot",
+    fields: [
+      { name: "title", value: (screenshot) => screenshot.title },
+      { name: "description", value: (screenshot) => screenshot.description },
+      { name: "siteName", value: (screenshot) => screenshot.siteName },
+      { name: "navigation", value: (screenshot) => JSON.stringify(screenshot.navigation) },
+    ],
+  },
+  {
+    kind: "reference",
+    recordsFrom: (report) => report.evidenceReferences ?? [],
+    keyForRecord: (reference) => normalizeEvidenceText(reference.id),
+    fields: [{ name: "label", value: (reference) => reference.label }],
+  },
+];
+
 /** buildSiteComparison compares report evidence only when both versions share the same settings. */
 export function buildSiteComparison(original, updated) {
   const settingDifferences = findSettingDifferences(
@@ -218,68 +264,20 @@ function compareCoverage(original, updated) {
   };
 }
 
-/** compareEvidence summarizes matched action/focus changes and failures that lack a matching baseline. */
+/** compareEvidence applies one descriptor-driven path to assessment and supporting evidence collections. */
 function compareEvidence(original, updated) {
-  const actionChanges = findMatchedEvidenceChanges(
-    original.orderedActions,
-    updated.orderedActions,
-    (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
-    "action",
-  );
-  const focusChanges = findMatchedEvidenceChanges(
-    original.focusObservations,
-    updated.focusObservations,
-    (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
-    "focus",
-  );
-  const persistentFailures = [
-    ...findPersistentFailures(
-      original.orderedActions,
-      updated.orderedActions,
-      (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
-      "action",
-    ),
-    ...findPersistentFailures(
-      original.focusObservations,
-      updated.focusObservations,
-      (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
-      "focus",
-    ),
-  ];
-  const additionalUpdatedFailures = findUnmatchedFailures(
-    original.orderedActions,
-    updated.orderedActions,
-    (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
-    "action",
-  );
-  const additionalUpdatedFocusFailures = findUnmatchedFailures(
-    original.focusObservations,
-    updated.focusObservations,
-    (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
-    "focus",
-  );
-  const unpairedOriginalFailures = [
-    ...findUnmatchedFailures(
-      updated.orderedActions,
-      original.orderedActions,
-      (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
-      "action",
-    ),
-    ...findUnmatchedFailures(
-      updated.focusObservations,
-      original.focusObservations,
-      (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
-      "focus",
-    ),
-  ];
+  const collections = EVIDENCE_COLLECTION_DESCRIPTORS.map((descriptor) => (
+    compareEvidenceCollection(original, updated, descriptor)
+  ));
+  const assessmentCollections = collections.filter(({ isAssessment }) => isAssessment);
+  const supportingCollections = collections.filter(({ isAssessment }) => !isAssessment);
 
   return {
-    actionChanges,
-    focusChanges,
-    persistentFailures,
-    additionalUpdatedFailures,
-    additionalUpdatedFocusFailures,
-    unpairedOriginalFailures,
+    assessmentChanges: assessmentCollections.flatMap(({ changes }) => changes),
+    persistentFailures: assessmentCollections.flatMap(({ persistentFailures }) => persistentFailures),
+    additionalUpdatedFailures: assessmentCollections.flatMap(({ additionalFailures }) => additionalFailures),
+    unpairedOriginalFailures: assessmentCollections.flatMap(({ unpairedFailures }) => unpairedFailures),
+    supportingChanges: supportingCollections.flatMap(toSupportingChanges),
     addedAgentFailures: findUnmatchedText(original.agentFailures, updated.agentFailures),
     resolvedAgentFailures: findUnmatchedText(updated.agentFailures, original.agentFailures),
     addedWarnings: findUnmatchedText(original.warnings, updated.warnings),
@@ -287,47 +285,78 @@ function compareEvidence(original, updated) {
   };
 }
 
-/** findMatchedEvidenceChanges reports only matched records whose outcome or focus observation changed. */
-function findMatchedEvidenceChanges(originalRecords, updatedRecords, keyForRecord, kind) {
-  const updatedByKey = new Map(updatedRecords.map((record) => [keyForRecord(record), record]));
+/** compareEvidenceCollection aligns records once and derives changed, added, removed, and failed states. */
+function compareEvidenceCollection(originalReport, updatedReport, descriptor) {
+  const originalRecords = descriptor.recordsFrom(originalReport);
+  const updatedRecords = descriptor.recordsFrom(updatedReport);
+  const originalByKey = new Map(originalRecords.map((record) => [descriptor.keyForRecord(record), record]));
+  const updatedByKey = new Map(updatedRecords.map((record) => [descriptor.keyForRecord(record), record]));
   const changes = [];
+  const removed = [];
+  const persistentFailures = [];
+  const unpairedFailures = [];
 
-  for (const originalRecord of originalRecords) {
-    const updatedRecord = updatedByKey.get(keyForRecord(originalRecord));
-    if (!updatedRecord) continue;
+  for (const original of originalRecords) {
+    const key = descriptor.keyForRecord(original);
+    const updated = updatedByKey.get(key);
+    if (!updated) {
+      removed.push({ kind: descriptor.kind, record: original });
+      if (descriptor.isAssessment && original.outcome === "failed") {
+        unpairedFailures.push({ kind: descriptor.kind, target: original.target, record: original });
+      }
+      continue;
+    }
 
-    const observationChanged = kind === "focus"
-      && originalRecord.indicator !== updatedRecord.indicator;
-    if (originalRecord.outcome === updatedRecord.outcome && !observationChanged) continue;
+    const changedFields = descriptor.fields
+      .filter(({ value }) => value(original) !== value(updated))
+      .map(({ name }) => name);
+    if (changedFields.length > 0) {
+      changes.push({
+        kind: descriptor.kind,
+        target: original.target ?? updated.target,
+        original,
+        updated,
+        changedFields,
+        ...(descriptor.isAssessment
+          ? { direction: compareEvidenceOutcome(original, updated) }
+          : {}),
+      });
+    }
 
-    changes.push({
-      kind,
-      target: originalRecord.target,
-      original: originalRecord,
-      updated: updatedRecord,
-      direction: compareEvidenceOutcome(originalRecord, updatedRecord),
-    });
+    if (descriptor.isAssessment && original.outcome === "failed" && updated.outcome === "failed") {
+      persistentFailures.push({ kind: descriptor.kind, target: original.target, original, updated });
+    }
   }
 
-  return changes;
+  const added = [];
+  const additionalFailures = [];
+  for (const updated of updatedRecords) {
+    if (originalByKey.has(descriptor.keyForRecord(updated))) continue;
+    added.push({ kind: descriptor.kind, record: updated });
+    if (descriptor.isAssessment && updated.outcome === "failed") {
+      additionalFailures.push({ kind: descriptor.kind, target: updated.target, record: updated });
+    }
+  }
+
+  return {
+    kind: descriptor.kind,
+    isAssessment: descriptor.isAssessment === true,
+    changes,
+    added,
+    removed,
+    persistentFailures,
+    additionalFailures,
+    unpairedFailures,
+  };
 }
 
-/** findUnmatchedFailures keeps failed checks visible when the other version has no equivalent record. */
-function findUnmatchedFailures(baselineRecords, changedRecords, keyForRecord, kind) {
-  const baselineKeys = new Set(baselineRecords.map(keyForRecord));
-  return changedRecords
-    .filter((record) => record.outcome === "failed" && !baselineKeys.has(keyForRecord(record)))
-    .map((record) => ({ kind, target: record.target, record }));
-}
-
-/** findPersistentFailures keeps a known barrier visible when the same matched check failed in both reports. */
-function findPersistentFailures(originalRecords, updatedRecords, keyForRecord, kind) {
-  const updatedByKey = new Map(updatedRecords.map((record) => [keyForRecord(record), record]));
-  return originalRecords.flatMap((original) => {
-    const updated = updatedByKey.get(keyForRecord(original));
-    if (original.outcome !== "failed" || updated?.outcome !== "failed") return [];
-    return [{ kind, target: original.target, original, updated }];
-  });
+/** toSupportingChanges turns non-assessment records into a uniform user-facing change list. */
+function toSupportingChanges(collection) {
+  return [
+    ...collection.changes.map((change) => ({ ...change, change: "changed" })),
+    ...collection.added.map(({ record }) => ({ kind: collection.kind, change: "added", record })),
+    ...collection.removed.map(({ record }) => ({ kind: collection.kind, change: "removed", record })),
+  ];
 }
 
 /** compareEvidenceOutcome assigns direction only when both records carry explicit pass/fail evidence. */
@@ -395,13 +424,11 @@ function chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage, evide
   const changes = [scoreDelta, ...metricDeltas, coverage.percentagePointDelta]
     .filter((delta) => delta !== null);
   const evidenceChanges = [
-    ...evidence.actionChanges,
-    ...evidence.focusChanges,
+    ...evidence.assessmentChanges,
   ];
   const evidenceDirections = [
     ...evidenceChanges.map(({ direction }) => direction),
     ...evidence.additionalUpdatedFailures.map(() => "regressed"),
-    ...evidence.additionalUpdatedFocusFailures.map(() => "regressed"),
   ];
   const hasImprovement = changes.some((delta) => delta > 0)
     || evidenceDirections.includes("improved");
@@ -413,10 +440,7 @@ function chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage, evide
   if (hasImprovement && (hasRegression || evidence.persistentFailures.length > 0)) {
     const regressions = metrics.filter((metric) => metric.direction === "regressed");
     const regressionNames = regressions.map((metric) => metric.name);
-    const additionalFailures = [
-      ...evidence.additionalUpdatedFailures,
-      ...evidence.additionalUpdatedFocusFailures,
-    ];
+    const additionalFailures = evidence.additionalUpdatedFailures;
     const unresolvedTargets = [...new Set(evidence.unpairedOriginalFailures.map(({ target }) => target))];
     const failedTargets = [...new Set(additionalFailures.map(({ target }) => target))];
     const persistentTargets = [...new Set(evidence.persistentFailures.map(({ target }) => target))];

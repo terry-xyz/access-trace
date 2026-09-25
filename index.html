@@ -313,7 +313,8 @@
         <section class="report-panel comparison-metrics-panel" aria-labelledby="comparison-metrics-heading">
           <p class="card-kicker">METRIC CHANGES</p>
           <h3 id="comparison-metrics-heading">Every named metric, including regressions</h3>
-          <div class="table-scroll">
+          <p id="comparison-metrics-scroll-help" class="table-scroll-instruction">On narrow screens, focus this table region and use the Left and Right Arrow keys to scroll horizontally through all five columns.</p>
+          <div class="table-scroll comparison-metrics-scroll" role="region" aria-labelledby="comparison-metrics-heading" aria-describedby="comparison-metrics-scroll-help" tabindex="0">
             <table>
               <caption>Original and updated website check counts and pass-rate changes</caption>
               <thead><tr><th scope="col">Metric</th><th scope="col">Original</th><th scope="col">Updated</th><th scope="col">Change</th><th scope="col">Direction</th></tr></thead>

@@ -509,23 +509,24 @@ function renderComparisonEvidence(evidence) {
     fragment.append(item);
   };
 
-  for (const change of evidence.actionChanges) {
-    addEvidenceItem(
-      `Keyboard action at ${change.target}: original ${change.original.outcome}, updated ${change.updated.outcome}.`,
-      [
-        { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
-        { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
-      ],
-    );
-  }
-  for (const change of evidence.focusChanges) {
-    addEvidenceItem(
-      `Focus observation at ${change.target}: original “${change.original.indicator}”, updated “${change.updated.indicator}” (${formatEvidenceDirection(change.direction)}).`,
-      [
-        { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
-        { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
-      ],
-    );
+  for (const change of evidence.assessmentChanges) {
+    if (change.kind === "action") {
+      addEvidenceItem(
+        `Keyboard action at ${change.target}: original “${change.original.result}” (${change.original.outcome}), updated “${change.updated.result}” (${change.updated.outcome}).`,
+        [
+          { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
+          { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
+        ],
+      );
+    } else {
+      addEvidenceItem(
+        `Focus observation at ${change.target}: original “${change.original.indicator}”, updated “${change.updated.indicator}” (${formatEvidenceDirection(change.direction)}).`,
+        [
+          { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
+          { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
+        ],
+      );
+    }
   }
   for (const failure of evidence.persistentFailures) {
     addEvidenceItem(
@@ -537,14 +538,11 @@ function renderComparisonEvidence(evidence) {
     );
   }
   for (const failure of evidence.additionalUpdatedFailures) {
+    const evidenceDescription = failure.kind === "action"
+      ? `keyboard action: ${failure.record.result}`
+      : `focus observation: ${failure.record.indicator}`;
     addEvidenceItem(
-      `Updated report adds a failed keyboard action at ${failure.target}: ${failure.record.result}.`,
-      [{ version: "updated", id: failure.record.id, label: `Updated ${failure.record.id}` }],
-    );
-  }
-  for (const failure of evidence.additionalUpdatedFocusFailures) {
-    addEvidenceItem(
-      `Updated report adds a failed focus observation at ${failure.target}: ${failure.record.indicator}.`,
+      `Updated report adds a failed ${evidenceDescription} at ${failure.target}.`,
       [{ version: "updated", id: failure.record.id, label: `Updated ${failure.record.id}` }],
     );
   }
@@ -553,6 +551,9 @@ function renderComparisonEvidence(evidence) {
       `Original failed ${failure.kind} evidence at ${failure.target} has no matching updated observation; its outcome is unknown.`,
       [{ version: "original", id: failure.record.id, label: `Original ${failure.record.id}` }],
     );
+  }
+  for (const change of evidence.supportingChanges) {
+    appendSupportingEvidenceDifference(addEvidenceItem, change);
   }
   for (const message of evidence.addedAgentFailures) {
     addEvidenceItem(`Updated report also records an agent failure: ${message}`);
@@ -569,10 +570,83 @@ function renderComparisonEvidence(evidence) {
 
   if (fragment.childNodes.length === 0) {
     const item = document.createElement("li");
-    item.textContent = "No action or focus observation differences were recorded.";
+    item.textContent = "No action, focus, recovery, screenshot, or citation differences were recorded.";
     fragment.append(item);
   }
   list.replaceChildren(fragment);
+}
+
+/** appendSupportingEvidenceDifference gives recovery notes, screenshots, and citations concise linked summaries. */
+function appendSupportingEvidenceDifference(addEvidenceItem, change) {
+  if (change.kind === "recovery") {
+    if (change.change === "changed") {
+      addEvidenceItem(
+        `Recovery evidence ${change.original.id} changed: original “${change.original.text}”, updated “${change.updated.text}”.`,
+        [
+          { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
+          { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
+        ],
+      );
+    } else {
+      const version = change.change === "added" ? "updated" : "original";
+      const record = change.record;
+      addEvidenceItem(
+        `${version === "updated" ? "Updated" : "Original"} report ${change.change} recovery evidence ${record.id}: ${record.text}.`,
+        [{ version, id: record.id, label: `${version === "updated" ? "Updated" : "Original"} ${record.id}` }],
+      );
+    }
+    return;
+  }
+
+  if (change.kind === "reference") {
+    const original = change.original;
+    const updated = change.updated;
+    const record = change.record;
+    const links = change.change === "changed"
+      ? [
+        { version: "original", id: original.id, label: `Original ${original.id}` },
+        { version: "updated", id: updated.id, label: `Updated ${updated.id}` },
+      ]
+      : [{
+        version: change.change === "added" ? "updated" : "original",
+        id: record.id,
+        label: `${change.change === "added" ? "Updated" : "Original"} ${record.id}`,
+      }];
+    const description = change.change === "changed"
+      ? `Citation ${original.id} changed label from “${original.label}” to “${updated.label}”.`
+      : `${change.change === "added" ? "Updated" : "Original"} report ${change.change} evidence citation ${record.id}: ${record.label}.`;
+    addEvidenceItem(description, links);
+    return;
+  }
+
+  const original = change.original;
+  const updated = change.updated;
+  const record = change.record;
+  const describeScreenshot = (screenshot) => (
+    `${screenshot.title} for ${screenshot.siteName}; ${screenshot.description} Navigation: ${describeSampleNavigation(screenshot.navigation)}.`
+  );
+  if (change.change === "changed") {
+    addEvidenceItem(
+      `Screenshot mockup changed (${change.changedFields.join(", ")}): original ${describeScreenshot(original)}, updated ${describeScreenshot(updated)}.`,
+      [
+        { version: "original", id: original.id, label: `Original ${original.id}` },
+        { version: "updated", id: updated.id, label: `Updated ${updated.id}` },
+      ],
+    );
+  } else {
+    const version = change.change === "added" ? "updated" : "original";
+    addEvidenceItem(
+      `${version === "updated" ? "Updated" : "Original"} report ${change.change} screenshot mockup ${record.id}: ${describeScreenshot(record)}.`,
+      [{ version, id: record.id, label: `${version === "updated" ? "Updated" : "Original"} ${record.id}` }],
+    );
+  }
+}
+
+/** describeSampleNavigation distinguishes the focused sample item from other mockup navigation entries. */
+function describeSampleNavigation(navigation) {
+  return navigation
+    .map(({ label, focused }) => `${label}${focused ? " (focused)" : ""}`)
+    .join(", ");
 }
 
 /** formatEvidenceDirection gives explicit outcome changes a readable label in the evidence summary. */
@@ -628,6 +702,8 @@ function renderComparisonReport(container, sample, version) {
   appendComparisonParagraph(fragment, "Goal", sample.assessmentSettings.goal ?? "None supplied");
   appendComparisonParagraph(fragment, "Simulation mode", sample.assessmentSettings.simulationMode ? "On" : "Off");
   appendComparisonParagraph(fragment, "Coverage", sample.coverage);
+  appendComparisonParagraph(fragment, "Duration", sample.duration);
+  appendComparisonParagraph(fragment, "Interaction count", String(sample.interactionCount));
   appendComparisonParagraph(fragment, "Score", `${sample.score.label} (${sample.score.percentage}%)`);
   appendComparisonParagraph(fragment, "Outcome", sample.outcomeTitle);
 
@@ -679,13 +755,8 @@ function renderComparisonReport(container, sample, version) {
   }
   fragment.append(focus);
 
-  appendComparisonHeading(fragment, "Screenshot reference");
-  const screenshot = document.createElement("figure");
-  screenshot.id = evidenceIds.get(sample.screenshot.id);
-  const caption = document.createElement("figcaption");
-  caption.textContent = `${sample.screenshot.id} · ${sample.screenshot.title} · ${sample.screenshot.description}`;
-  screenshot.append(caption);
-  fragment.append(screenshot);
+  appendComparisonHeading(fragment, "Screenshot mockup");
+  appendComparisonScreenshot(fragment, sample.screenshot, evidenceIds.get(sample.screenshot.id));
 
   appendComparisonHeading(fragment, "Evidence references");
   const references = document.createElement("ul");
@@ -707,6 +778,72 @@ function renderComparisonReport(container, sample, version) {
   appendComparisonList(fragment, sample.warnings, null);
 
   container.replaceChildren(fragment);
+}
+
+/** appendComparisonScreenshot preserves the sample capture's site, navigation, and focused item in each report. */
+function appendComparisonScreenshot(parent, sampleScreenshot, evidenceId) {
+  const focusedItems = sampleScreenshot.navigation
+    .filter((entry) => entry.focused)
+    .map(({ label }) => label);
+  const navigationSummary = sampleScreenshot.navigation
+    .map(({ label, focused }) => `${label}${focused ? " (focused)" : ""}`)
+    .join(", ");
+  const figure = document.createElement("figure");
+  figure.id = evidenceId;
+  figure.className = "sample-capture comparison-report-screenshot";
+  figure.setAttribute("role", "img");
+  figure.setAttribute(
+    "aria-label",
+    `${sampleScreenshot.title}. ${sampleScreenshot.description} Site: ${sampleScreenshot.siteName}. Navigation: ${navigationSummary}.`,
+  );
+
+  const chrome = document.createElement("div");
+  chrome.className = "capture-chrome";
+  chrome.setAttribute("aria-hidden", "true");
+  for (let dot = 0; dot < 3; dot += 1) chrome.append(document.createElement("span"));
+  const host = document.createElement("i");
+  host.textContent = "sample.local";
+  chrome.append(host);
+
+  const content = document.createElement("div");
+  content.className = "capture-content";
+  content.setAttribute("aria-hidden", "true");
+  const brand = document.createElement("div");
+  brand.className = "capture-brand";
+  const siteName = document.createElement("span");
+  siteName.textContent = sampleScreenshot.siteName;
+  const brandMark = document.createElement("span");
+  brandMark.textContent = "▰";
+  brand.append(siteName, brandMark);
+
+  const navigation = document.createElement("div");
+  navigation.className = "capture-nav";
+  for (const entry of sampleScreenshot.navigation) {
+    const item = document.createElement("span");
+    item.textContent = entry.label;
+    if (entry.focused) item.className = "capture-focused";
+    navigation.append(item);
+  }
+
+  const shortLine = document.createElement("div");
+  shortLine.className = "capture-line capture-line-short";
+  const line = document.createElement("div");
+  line.className = "capture-line";
+  const form = document.createElement("div");
+  form.className = "capture-form";
+  form.append(document.createElement("span"), document.createElement("span"), document.createElement("b"));
+  content.append(brand, navigation, shortLine, line, form);
+
+  const caption = document.createElement("figcaption");
+  caption.textContent = `${sampleScreenshot.id} · ${sampleScreenshot.title} · ${sampleScreenshot.description}`;
+  const focusSummary = document.createElement("p");
+  focusSummary.className = "comparison-screenshot-focus-summary";
+  focusSummary.textContent = focusedItems.length
+    ? `Illustrated keyboard focus: ${focusedItems.join(", ")}.`
+    : "No focused navigation item is shown in this sample mockup.";
+
+  figure.append(chrome, content, focusSummary, caption);
+  parent.append(figure);
 }
 
 /** getComparisonEvidenceIds gives each embedded report unique in-page anchors. */
