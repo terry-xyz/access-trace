@@ -25,6 +25,7 @@ export function buildSiteComparison(original, updated) {
   const updatedScore = getReportScore(updated);
   const scoreDelta = getDelta(originalScore.percentage, updatedScore.percentage);
   const coverage = compareCoverage(original, updated);
+  const evidence = compareEvidence(original, updated);
   const everyMetricComparable = metrics.length > 0
     && metrics.every((metric) => metric.percentagePointDelta !== null);
   const integrityProblems = [
@@ -68,6 +69,7 @@ export function buildSiteComparison(original, updated) {
     metrics,
     scoreDelta,
     coverage,
+    evidence,
   });
 
   return {
@@ -82,6 +84,7 @@ export function buildSiteComparison(original, updated) {
     },
     metrics,
     coverage,
+    evidence,
     outcome,
   };
 }
@@ -215,6 +218,136 @@ function compareCoverage(original, updated) {
   };
 }
 
+/** compareEvidence summarizes matched action/focus changes and failures that lack a matching baseline. */
+function compareEvidence(original, updated) {
+  const actionChanges = findMatchedEvidenceChanges(
+    original.orderedActions,
+    updated.orderedActions,
+    (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
+    "action",
+  );
+  const focusChanges = findMatchedEvidenceChanges(
+    original.focusObservations,
+    updated.focusObservations,
+    (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
+    "focus",
+  );
+  const persistentFailures = [
+    ...findPersistentFailures(
+      original.orderedActions,
+      updated.orderedActions,
+      (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
+      "action",
+    ),
+    ...findPersistentFailures(
+      original.focusObservations,
+      updated.focusObservations,
+      (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
+      "focus",
+    ),
+  ];
+  const additionalUpdatedFailures = findUnmatchedFailures(
+    original.orderedActions,
+    updated.orderedActions,
+    (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
+    "action",
+  );
+  const additionalUpdatedFocusFailures = findUnmatchedFailures(
+    original.focusObservations,
+    updated.focusObservations,
+    (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
+    "focus",
+  );
+  const unpairedOriginalFailures = [
+    ...findUnmatchedFailures(
+      updated.orderedActions,
+      original.orderedActions,
+      (action) => `${normalizeEvidenceText(action.key)}|${normalizeEvidenceText(action.target)}`,
+      "action",
+    ),
+    ...findUnmatchedFailures(
+      updated.focusObservations,
+      original.focusObservations,
+      (observation) => `${normalizeEvidenceText(observation.target)}|${normalizeEvidenceText(observation.role)}`,
+      "focus",
+    ),
+  ];
+
+  return {
+    actionChanges,
+    focusChanges,
+    persistentFailures,
+    additionalUpdatedFailures,
+    additionalUpdatedFocusFailures,
+    unpairedOriginalFailures,
+    addedAgentFailures: findUnmatchedText(original.agentFailures, updated.agentFailures),
+    resolvedAgentFailures: findUnmatchedText(updated.agentFailures, original.agentFailures),
+    addedWarnings: findUnmatchedText(original.warnings, updated.warnings),
+    resolvedWarnings: findUnmatchedText(updated.warnings, original.warnings),
+  };
+}
+
+/** findMatchedEvidenceChanges reports only matched records whose outcome or focus observation changed. */
+function findMatchedEvidenceChanges(originalRecords, updatedRecords, keyForRecord, kind) {
+  const updatedByKey = new Map(updatedRecords.map((record) => [keyForRecord(record), record]));
+  const changes = [];
+
+  for (const originalRecord of originalRecords) {
+    const updatedRecord = updatedByKey.get(keyForRecord(originalRecord));
+    if (!updatedRecord) continue;
+
+    const observationChanged = kind === "focus"
+      && originalRecord.indicator !== updatedRecord.indicator;
+    if (originalRecord.outcome === updatedRecord.outcome && !observationChanged) continue;
+
+    changes.push({
+      kind,
+      target: originalRecord.target,
+      original: originalRecord,
+      updated: updatedRecord,
+      direction: compareEvidenceOutcome(originalRecord, updatedRecord),
+    });
+  }
+
+  return changes;
+}
+
+/** findUnmatchedFailures keeps failed checks visible when the other version has no equivalent record. */
+function findUnmatchedFailures(baselineRecords, changedRecords, keyForRecord, kind) {
+  const baselineKeys = new Set(baselineRecords.map(keyForRecord));
+  return changedRecords
+    .filter((record) => record.outcome === "failed" && !baselineKeys.has(keyForRecord(record)))
+    .map((record) => ({ kind, target: record.target, record }));
+}
+
+/** findPersistentFailures keeps a known barrier visible when the same matched check failed in both reports. */
+function findPersistentFailures(originalRecords, updatedRecords, keyForRecord, kind) {
+  const updatedByKey = new Map(updatedRecords.map((record) => [keyForRecord(record), record]));
+  return originalRecords.flatMap((original) => {
+    const updated = updatedByKey.get(keyForRecord(original));
+    if (original.outcome !== "failed" || updated?.outcome !== "failed") return [];
+    return [{ kind, target: original.target, original, updated }];
+  });
+}
+
+/** compareEvidenceOutcome assigns direction only when both records carry explicit pass/fail evidence. */
+function compareEvidenceOutcome(original, updated) {
+  if (!["passed", "failed"].includes(original.outcome)
+    || !["passed", "failed"].includes(updated.outcome)) return "unresolved";
+  if (original.outcome === updated.outcome) return "changed";
+  return updated.outcome === "passed" ? "improved" : "regressed";
+}
+
+/** findUnmatchedText lists agent failures or warnings added to one version without interpreting their meaning. */
+function findUnmatchedText(baselineItems = [], changedItems = []) {
+  return changedItems.filter((item) => !baselineItems.includes(item));
+}
+
+/** normalizeEvidenceText makes record matching stable across harmless casing and spacing differences. */
+function normalizeEvidenceText(value = "") {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /** isValidCoverage rejects impossible counts before they can support an improvement claim. */
 function isValidCoverage(coverageStats) {
   return coverageStats
@@ -246,7 +379,7 @@ function metricsAreInternallyConsistent(report) {
 }
 
 /** chooseOutcome requires aligned settings and complete evidence before it calls a result improved. */
-function chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage }) {
+function chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage, evidence }) {
   if (integrityProblems.length > 0) {
     return {
       status: "unresolved",
@@ -261,17 +394,59 @@ function chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage }) {
     .filter((delta) => delta !== null);
   const changes = [scoreDelta, ...metricDeltas, coverage.percentagePointDelta]
     .filter((delta) => delta !== null);
-  const hasImprovement = changes.some((delta) => delta > 0);
-  const hasRegression = changes.some((delta) => delta < 0);
+  const evidenceChanges = [
+    ...evidence.actionChanges,
+    ...evidence.focusChanges,
+  ];
+  const evidenceDirections = [
+    ...evidenceChanges.map(({ direction }) => direction),
+    ...evidence.additionalUpdatedFailures.map(() => "regressed"),
+    ...evidence.additionalUpdatedFocusFailures.map(() => "regressed"),
+  ];
+  const hasImprovement = changes.some((delta) => delta > 0)
+    || evidenceDirections.includes("improved");
+  const hasRegression = changes.some((delta) => delta < 0)
+    || evidenceDirections.includes("regressed");
+  const evidenceIsUnresolved = evidence.unpairedOriginalFailures.length > 0
+    || evidenceDirections.includes("unresolved");
 
-  if (hasImprovement && hasRegression) {
+  if (hasImprovement && (hasRegression || evidence.persistentFailures.length > 0)) {
     const regressions = metrics.filter((metric) => metric.direction === "regressed");
     const regressionNames = regressions.map((metric) => metric.name);
+    const additionalFailures = [
+      ...evidence.additionalUpdatedFailures,
+      ...evidence.additionalUpdatedFocusFailures,
+    ];
+    const unresolvedTargets = [...new Set(evidence.unpairedOriginalFailures.map(({ target }) => target))];
+    const failedTargets = [...new Set(additionalFailures.map(({ target }) => target))];
+    const persistentTargets = [...new Set(evidence.persistentFailures.map(({ target }) => target))];
     return {
       status: "mixed",
       label: "Mixed result",
-      summary: makeMixedSummary(scoreDelta, regressionNames),
-      reasons: regressionNames.map((name) => `${name} regressed.`),
+      summary: makeMixedSummary(
+        scoreDelta,
+        {
+          regressionNames,
+          additionalFailures,
+          unpairedOriginalFailures: evidence.unpairedOriginalFailures,
+          persistentFailures: evidence.persistentFailures,
+        },
+      ),
+      reasons: [
+        ...regressionNames.map((name) => `${name} regressed.`),
+        ...failedTargets.map((target) => `Updated evidence records an additional failed check at ${target}.`),
+        ...persistentTargets.map((target) => `A failed check at ${target} remains failed in both reports.`),
+        ...unresolvedTargets.map((target) => `The original failed check at ${target} has no matching updated observation.`),
+      ],
+    };
+  }
+
+  if (evidenceIsUnresolved) {
+    return {
+      status: "unresolved",
+      label: "Unresolved comparison",
+      summary: "Some original failed evidence has no matching updated observation, so the comparison cannot tell whether it changed.",
+      reasons: evidence.unpairedOriginalFailures.map(({ target }) => `The original failed check at ${target} was not repeated in the updated report.`),
     };
   }
 
@@ -284,6 +459,16 @@ function chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage }) {
       label: "Unresolved comparison",
       summary: `The displayed evidence includes declines${regressedNames.length ? ` in ${regressedNames.join(", ")}` : ""}; this sample does not support an improved result.`,
       reasons: regressedNames.map((name) => `${name} regressed.`),
+    };
+  }
+
+  if (evidence.persistentFailures.length > 0) {
+    const persistentTargets = [...new Set(evidence.persistentFailures.map(({ target }) => target))];
+    return {
+      status: "unresolved",
+      label: "Unresolved comparison",
+      summary: `No displayed change supports an improvement; failed checks at ${persistentTargets.join(" and ")} remain failed in both reports.`,
+      reasons: persistentTargets.map((target) => `A failed check at ${target} remains failed in both reports.`),
     };
   }
 
@@ -306,14 +491,32 @@ function chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage }) {
   };
 }
 
-/** makeMixedSummary names regressions beside any score gain so the headline cannot conceal them. */
-function makeMixedSummary(scoreDelta, regressionNames) {
+/** makeMixedSummary names measured regressions and incomplete evidence beside any score gain. */
+function makeMixedSummary(scoreDelta, {
+  regressionNames = [],
+  additionalFailures = [],
+  unpairedOriginalFailures = [],
+  persistentFailures = [],
+}) {
   const scoreChange = scoreDelta > 0
     ? `The updated score rose by ${scoreDelta} percentage points`
     : "The score did not rise";
-  return regressionNames.length
-    ? `${scoreChange}, but ${regressionNames.join(" and ")} regressed. The higher score does not erase those changes.`
-    : `${scoreChange}, while the evidence shows a decline in another displayed measure.`;
+  const failedTargets = [...new Set(additionalFailures.map(({ target }) => target))];
+  const regressions = [
+    ...(regressionNames.length ? [`${regressionNames.join(" and ")} regressed`] : []),
+    ...(failedTargets.length ? [`updated evidence adds an unmatched failed check at ${failedTargets.join(" and ")}`] : []),
+  ];
+  const regressionSummary = regressions.length ? `, but ${regressions.join("; ")}` : "";
+  const regressionCaveat = regressions.length ? " The higher score does not erase those changes." : "";
+  const persistentTargets = [...new Set(persistentFailures.map(({ target }) => target))];
+  const persistentSummary = persistentTargets.length
+    ? ` Failed checks at ${persistentTargets.join(" and ")} remain failed in both reports.`
+    : "";
+  const unresolvedTargets = [...new Set(unpairedOriginalFailures.map(({ target }) => target))];
+  const unresolvedSummary = unresolvedTargets.length
+    ? ` Original failed evidence at ${unresolvedTargets.join(" and ")} has no matching updated observation, so its outcome is unknown.`
+    : "";
+  return `${scoreChange}${regressionSummary}.${regressionCaveat}${persistentSummary}${unresolvedSummary}`;
 }
 
 /** getPassPercentage compares unlike denominators fairly by comparing rates as well as counts. */

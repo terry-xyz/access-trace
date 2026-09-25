@@ -40,6 +40,7 @@ function lowConsistencyComparisonExplainsBothScoresAndKeepsConflictingMetricsVis
   assert.deepEqual(comparison.original, original);
   assert.deepEqual(comparison.updated, updated);
   assert.equal(comparison.outcome.status, "mixed");
+  assert.match(comparison.outcome.summary, /Products link.*no matching updated observation/i);
   assert.equal(comparison.score.original.percentage, 82);
   assert.equal(comparison.score.updated.percentage, 95);
   assert.equal(comparison.score.deltaPercentagePoints, 13);
@@ -52,12 +53,22 @@ function lowConsistencyComparisonExplainsBothScoresAndKeepsConflictingMetricsVis
   assert.equal(focusMetric.direction, "improved");
   assert.equal(labelMetric.passedDelta, -1);
   assert.equal(labelMetric.direction, "regressed");
+
+  const productsFocusChange = comparison.evidence.focusChanges.find((change) => change.target === "Products");
+  assert.equal(productsFocusChange.direction, "improved");
+  assert.ok(comparison.evidence.additionalUpdatedFailures.some((action) => action.target === "Message field"));
 }
 test("a low-consistency comparison shows the higher score without hiding a metric regression", lowConsistencyComparisonExplainsBothScoresAndKeepsConflictingMetricsVisible);
 
 /** evidenceWithoutRegressionsCanSupportAnImprovedOutcome. */
 function evidenceWithoutRegressionsCanSupportAnImprovedOutcome() {
-  const original = withSettings(WHOLE_SITE_SAMPLE);
+  const passingActions = WHOLE_SITE_SAMPLE.orderedActions.map((action) => ({ ...action, outcome: "passed" }));
+  const passingFocus = WHOLE_SITE_SAMPLE.focusObservations.map((observation) => ({ ...observation, outcome: "passed" }));
+  const original = withSettings({
+    ...WHOLE_SITE_SAMPLE,
+    orderedActions: passingActions,
+    focusObservations: passingFocus,
+  });
   const metrics = WHOLE_SITE_SAMPLE.metrics.map((metric) => (
     metric.name === "Keyboard reachability" ? { ...metric, passed: 7 } : metric
   ));
@@ -70,11 +81,72 @@ function evidenceWithoutRegressionsCanSupportAnImprovedOutcome() {
     passed: updatedPassed,
     attempted: updatedAttempted,
     score: calculateWebsiteScore(updatedPassed, updatedAttempted),
+    orderedActions: passingActions,
+    focusObservations: passingFocus,
   });
 
   assert.equal(buildSiteComparison(original, updated).outcome.status, "improved");
 }
 test("complete aligned evidence without regressions can support an improved result", evidenceWithoutRegressionsCanSupportAnImprovedOutcome);
+
+/** persistentFailuresRemainVisibleAndPreventAnUnqualifiedImprovedOutcome. */
+function persistentFailuresRemainVisibleAndPreventAnUnqualifiedImprovedOutcome() {
+  const original = withSettings(WHOLE_SITE_SAMPLE);
+  const metrics = WHOLE_SITE_SAMPLE.metrics.map((metric) => (
+    metric.name === "Keyboard reachability" ? { ...metric, passed: 7 } : metric
+  ));
+  const updatedPassed = metrics.reduce((sum, metric) => sum + metric.passed, 0);
+  const updatedAttempted = metrics.reduce((sum, metric) => sum + metric.attempted, 0);
+  const updated = withSettings({
+    ...WHOLE_SITE_SAMPLE,
+    runId: "SAMPLE-WS-PERSISTENT-FAILURE-TEST",
+    metrics,
+    passed: updatedPassed,
+    attempted: updatedAttempted,
+    score: calculateWebsiteScore(updatedPassed, updatedAttempted),
+  });
+  const comparison = buildSiteComparison(original, updated);
+
+  assert.ok(comparison.score.deltaPercentagePoints > 0);
+  assert.equal(comparison.outcome.status, "mixed");
+  const persistentFailure = comparison.evidence.persistentFailures.find(({ target }) => target === "Products link");
+  assert.ok(persistentFailure);
+  assert.equal(persistentFailure.original.id, "ACT-03");
+  assert.equal(persistentFailure.updated.id, "ACT-03");
+  assert.match(comparison.outcome.summary, /Products link.*failed in both reports/i);
+
+  const unchanged = buildSiteComparison(original, withSettings(WHOLE_SITE_SAMPLE));
+  assert.equal(unchanged.outcome.status, "unresolved");
+  assert.match(unchanged.outcome.summary, /remain failed in both reports/i);
+}
+test("persistent failed evidence stays visible beside score gains", persistentFailuresRemainVisibleAndPreventAnUnqualifiedImprovedOutcome);
+
+/** newUpdatedFailurePreventsNumericGainsFromMaskingContradictoryEvidence. */
+function newUpdatedFailurePreventsNumericGainsFromMaskingContradictoryEvidence() {
+  const original = withSettings(WHOLE_SITE_SAMPLE);
+  const metrics = WHOLE_SITE_SAMPLE.metrics.map((metric) => {
+    if (metric.name === "Keyboard reachability") return { ...metric, passed: 7 };
+    if (metric.name === "Visible focus") return { ...metric, passed: 5 };
+    if (metric.name === "Focus order") return { ...metric, passed: 4 };
+    return metric;
+  });
+  const updatedPassed = metrics.reduce((sum, metric) => sum + metric.passed, 0);
+  const updatedAttempted = metrics.reduce((sum, metric) => sum + metric.attempted, 0);
+  const updated = withSettings({
+    ...AGENT_UPDATED_WHOLE_SITE_SAMPLE,
+    metrics,
+    passed: updatedPassed,
+    attempted: updatedAttempted,
+    score: calculateWebsiteScore(updatedPassed, updatedAttempted),
+  });
+  const comparison = buildSiteComparison(original, updated);
+
+  assert.ok(comparison.score.deltaPercentagePoints > 0);
+  assert.equal(comparison.outcome.status, "mixed");
+  assert.match(comparison.outcome.summary, /Message field/i);
+  assert.ok(comparison.evidence.additionalUpdatedFailures.length > 0);
+}
+test("an updated evidence failure prevents numeric gains from masking a contradiction", newUpdatedFailurePreventsNumericGainsFromMaskingContradictoryEvidence);
 
 /** goalComparisonPreservesTheConfiguredGoalOnBothVersionReports. */
 function goalComparisonPreservesTheConfiguredGoalOnBothVersionReports() {
@@ -153,6 +225,7 @@ function setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable() {
   assert.match(pageMarkup, /aria-labelledby="comparison-heading"/);
   assert.match(pageMarkup, /<th scope="col">Direction<\/th>/);
   assert.match(pageMarkup, /id="comparison-settings"/);
+  assert.match(pageMarkup, /id="comparison-evidence-changes"/);
   assert.match(pageMarkup, /Representative sample — not live assessment/);
   assert.match(mainSource, /buildSiteComparison\(/);
   assert.match(mainSource, /validateTargetUrl\(/);
@@ -160,5 +233,6 @@ function setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable() {
   assert.match(mainSource, /interactionProfile: "Keyboard only"/);
   assert.match(mainSource, /browserConditions: "Same controlled local browser conditions"/);
   assert.match(mainSource, /runsPerVersion: 1/);
+  assert.match(mainSource, /evidence\.persistentFailures/);
 }
 test("setup flows into an explicitly labeled comparison with both underlying reports available", setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable);

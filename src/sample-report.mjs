@@ -62,9 +62,9 @@ export const WHOLE_SITE_SAMPLE = Object.freeze({
     { id: "ACT-06", key: "Escape", target: "Page", result: "No open dialog; page state unchanged", outcome: "passed" },
   ],
   focusObservations: [
-    { id: "FOC-02", target: "Primary navigation", role: "Navigation landmark", indicator: "Visible outline" },
-    { id: "FOC-03", target: "Products", role: "Link", indicator: "No visible indicator observed" },
-    { id: "FOC-04", target: "Search", role: "Search field", indicator: "Text caret visible" },
+    { id: "FOC-02", target: "Primary navigation", role: "Navigation landmark", indicator: "Visible outline", outcome: "passed" },
+    { id: "FOC-03", target: "Products", role: "Link", indicator: "No visible indicator observed", outcome: "failed" },
+    { id: "FOC-04", target: "Search", role: "Search field", indicator: "Text caret visible", outcome: "passed" },
   ],
   screenshot: {
     id: "SHOT-02",
@@ -138,9 +138,9 @@ export const AGENT_UPDATED_WHOLE_SITE_SAMPLE = Object.freeze({
     { id: "ACT-UP-06", key: "Enter", target: "Form confirmation", result: "The visible confirmation was reached", outcome: "passed" },
   ],
   focusObservations: [
-    { id: "FOC-UP-02", target: "Primary navigation", role: "Navigation landmark", indicator: "Visible outline" },
-    { id: "FOC-UP-03", target: "Products", role: "Link", indicator: "Visible outline" },
-    { id: "FOC-UP-04", target: "Message field", role: "Text area", indicator: "No accessible name announced" },
+    { id: "FOC-UP-02", target: "Primary navigation", role: "Navigation landmark", indicator: "Visible outline", outcome: "passed" },
+    { id: "FOC-UP-03", target: "Products", role: "Link", indicator: "Visible outline", outcome: "passed" },
+    { id: "FOC-UP-04", target: "Message field", role: "Text area", indicator: "No accessible name announced", outcome: "failed" },
   ],
   screenshot: {
     id: "SHOT-UP-01",
@@ -213,9 +213,9 @@ export const GOAL_FOCUSED_SAMPLE = Object.freeze({
     { id: "ACT-GF-06", key: "Enter", target: "Submission confirmation", result: "Visible confirmation reached; goal completed", outcome: "passed" },
   ],
   focusObservations: [
-    { id: "FOC-GF-01", target: "Name field", role: "Text field", indicator: "Visible outline" },
-    { id: "FOC-GF-03", target: "Email field", role: "Email field", indicator: "No visible indicator observed" },
-    { id: "FOC-GF-04", target: "Message field", role: "Text area", indicator: "Visible outline" },
+    { id: "FOC-GF-01", target: "Name field", role: "Text field", indicator: "Visible outline", outcome: "passed" },
+    { id: "FOC-GF-03", target: "Email field", role: "Email field", indicator: "No visible indicator observed", outcome: "failed" },
+    { id: "FOC-GF-04", target: "Message field", role: "Text area", indicator: "Visible outline", outcome: "passed" },
   ],
   screenshot: {
     id: "SHOT-GF-01",
@@ -280,8 +280,8 @@ export const AGENT_UPDATED_GOAL_FOCUSED_SAMPLE = Object.freeze({
     { id: "ACT-GFU-03", key: "Enter", target: "Form confirmation", result: "The visible confirmation was reached", outcome: "passed" },
   ],
   focusObservations: [
-    { id: "FOC-GFU-01", target: "Name field", role: "Text field", indicator: "Visible outline" },
-    { id: "FOC-GFU-02", target: "Message field", role: "Text area", indicator: "No accessible name announced" },
+    { id: "FOC-GFU-01", target: "Name field", role: "Text field", indicator: "Visible outline", outcome: "passed" },
+    { id: "FOC-GFU-02", target: "Message field", role: "Text area", indicator: "No accessible name announced", outcome: "failed" },
   ],
   screenshot: {
     id: "SHOT-GFU-01",

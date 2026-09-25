@@ -410,6 +410,7 @@ function renderComparison(comparison) {
   document.querySelector("#comparison-coverage-delta").textContent = formatCoverageChange(comparison.coverage);
 
   renderComparisonMetrics(comparison.metrics);
+  renderComparisonEvidence(comparison.evidence);
   renderComparisonSettings(comparison.settings);
   renderComparisonReport(
     document.querySelector("#comparison-original-report-content"),
@@ -486,6 +487,103 @@ function formatMetricValue(metric) {
   return metric
     ? `${metric.passed} / ${metric.attempted} (${metric.percentage ?? "—"}%)`
     : "Not recorded";
+}
+
+/** renderComparisonEvidence names aligned changes and unmatched failures before users open either report. */
+function renderComparisonEvidence(evidence) {
+  const list = document.querySelector("#comparison-evidence-changes");
+  const fragment = document.createDocumentFragment();
+  const addEvidenceItem = (text, links = []) => {
+    const item = document.createElement("li");
+    item.append(document.createTextNode(text));
+    for (const { version, id, label } of links) {
+      item.append(document.createTextNode(" "));
+      const link = document.createElement("a");
+      link.href = `#comparison-${version}-${id}`;
+      link.textContent = label;
+      link.addEventListener("click", () => {
+        document.querySelector(`#comparison-${version}-report`).open = true;
+      });
+      item.append(link);
+    }
+    fragment.append(item);
+  };
+
+  for (const change of evidence.actionChanges) {
+    addEvidenceItem(
+      `Keyboard action at ${change.target}: original ${change.original.outcome}, updated ${change.updated.outcome}.`,
+      [
+        { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
+        { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
+      ],
+    );
+  }
+  for (const change of evidence.focusChanges) {
+    addEvidenceItem(
+      `Focus observation at ${change.target}: original “${change.original.indicator}”, updated “${change.updated.indicator}” (${formatEvidenceDirection(change.direction)}).`,
+      [
+        { version: "original", id: change.original.id, label: `Original ${change.original.id}` },
+        { version: "updated", id: change.updated.id, label: `Updated ${change.updated.id}` },
+      ],
+    );
+  }
+  for (const failure of evidence.persistentFailures) {
+    addEvidenceItem(
+      `Both reports record a failed ${failure.kind} check at ${failure.target}.`,
+      [
+        { version: "original", id: failure.original.id, label: `Original ${failure.original.id}` },
+        { version: "updated", id: failure.updated.id, label: `Updated ${failure.updated.id}` },
+      ],
+    );
+  }
+  for (const failure of evidence.additionalUpdatedFailures) {
+    addEvidenceItem(
+      `Updated report adds a failed keyboard action at ${failure.target}: ${failure.record.result}.`,
+      [{ version: "updated", id: failure.record.id, label: `Updated ${failure.record.id}` }],
+    );
+  }
+  for (const failure of evidence.additionalUpdatedFocusFailures) {
+    addEvidenceItem(
+      `Updated report adds a failed focus observation at ${failure.target}: ${failure.record.indicator}.`,
+      [{ version: "updated", id: failure.record.id, label: `Updated ${failure.record.id}` }],
+    );
+  }
+  for (const failure of evidence.unpairedOriginalFailures) {
+    addEvidenceItem(
+      `Original failed ${failure.kind} evidence at ${failure.target} has no matching updated observation; its outcome is unknown.`,
+      [{ version: "original", id: failure.record.id, label: `Original ${failure.record.id}` }],
+    );
+  }
+  for (const message of evidence.addedAgentFailures) {
+    addEvidenceItem(`Updated report also records an agent failure: ${message}`);
+  }
+  for (const warning of evidence.addedWarnings) {
+    addEvidenceItem(`Updated report adds a warning: ${warning}`);
+  }
+  for (const message of evidence.resolvedAgentFailures) {
+    addEvidenceItem(`Original report records an agent failure not present in the updated report: ${message}`);
+  }
+  for (const warning of evidence.resolvedWarnings) {
+    addEvidenceItem(`Original report adds a warning not present in the updated report: ${warning}`);
+  }
+
+  if (fragment.childNodes.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "No action or focus observation differences were recorded.";
+    fragment.append(item);
+  }
+  list.replaceChildren(fragment);
+}
+
+/** formatEvidenceDirection gives explicit outcome changes a readable label in the evidence summary. */
+function formatEvidenceDirection(direction) {
+  return direction === "improved"
+    ? "improved"
+    : direction === "regressed"
+      ? "regressed"
+      : direction === "changed"
+        ? "outcome unchanged"
+        : "direction unresolved";
 }
 
 /** renderComparisonSettings makes the shared setup and fixed Low run count explicit. */
