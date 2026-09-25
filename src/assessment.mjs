@@ -7,9 +7,11 @@ const UNSAFE_GOAL_PATTERNS = [
 ];
 const REMOTE_TARGET_PATTERN = /\b(?:remote|external|off[- ]site|off[- ]target|third[- ]party)\b|\b(?:another|other)\s+(?:site|website)\b|(?:https?:\/\/|www\.)\S+/i;
 const OTHER_INPUT_MODE_PATTERN = /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i;
-const SECURITY_PROPERTY_PATTERN = /\b(?:secure\w*|security|privacy|encrypt\w*)\b/i;
+const SECURITY_RESULT_PATTERN = /\b(?:securely|safely|privately|confidentially|encrypt\w*|vulnerab\w*|insecure\w*)\b|\b(?:is|are|be|remains?|becomes?|seems?|stays?)\s+(?:not\s+)?(?:secure|safe|private|confidential|encrypted|vulnerable)\b/i;
+const SECURITY_TOPIC_PATTERN = /\b(?:security|privacy)\b/i;
+const SECURITY_EVALUATION_PATTERN = /\b(?:check|test|verify|review|assess|audit|evaluate|confirm|inspect|measure|determine|ensure)\b/i;
 const SENSITIVE_DATA_PATTERN = /\b(?:passwords?|credentials?|authentication|authorization)\b/i;
-const SENSITIVE_DATA_HANDLING_PATTERN = /\b(?:strength|policy|stor\w*|transmit\w*|protect\w*|hash\w*|encrypt\w*|expos\w*|leak\w*|share\w*|safely|security|privacy|secure\w*)\b/i;
+const SENSITIVE_DATA_HANDLING_PATTERN = /\b(?:strength|policy|stor\w*|transmit\w*|protect\w*|hash\w*|expos\w*|leak\w*|share\w*)\b/i;
 const NON_KEYBOARD_CRITERIA_PATTERN = /\b(?:color|colour)\s+contrast\b|\b(?:alt(?:ernative)?\s+text|image descriptions?)\b|\bwcag\s+(?:conformance|compliance)\b/i;
 const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter|space|arrow keys?|shift[-+ ]?tab|focus|navigate|navigation)\b/i;
 const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element)\b/i;
@@ -17,7 +19,7 @@ const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:reach|activate|open|close|select|
 
 const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed and will not be reinterpreted.";
 const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts free-text goals about keyboard interactions and outcomes on the controlled local site. It cannot assess remote or off-site targets, other input modes, security or visual criteria, or other non-keyboard criteria. This goal will not be reinterpreted.";
-const SECURITY_GOAL_ERROR = "Unsupported security goal: this preview cannot assess whether a site or form is secure. It accepts keyboard interactions and outcomes only; this goal will not be reinterpreted.";
+const SECURITY_GOAL_ERROR = "Unsupported security/privacy goal: this preview cannot assess whether a site or form is secure, private, or handles sensitive data safely. It accepts keyboard interactions and outcomes only; this goal will not be reinterpreted.";
 
 /** describesKeyboardGoal recognizes explicit keyboard evidence or a keyboard action tied to a site control. */
 function describesKeyboardGoal(candidate) {
@@ -28,13 +30,21 @@ function describesKeyboardGoal(candidate) {
   return IMPLICIT_KEYBOARD_ACTION_PATTERN.test(candidate) && SITE_CONTROL_PATTERN.test(candidate);
 }
 
-/** describesSecurityAssessment distinguishes security criteria from keyboard goals targeting sensitive controls. */
+/** describesSecurityAssessment looks for security assertions, not security-related control names. */
 function describesSecurityAssessment(candidate) {
-  // Security properties are out of scope even when the goal names a particular site control.
-  if (SECURITY_PROPERTY_PATTERN.test(candidate)) return true;
+  // Explicit security outcomes are out of scope, while words used only as control labels are not.
+  if (SECURITY_RESULT_PATTERN.test(candidate)) return true;
 
-  // A sensitive control is not itself a security request; its handling must also be the assessment subject.
-  return SENSITIVE_DATA_PATTERN.test(candidate) && SENSITIVE_DATA_HANDLING_PATTERN.test(candidate);
+  // Security/privacy topics are criteria only when evaluated rather than targeted by a keyboard action.
+  const evaluatesSecurityTopic = SECURITY_EVALUATION_PATTERN.test(candidate)
+    && SECURITY_TOPIC_PATTERN.test(candidate)
+    && !describesKeyboardGoal(candidate);
+
+  // Sensitive fields are not themselves security requests; their handling must be the assessment subject.
+  const evaluatesSensitiveDataHandling = SENSITIVE_DATA_PATTERN.test(candidate)
+    && SENSITIVE_DATA_HANDLING_PATTERN.test(candidate);
+
+  return evaluatesSecurityTopic || evaluatesSensitiveDataHandling;
 }
 
 /** validateTargetUrl accepts only the normalized controlled endpoint so other loopback services remain out of scope. */

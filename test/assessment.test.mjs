@@ -85,6 +85,8 @@ function keyboardGoalPhrasingAcceptsMultipleOutcomes() {
   const formGoal = " Please fill out and submit the contact form using only Tab and Enter. ";
   const menuGoal = "Check that I can reach the menu and open it with the keyboard.";
   const passwordFieldGoal = "Using only the keyboard, reach the password field on the contact form";
+  const privacyLinkGoal = "Use Tab to focus the Privacy Policy link";
+  const secureAccountButtonGoal = "Use Tab to focus the Secure Account button";
 
   assert.equal(validateAssessmentGoal(formGoal).valid, true);
   assert.equal(validateAssessmentGoal(formGoal).goal, formGoal);
@@ -92,6 +94,10 @@ function keyboardGoalPhrasingAcceptsMultipleOutcomes() {
   assert.equal(validateAssessmentGoal(menuGoal).goal, menuGoal);
   assert.equal(validateAssessmentGoal(passwordFieldGoal).valid, true);
   assert.equal(validateAssessmentGoal(passwordFieldGoal).goal, passwordFieldGoal);
+  assert.equal(validateAssessmentGoal(privacyLinkGoal).valid, true);
+  assert.equal(validateAssessmentGoal(privacyLinkGoal).goal, privacyLinkGoal);
+  assert.equal(validateAssessmentGoal(secureAccountButtonGoal).valid, true);
+  assert.equal(validateAssessmentGoal(secureAccountButtonGoal).goal, secureAccountButtonGoal);
 }
 test("supported free-text keyboard goals keep their exact phrasing across different controls", keyboardGoalPhrasingAcceptsMultipleOutcomes);
 
@@ -119,6 +125,8 @@ function unsupportedAssessmentCriteriaAreNotReinterpreted() {
   const unsupportedGoals = [
     "Check whether the contact form sends submissions securely",
     "Check whether passwords are stored safely",
+    "Assess whether the privacy policy protects personal data",
+    "Check whether the form is secure",
     "Review the contact form's error messages for clarity",
   ];
 
@@ -127,7 +135,7 @@ function unsupportedAssessmentCriteriaAreNotReinterpreted() {
     assert.equal(result.valid, false, `${goal} should be rejected`);
     assert.equal(result.reason, "unsupported");
     assert.match(result.message, /not be reinterpreted/i);
-    if (/securely|passwords/.test(goal)) {
+    if (/securely|passwords|privacy policy protects|form is secure/.test(goal)) {
       assert.match(result.message, /cannot assess whether a site or form is secure/i);
     } else {
       assert.match(result.message, /keyboard interactions and outcomes/i);
