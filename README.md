@@ -18,16 +18,19 @@ Then open <http://127.0.0.1:8080/>. The controlled targets are:
 Start a run with `POST /api/runs` and a JSON body containing `targetUrl`, an
 optional `goal`, and optional boolean `simulationMode` (default `true`). The
 record is written as redacted JSON under `.access-trace/runs/` and can be read
-back with `GET /api/runs/<id>`. For the supported fixed contact-form goal,
+back with `GET /api/runs/<id>`. For the supported contact-form goal,
 `POST /api/runs/<id>/execute` starts a fresh isolated Chrome session, performs
 the bounded keyboard journey using the Codex planner, and persists the terminal
-result. The durable
-record keeps field character counts, validation metadata, and a redacted
-stopping screenshot reference, never typed field values or clipboard contents.
+result. The fixed target can complete after verified keyboard activation; the
+broken target can be blocked only after repeated semantic Submit evidence,
+failed Enter and Space activation, and relevant recovery. The durable record
+keeps field character counts, validation metadata, recovery evidence, and a
+redacted stopping screenshot reference, never typed field values or clipboard
+contents, and cleanup must be verified.
 The production planner uses a direct no-tools model request configured with
 `CODEX_PLANNER_ENDPOINT`, `CODEX_PLANNER_MODEL`, and
 `CODEX_PLANNER_API_KEY`; missing configuration yields an inconclusive run.
 
-The current lifecycle implements the fixed contact-form completion path. Broken
-barrier classification, whole-site coverage, failure handling, and report
-integration are later work.
+The current lifecycle supports only this fixed/broken contact-form goal. Whole-
+site coverage, broader free-text goal support, and report integration are later
+work.
