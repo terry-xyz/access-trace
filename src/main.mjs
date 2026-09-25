@@ -100,11 +100,11 @@ function renderSampleFacts() {
     }
   }
 
-  const referenceLink = document.querySelector("#wcag-reference-link");
+  const referenceLink = report.querySelector('[data-sample-link="wcagReference"]');
   referenceLink.href = sample.wcagReference.url;
   document.querySelector("#wcag-reference-label").textContent = sample.wcagReference.label;
 
-  const warningList = document.querySelector("#warning-list");
+  const warningList = report.querySelector('[data-sample-list="warnings"]');
   const warningItems = document.createDocumentFragment();
   for (const warning of sample.warnings) {
     const item = document.createElement("li");

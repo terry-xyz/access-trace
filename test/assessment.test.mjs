@@ -11,6 +11,7 @@ import {
 import { WHOLE_SITE_SAMPLE } from "../src/sample-report.mjs";
 
 const reportMarkup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const mainSource = readFileSync(new URL("../src/main.mjs", import.meta.url), "utf8");
 const reportContent = reportMarkup.slice(
   reportMarkup.indexOf('<section id="sample-report"'),
   reportMarkup.indexOf("<footer"),
@@ -163,6 +164,8 @@ function sampleReportFactsUseDataSlots() {
   }
   assert.ok(reportMarkup.includes('data-sample-link="wcagReference"'));
   assert.ok(reportMarkup.includes('data-sample-list="warnings"'));
+  assert.ok(mainSource.includes('[data-sample-link="wcagReference"]'));
+  assert.ok(mainSource.includes('[data-sample-list="warnings"]'));
   assert.ok(reportMarkup.includes('data-sample-fact="screenshotTitle"'));
   assert.ok(reportMarkup.includes('data-sample-fact="screenshotDescription"'));
 
