@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Review a representative keyboard assessment with clear scope, score, metrics, and evidence."
+    />
+    <title>AccessTrace — Keyboard assessment</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+    <script type="module" src="./src/main.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="#top" aria-label="AccessTrace home">
+          <span class="brand-mark" aria-hidden="true">A</span>
+          <span>AccessTrace</span>
+        </a>
+        <nav aria-label="Page navigation" class="header-nav">
+          <a href="#setup">Assessment setup</a>
+          <a href="#sample-report">Sample report</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main-content" class="page-shell">
+      <div id="top" class="intro">
+        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> KEYBOARD ACCESSIBILITY · LOCAL ASSESSMENT</p>
+        <h1>Make the result easy to trust.</h1>
+        <p class="intro-copy">
+          Set the scope, confirm the local target, then read the checks and evidence behind a keyboard assessment.
+        </p>
+      </div>
+
+      <section id="setup" class="setup-card" aria-labelledby="setup-heading">
+        <div class="section-heading">
+          <div>
+            <p class="step-label">01 <span aria-hidden="true">/</span> CONFIGURATION</p>
+            <h2 id="setup-heading">Set up an assessment</h2>
+          </div>
+          <span class="local-badge"><span aria-hidden="true">●</span> Controlled local target</span>
+        </div>
+
+        <p class="section-intro">
+          Leave the goal empty to assess the whole site. This preview accepts only the recognized local demo address.
+        </p>
+
+        <form id="assessment-form" novalidate>
+          <div class="field-group">
+            <label for="target-url">Controlled local target <span class="required-label">Required</span></label>
+            <input
+              id="target-url"
+              name="targetUrl"
+              type="url"
+              value="http://127.0.0.1:4173/"
+              autocomplete="url"
+              required
+              aria-describedby="target-hint target-error"
+            />
+            <p id="target-hint" class="field-hint">
+              Recognized target: <code>http://127.0.0.1:4173/</code>. Remote hosts, other local ports, and other paths are rejected.
+            </p>
+            <p id="target-error" class="field-error" hidden></p>
+          </div>
+
+          <div class="field-group">
+            <label for="assessment-goal">Assessment goal <span class="optional-label">Optional</span></label>
+            <textarea
+              id="assessment-goal"
+              name="goal"
+              rows="2"
+              aria-describedby="goal-hint scope-status goal-error"
+              placeholder="Leave empty for a whole-site assessment"
+            ></textarea>
+            <p id="goal-hint" class="field-hint">
+              No goal means the whole site is assessed. A supplied goal selects goal-focused scope.
+            </p>
+            <p id="scope-status" class="scope-status" role="status" aria-live="polite">Whole-site assessment selected</p>
+            <p id="goal-error" class="field-error" hidden></p>
+          </div>
+
+          <div class="settings-row">
+            <label class="toggle-card" for="simulation-mode">
+              <input id="simulation-mode" name="simulationMode" type="checkbox" checked />
+              <span class="toggle-copy">
+                <span class="toggle-title">Simulation mode <span class="default-label">ON BY DEFAULT</span></span>
+                <span class="toggle-hint">Keep the local run clearly marked as a simulation. This does not change target validation.</span>
+              </span>
+            </label>
+            <div class="mode-preview" aria-live="polite">
+              <span class="mode-preview-label">CURRENT SCOPE</span>
+              <span id="scope-chip" class="scope-chip">Whole site</span>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="primary-button" type="submit">
+              View whole-site sample report <span aria-hidden="true">↗</span>
+            </button>
+            <p class="action-note">Preview only. No browser starts and no live assessment is performed.</p>
+          </div>
+        </form>
+      </section>
+
+      <section id="sample-report" class="report-section" aria-labelledby="report-heading" hidden>
+        <div class="sample-notice" role="status">
+          <span class="notice-icon" aria-hidden="true">S</span>
+          <div>
+            <strong>Representative sample — not live assessment</strong>
+            <p>This report shows example values and evidence. The settings below are the configuration preview; no browser run has taken place.</p>
+          </div>
+        </div>
+
+        <div class="report-heading-row">
+          <div>
+            <p class="step-label">02 <span aria-hidden="true">/</span> TERMINAL REPORT</p>
+            <h2 id="report-heading" tabindex="-1">Whole-site assessment report</h2>
+            <p class="report-subtitle">Keyboard accessibility evidence for the configured assessment.</p>
+          </div>
+          <span class="terminal-status"><span class="status-dot" aria-hidden="true"></span> COMPLETED</span>
+        </div>
+
+        <section class="outcome-card" aria-labelledby="outcome-heading">
+          <div class="outcome-summary">
+            <div class="outcome-title">
+              <p class="card-kicker">TERMINAL RESULT</p>
+              <h3 id="outcome-heading">Full declared coverage completed</h3>
+              <p class="coverage-text">All 7 declared page regions checked in this representative sample.</p>
+            </div>
+            <div class="score-block" aria-label="Overall website checks score">
+              <p class="card-kicker">OVERALL SCORE</p>
+              <div class="score-value"><span id="score-percent">82</span><span class="score-percent">%</span></div>
+              <p id="score-count" class="score-count">18 passed <span aria-hidden="true">/</span> 22 attempted</p>
+              <progress id="score-progress" class="score-progress" value="18" max="22" aria-label="18 of 22 website checks passed">82%</progress>
+              <p id="score-formula" class="score-formula">18 ÷ 22 × 100 = 82%</p>
+            </div>
+          </div>
+
+          <div class="metrics-heading">
+            <div>
+              <p class="card-kicker">NAMED METRICS</p>
+              <h3>What contributed to the score</h3>
+            </div>
+            <p>Website checks only</p>
+          </div>
+          <dl id="metrics-grid" class="metrics-grid"></dl>
+        </section>
+
+        <div class="report-context" aria-label="Configured assessment context">
+          <div><span>Target</span><strong id="report-target">http://127.0.0.1:4173/</strong></div>
+          <div><span>Assessment scope</span><strong id="report-scope">Whole site</strong></div>
+          <div><span>Simulation mode</span><strong id="report-simulation">On</strong></div>
+        </div>
+
+        <section class="explanation-card" aria-labelledby="explanation-heading">
+          <div class="explanation-copy">
+            <p class="card-kicker">WHAT THE EVIDENCE SAYS</p>
+            <h3 id="explanation-heading">A repeatable focus visibility issue appeared.</h3>
+            <p>
+              The declared keyboard pass completed across all 7 sample page regions. Eighteen of 22 website checks passed. The repeated focus observation on the Products link supports a specific focus-indicator fix; this result describes the configured keyboard assessment only.
+            </p>
+          </div>
+          <div class="confidence-card">
+            <span class="confidence-label">CONFIDENCE</span>
+            <strong>Medium</strong>
+            <span>Repeated focus observation; sample evidence only</span>
+          </div>
+        </section>
+
+        <section class="fix-card" aria-labelledby="fix-heading">
+          <div class="fix-icon" aria-hidden="true">↗</div>
+          <div>
+            <p class="card-kicker">EVIDENCE-SUPPORTED PROPOSED FIX</p>
+            <h3 id="fix-heading">Restore a visible focus indicator</h3>
+            <p>Give the Products navigation link a clear <code>:focus-visible</code> indicator that remains visible against its background.</p>
+            <p class="fix-evidence">Supported by <a href="#ACT-03">ACT-03</a>, <a href="#FOC-03">FOC-03</a>, <a href="#REC-01">REC-01</a>, and <a href="#SHOT-02">SHOT-02</a>.</p>
+          </div>
+        </section>
+
+        <div class="report-columns">
+          <section class="report-panel" aria-labelledby="wcag-heading">
+            <p class="card-kicker">STANDARDS CONTEXT</p>
+            <h3 id="wcag-heading">Relevant WCAG reference</h3>
+            <p class="wcag-reference"><a href="https://www.w3.org/WAI/WCAG22/Understanding/focus-visible" target="_blank" rel="noreferrer">2.4.7 Focus Visible (Level AA) <span aria-hidden="true">↗</span></a></p>
+            <p class="panel-note">This reference provides context for the focus observation. It is not a conformance result.</p>
+          </section>
+          <section class="report-panel" aria-labelledby="run-details-heading">
+            <p class="card-kicker">RUN DETAILS</p>
+            <h3 id="run-details-heading">Assessment context</h3>
+            <dl class="run-details-grid">
+              <div><dt>Target</dt><dd id="details-target">http://127.0.0.1:4173/</dd></div>
+              <div><dt>Scope</dt><dd id="details-scope">Whole-site</dd></div>
+              <div><dt>Goal</dt><dd>None supplied</dd></div>
+              <div><dt>Simulation mode</dt><dd id="details-simulation">On</dd></div>
+              <div><dt>Duration</dt><dd>1 min 18 sec <span class="sample-value">Sample value</span></dd></div>
+              <div><dt>Keyboard interactions</dt><dd>6 <span class="sample-value">Sample value</span></dd></div>
+              <div><dt>Coverage</dt><dd>7 of 7 declared regions</dd></div>
+              <div><dt>Agent failures</dt><dd>None recorded in sample</dd></div>
+              <div><dt>Run record</dt><dd><a id="download-record" href="#">Download sample record JSON</a></dd></div>
+            </dl>
+            <p class="configuration-note">These are representative report values, not a browser run made with the current configuration.</p>
+          </section>
+        </div>
+
+        <section class="evidence-section" aria-labelledby="evidence-heading">
+          <div class="evidence-heading-row">
+            <div>
+              <p class="step-label">03 <span aria-hidden="true">/</span> SUPPORTING EVIDENCE</p>
+              <h3 id="evidence-heading">Inspect the observations behind the result</h3>
+            </div>
+            <span class="evidence-count">6 ordered sample actions</span>
+          </div>
+
+          <div class="report-columns evidence-top-grid">
+            <section class="report-panel" aria-labelledby="action-heading">
+              <p class="card-kicker">ORDERED ACTIONS</p>
+              <h4 id="action-heading">Keyboard action evidence</h4>
+              <ol id="action-list" class="action-list"></ol>
+            </section>
+            <section class="report-panel" aria-labelledby="focus-heading">
+              <p class="card-kicker">FOCUS OBSERVATIONS</p>
+              <h4 id="focus-heading">Observed focus states</h4>
+              <div class="table-scroll">
+                <table>
+                  <thead><tr><th scope="col">Reference</th><th scope="col">Target and role</th><th scope="col">Observation</th></tr></thead>
+                  <tbody id="focus-table-body"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="report-columns evidence-bottom-grid">
+            <section class="report-panel" aria-labelledby="screenshot-heading">
+              <p class="card-kicker">STOPPING SCREENSHOT REFERENCE</p>
+              <h4 id="screenshot-heading">SHOT-02 · Focus visibility</h4>
+              <figure class="sample-capture" role="img" aria-label="Illustrative sample screenshot, not a captured browser image. It shows the Products link in keyboard focus without a visible focus indicator.">
+                <div class="capture-chrome" aria-hidden="true"><span></span><span></span><span></span><i>sample.local</i></div>
+                <div class="capture-content" aria-hidden="true">
+                  <div class="capture-brand">Northstar <span>▰</span></div>
+                  <div class="capture-nav"><span>Home</span><span class="capture-focused">Products</span><span>About</span></div>
+                  <div class="capture-line capture-line-short"></div>
+                  <div class="capture-line"></div>
+                  <div class="capture-form"><span></span><span></span><b></b></div>
+                </div>
+                <figcaption>Illustrative report mockup; not a captured browser screenshot.</figcaption>
+              </figure>
+              <p class="panel-note">Sample reference SHOT-02 is linked to the focus observation. No live screenshot was captured for this report.</p>
+            </section>
+
+            <section class="report-panel" aria-labelledby="recovery-heading">
+              <p class="card-kicker">RECOVERY EVIDENCE</p>
+              <h4 id="recovery-heading">Repeat check and recovery</h4>
+              <ul id="recovery-list" class="plain-evidence-list"></ul>
+              <div class="warning-note"><strong>Warnings</strong><p>No browser lifecycle warnings are included in this representative sample.</p></div>
+            </section>
+          </div>
+
+          <details class="evidence-details">
+            <summary>How to read this score and its limitations</summary>
+            <div class="details-copy">
+              <p>The score is calculated from passed website checks divided by attempted website checks, multiplied by 100. Website failures lower the score; agent failures are shown separately.</p>
+              <p>This report contains keyboard-assessment evidence for one controlled local target. It is not a full accessibility assessment and does not establish WCAG conformance.</p>
+            </div>
+          </details>
+        </section>
+
+        <p class="limitation-banner"><span aria-hidden="true">i</span> This result is only keyboard-assessment evidence for the configured local site. It is not a full accessibility or WCAG conformance assessment.</p>
+      </section>
+
+      <footer class="site-footer">
+        <span>AccessTrace <span aria-hidden="true">·</span> local-first keyboard evidence</span>
+        <a href="#top">Back to top ↑</a>
+      </footer>
+    </main>
+  </body>
+</html>
