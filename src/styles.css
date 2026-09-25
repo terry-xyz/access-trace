@@ -374,8 +374,8 @@ button, input, textarea { font: inherit; }
 .comparison-report-details summary { padding: 0.9rem 1rem; color: #2c3f69; font-size: 0.85rem; font-weight: 740; cursor: pointer; }
 .comparison-report-details summary:hover { color: var(--blue-dark); }
 .comparison-report-content { border-top: 1px solid #e6eaf0; padding: 1rem; }
-.comparison-report-content h4 { margin: 0.9rem 0 0.35rem; color: #34445f; font-size: 0.84rem; }
-.comparison-report-content h4:first-child { margin-top: 0; }
+.comparison-report-content h4, .comparison-report-content h5 { margin: 0.9rem 0 0.35rem; color: #34445f; font-size: 0.84rem; }
+.comparison-report-content h4:first-child, .comparison-report-content h5:first-child { margin-top: 0; }
 .comparison-report-content p, .comparison-report-content li { color: #4f5d73; font-size: 0.75rem; }
 .comparison-report-content p { margin: 0.24rem 0; }
 .comparison-report-content ul, .comparison-report-content ol { margin: 0.35rem 0 0; padding-left: 1.25rem; }

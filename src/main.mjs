@@ -3,7 +3,10 @@ import {
   validateAssessmentGoal,
   validateTargetUrl,
 } from "./assessment.mjs";
-import { buildSiteComparison } from "./comparison.mjs";
+import {
+  CONSISTENCY_RUN_COUNTS,
+  buildSiteComparison,
+} from "./comparison.mjs";
 import {
   AGENT_UPDATED_GOAL_FOCUSED_SAMPLE,
   AGENT_UPDATED_WHOLE_SITE_SAMPLE,
@@ -27,8 +30,6 @@ const comparisonButton = document.querySelector("#view-comparison");
 const comparisonSection = document.querySelector("#sample-comparison");
 const comparisonHeading = document.querySelector("#comparison-heading");
 let recordUrl;
-
-const CONSISTENCY_RUN_COUNTS = Object.freeze({ Low: 1, Medium: 2, High: 3 });
 
 const ASSESSMENT_EVIDENCE_PRESENTATION = {
   action: {
@@ -410,16 +411,54 @@ function createComparisonSamples(configuration, settings) {
     ? [WHOLE_SITE_SAMPLE, AGENT_UPDATED_WHOLE_SITE_SAMPLE]
     : [GOAL_FOCUSED_SAMPLE, AGENT_UPDATED_GOAL_FOCUSED_SAMPLE];
 
-  return samples.map((sample) => Array.from({ length: settings.runsPerVersion }, (_, index) => ({
+  return samples.map((sample, versionIndex) => Array.from(
+    { length: settings.runsPerVersion },
+    (_, index) => createRepresentativeComparisonRun({
+      sample,
+      settings,
+      goal: configuration.goal,
+      version: versionIndex === 0 ? "original" : "updated",
+      index,
+    }),
+  ));
+}
+
+/** createRepresentativeComparisonRun keeps incomplete and agent-failed sample states visible. */
+function createRepresentativeComparisonRun({ sample, settings, goal, version, index }) {
+  const runNumber = index + 1;
+  const run = {
     ...sample,
-    runId: index === 0 ? sample.runId : `${sample.runId}-RUN-${index + 1}`,
-    goal: configuration.goal,
+    runId: index === 0 ? sample.runId : `${sample.runId}-RUN-${runNumber}`,
+    goal,
     assessmentSettings: settings,
-    comparisonRunNumber: index + 1,
+    comparisonRunNumber: runNumber,
     representativeRunNote: index === 0
       ? "Representative sample slot; no browser run has taken place."
-      : `Illustrative repeat slot ${index + 1}; this repeats representative sample evidence and is not an independent browser run.`,
-  })));
+      : `Illustrative repeat slot ${runNumber}; this repeats representative sample evidence and is not an independent browser run.`,
+  };
+
+  if (index !== 1) return run;
+  if (version === "original") {
+    return {
+      ...run,
+      terminalStatus: "INCONCLUSIVE",
+      outcomeTitle: "Representative repeat run remained inconclusive",
+      explanationTitle: "This repeat slot is inconclusive.",
+      explanation: "The representative website-check values remain visible, but this sample slot is inconclusive and cannot support a resolved comparison on its own.",
+    };
+  }
+
+  return {
+    ...run,
+    terminalStatus: "AGENT_FAILED",
+    outcomeTitle: "Representative repeat run recorded an agent failure",
+    explanationTitle: "This repeat slot records an agent failure.",
+    explanation: "The representative website-check values remain visible, while the separate agent failure prevents this sample slot from supporting a resolved comparison on its own.",
+    agentFailures: [
+      ...(run.agentFailures ?? []),
+      "Representative agent failure retained for this sample slot.",
+    ],
+  };
 }
 
 /** handleComparisonRequest shows a validated comparison and moves focus to its result heading. */
@@ -816,7 +855,7 @@ function renderComparisonReport(container, sample, version, runNumber) {
   appendComparisonParagraph(fragment, "Coverage", sample.coverage);
   appendComparisonParagraph(fragment, "Duration", sample.duration);
   appendComparisonParagraph(fragment, "Interaction count", String(sample.interactionCount));
-  appendComparisonParagraph(fragment, "Score", `${sample.score.label} (${sample.score.percentage}%)`);
+  appendComparisonParagraph(fragment, "Score", formatReportScore(sample.score));
   appendComparisonParagraph(fragment, "Outcome", sample.outcomeTitle);
 
   appendComparisonHeading(fragment, "Named metrics");
@@ -889,7 +928,13 @@ function renderComparisonReport(container, sample, version, runNumber) {
   appendComparisonHeading(fragment, "Warnings");
   appendComparisonList(fragment, sample.warnings, null);
 
-  container.replaceChildren(fragment);
+  container.append(fragment);
+}
+
+/** formatReportScore never turns an unavailable score into a misleading null percentage. */
+function formatReportScore(score) {
+  if (!score || score.percentage === null) return score?.label ?? "Score unavailable";
+  return `${score.label} (${score.percentage}%)`;
 }
 
 /** appendComparisonScreenshot preserves the sample capture's site, navigation, and focused item in each report. */
@@ -969,9 +1014,9 @@ function getComparisonEvidenceIds(sample, prefix) {
   return ids;
 }
 
-/** appendComparisonHeading keeps each evidence section's name visible to keyboard and screen-reader users. */
+/** appendComparisonHeading nests report sections below their visible run heading. */
 function appendComparisonHeading(parent, text) {
-  const heading = document.createElement("h4");
+  const heading = document.createElement("h5");
   heading.textContent = text;
   parent.append(heading);
 }
@@ -1037,6 +1082,19 @@ function updateConsistencyPreview() {
   clearStaleSampleReport();
 }
 
+/** populateConsistencyOptions derives labels and values from the comparison domain contract. */
+function populateConsistencyOptions() {
+  const fragment = document.createDocumentFragment();
+  for (const [level, runsPerVersion] of Object.entries(CONSISTENCY_RUN_COUNTS)) {
+    const option = document.createElement("option");
+    option.value = level;
+    option.textContent = `${level} — ${runsPerVersion} ${runsPerVersion === 1 ? "assessment" : "assessments"} per version`;
+    option.selected = level === "Low";
+    fragment.append(option);
+  }
+  consistencyInput.replaceChildren(fragment);
+}
+
 form.addEventListener("submit", handleAssessmentSubmit);
 comparisonButton.addEventListener("click", handleComparisonRequest);
 targetInput.addEventListener("input", clearTargetValidationError);
@@ -1048,4 +1106,5 @@ document.querySelector("#recognized-target").textContent = WHOLE_SITE_SAMPLE.tar
 
 renderReportSample(WHOLE_SITE_SAMPLE);
 updateScopePreview();
+populateConsistencyOptions();
 updateConsistencyPreview();

@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { buildSiteComparison } from "../src/comparison.mjs";
+import {
+  CONSISTENCY_RUN_COUNTS,
+  buildSiteComparison,
+} from "../src/comparison.mjs";
 import { calculateWebsiteScore } from "../src/assessment.mjs";
 import {
   AGENT_UPDATED_GOAL_FOCUSED_SAMPLE,
@@ -129,13 +132,40 @@ function highConsistencyKeepsAnUnscoredRunVisibleAndUsesThreeRunsForBothVersions
 }
 test("High consistency retains all three runs and identifies an unscored run", highConsistencyKeepsAnUnscoredRunVisibleAndUsesThreeRunsForBothVersions);
 
+/** incompleteRepeatedMetricsCannotProduceAnImprovedVerdict. */
+function incompleteRepeatedMetricsCannotProduceAnImprovedVerdict() {
+  const settings = { ...sharedSettings, consistencyLevel: "Medium", runsPerVersion: 2 };
+  const incompleteMetrics = WHOLE_SITE_SAMPLE.metrics.map((metric) => (
+    metric.name === "Visible focus"
+      ? { ...metric, passed: 0, attempted: 0 }
+      : metric
+  ));
+  const incompleteOriginal = reportWithMetrics(WHOLE_SITE_SAMPLE, settings, incompleteMetrics, {
+    runId: "SAMPLE-WS-02",
+  });
+  const comparison = buildSiteComparison(
+    [withSettings(WHOLE_SITE_SAMPLE, settings), incompleteOriginal],
+    [
+      withSettings(AGENT_UPDATED_WHOLE_SITE_SAMPLE, settings),
+      withSettings({ ...AGENT_UPDATED_WHOLE_SITE_SAMPLE, runId: "SAMPLE-WS-UP-02" }, settings),
+    ],
+  );
+
+  assert.equal(
+    comparison.metrics.find(({ name }) => name === "Visible focus").direction,
+    "unavailable",
+  );
+  assert.notEqual(comparison.outcome.status, "improved");
+  assert.match(comparison.outcome.summary, /insufficient repeated-run data/i);
+}
+test("incomplete repeated metrics cannot produce an Improved verdict", incompleteRepeatedMetricsCannotProduceAnImprovedVerdict);
+
 /** comparisonSetupOffersAccessibleDataDrivenConsistencyLevels. */
 function comparisonSetupOffersAccessibleDataDrivenConsistencyLevels() {
   assert.match(pageMarkup, /<label[^>]*for="comparison-consistency"/);
   assert.match(pageMarkup, /<select[^>]*id="comparison-consistency"[^>]*name="consistencyLevel"/);
-  assert.match(pageMarkup, /<option value="Low" selected>Low — 1 assessment per version/);
-  assert.match(pageMarkup, /<option value="Medium">Medium — 2 assessments per version/);
-  assert.match(pageMarkup, /<option value="High">High — 3 assessments per version/);
+  assert.deepEqual(CONSISTENCY_RUN_COUNTS, { Low: 1, Medium: 2, High: 3 });
+  assert.match(mainSource, /function populateConsistencyOptions\(\)/);
   assert.match(mainSource, /const consistencyLevel = consistencyInput\.value/);
   assert.match(mainSource, /    consistencyLevel,/);
   assert.match(mainSource, /runsPerVersion: CONSISTENCY_RUN_COUNTS\[consistencyLevel\]/);
@@ -408,6 +438,13 @@ function setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable() {
   assert.match(mainSource, /runsPerVersion: CONSISTENCY_RUN_COUNTS\[consistencyLevel\]/);
   assert.match(mainSource, /renderComparisonReports\(/);
   assert.match(mainSource, /representativeRunNote/);
+  assert.match(mainSource, /terminalStatus: "INCONCLUSIVE"/);
+  assert.match(mainSource, /terminalStatus: "AGENT_FAILED"/);
+  assert.match(mainSource, /Representative agent failure retained for this sample slot/);
+  assert.match(mainSource, /formatReportScore\(sample\.score\)/);
+  assert.match(mainSource, /container\.append\(fragment\)/);
+  assert.match(mainSource, /function appendComparisonHeading\(parent, text\)[\s\S]*?createElement\("h5"\)/);
+  assert.match(styleSource, /\.comparison-report-content h4, \.comparison-report-content h5/);
   assert.match(pageMarkup, /id="comparison-run-results"/);
   assert.match(pageMarkup, /id="comparison-original-range"/);
   assert.match(pageMarkup, /id="comparison-updated-range"/);

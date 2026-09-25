@@ -175,7 +175,7 @@ function hasSupportedConsistency(settings = {}) {
   return CONSISTENCY_RUN_COUNTS[settings.consistencyLevel] === settings.runsPerVersion;
 }
 
-const CONSISTENCY_RUN_COUNTS = Object.freeze({ Low: 1, Medium: 2, High: 3 });
+export const CONSISTENCY_RUN_COUNTS = Object.freeze({ Low: 1, Medium: 2, High: 3 });
 
 /** buildRepeatedSiteComparison summarizes averages while retaining each source run and report. */
 function buildRepeatedSiteComparison(originalRuns, updatedRuns) {
@@ -190,19 +190,20 @@ function buildRepeatedSiteComparison(originalRuns, updatedRuns) {
   const settingDifferences = [...new Set(allRuns.flatMap((report) => (
     findSettingDifferences(settings, report.assessmentSettings)
   )))];
+  const metrics = aggregateMetrics(originalRuns, updatedRuns);
   const integrityProblems = collectRepeatedIntegrityProblems({
     originalRuns,
     updatedRuns,
     allRuns,
     settings,
     settingDifferences,
+    metrics,
   });
   const score = {
     original: aggregateScores(originalRuns),
     updated: aggregateScores(updatedRuns),
   };
   score.deltaPercentagePoints = getDelta(score.original.averagePercentage, score.updated.averagePercentage);
-  const metrics = aggregateMetrics(originalRuns, updatedRuns);
   const coverage = aggregateCoverage(originalRuns, updatedRuns);
   const evidenceByRun = runComparisons.map(({ runNumber, evidence: runEvidence }) => ({
     runNumber,
@@ -245,6 +246,7 @@ function collectRepeatedIntegrityProblems({
   allRuns,
   settings,
   settingDifferences,
+  metrics,
 }) {
   const problems = [
     ...settingDifferences.map((field) => `The runs use different ${field} settings.`),
@@ -261,6 +263,9 @@ function collectRepeatedIntegrityProblems({
   const firstMetrics = allRuns[0]?.metrics;
   if (allRuns.some((report) => !haveSameMetricNames(firstMetrics, report.metrics))) {
     problems.push("The runs do not contain the same named metrics.");
+  }
+  if (metrics.length === 0 || metrics.some(({ direction }) => direction === "unavailable")) {
+    problems.push("At least one named metric has insufficient repeated-run data to compare.");
   }
   for (const [index, report] of allRuns.entries()) {
     const version = index < originalRuns.length ? "Original" : "Updated";
