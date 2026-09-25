@@ -251,6 +251,8 @@ button, input, textarea { font: inherit; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #2c8c5f; }
 
 .outcome-card { padding: 1.5rem; }
+.report-scope-lead { display: flex; align-items: baseline; gap: 0.7rem; margin: 0 0 0.8rem; border-bottom: 1px solid #e8ecf2; padding-bottom: 0.7rem; }
+.report-scope-lead strong { color: #263d88; font-size: 0.88rem; }
 .outcome-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(225px, 0.44fr); gap: 2rem; align-items: center; }
 .card-kicker { color: #6b778c; font-size: 0.66rem; }
 .outcome-title h3, .metrics-heading h3, .explanation-copy h3, .fix-card h3, .report-panel h3, .report-panel h4 { margin: 0.35rem 0 0; font-size: 1.07rem; letter-spacing: -0.02em; line-height: 1.35; }
@@ -358,7 +360,7 @@ td:first-child { white-space: nowrap; font-weight: 680; }
 .plain-evidence-list li { padding-left: 0.12rem; }
 .warning-note { margin-top: 1rem; border-left: 3px solid #c8d0dc; background: #f7f9fc; padding: 0.55rem 0.65rem; }
 .warning-note strong { color: #48586f; font-size: 0.7rem; }
-.warning-note p { margin: 0.14rem 0 0; color: #59677d; font-size: 0.69rem; }
+.warning-note ul { margin: 0.14rem 0 0; padding-left: 1rem; color: #59677d; font-size: 0.69rem; }
 .evidence-details { margin-top: 0.75rem; border: 1px solid var(--line); border-radius: 0.68rem; background: #fff; }
 .evidence-details summary { padding: 0.82rem 1rem; color: #34445f; font-size: 0.8rem; font-weight: 700; cursor: pointer; }
 .evidence-details summary:hover { color: var(--blue-dark); }

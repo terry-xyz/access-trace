@@ -56,13 +56,12 @@
               id="target-url"
               name="targetUrl"
               type="url"
-              value="http://127.0.0.1:4173/"
               autocomplete="url"
               required
               aria-describedby="target-hint target-error"
             />
             <p id="target-hint" class="field-hint">
-              Recognized target: <code>http://127.0.0.1:4173/</code>. Remote hosts, other local ports, and other paths are rejected.
+              Recognized target: <code id="recognized-target"></code>. Remote hosts, other local ports, and other paths are rejected.
             </p>
             <p id="target-error" class="field-error" hidden></p>
           </div>
@@ -118,25 +117,29 @@
         <div class="report-heading-row">
           <div>
             <p class="step-label">02 <span aria-hidden="true">/</span> TERMINAL REPORT</p>
-            <h2 id="report-heading" tabindex="-1">Whole-site assessment report</h2>
+            <h2 id="report-heading" tabindex="-1">Assessment report</h2>
             <p class="report-subtitle">Keyboard accessibility evidence for the configured assessment.</p>
           </div>
-          <span class="terminal-status"><span class="status-dot" aria-hidden="true"></span> COMPLETED</span>
+          <span class="terminal-status"><span class="status-dot" aria-hidden="true"></span><span id="terminal-status-value" data-sample-fact="terminalStatus"></span></span>
         </div>
 
         <section class="outcome-card" aria-labelledby="outcome-heading">
+          <div class="report-scope-lead">
+            <span class="card-kicker">ASSESSMENT SCOPE</span>
+            <strong id="report-scope-lead" data-sample-fact="scopeLabel"></strong>
+          </div>
           <div class="outcome-summary">
             <div class="outcome-title">
               <p class="card-kicker">TERMINAL RESULT</p>
-              <h3 id="outcome-heading">Full declared coverage completed</h3>
-              <p class="coverage-text">All 7 declared page regions checked in this representative sample.</p>
+              <h3 id="outcome-heading" data-sample-fact="outcomeTitle"></h3>
+              <p class="coverage-text" data-sample-fact="coverage"></p>
             </div>
             <div class="score-block" aria-label="Overall website checks score">
               <p class="card-kicker">OVERALL SCORE</p>
-              <div class="score-value"><span id="score-percent">82</span><span class="score-percent">%</span></div>
-              <p id="score-count" class="score-count">18 passed <span aria-hidden="true">/</span> 22 attempted</p>
-              <progress id="score-progress" class="score-progress" value="18" max="22" aria-label="18 of 22 website checks passed">82%</progress>
-              <p id="score-formula" class="score-formula">18 ÷ 22 × 100 = 82%</p>
+              <div class="score-value"><span id="score-percent"></span><span class="score-percent">%</span></div>
+              <p id="score-count" class="score-count"></p>
+              <progress id="score-progress" class="score-progress" value="0" max="1" aria-label=""></progress>
+              <p id="score-formula" class="score-formula"></p>
             </div>
           </div>
 
@@ -151,24 +154,22 @@
         </section>
 
         <div class="report-context" aria-label="Configured assessment context">
-            <div><span>Target</span><strong id="report-target" data-report-context="target">http://127.0.0.1:4173/</strong></div>
-            <div><span>Assessment scope</span><strong id="report-scope" data-report-context="scope">Whole site</strong></div>
-            <div><span>Simulation mode</span><strong id="report-simulation" data-report-context="simulationMode">On</strong></div>
+            <div><span>Target</span><strong id="report-target" data-report-context="target"></strong></div>
+            <div><span>Assessment scope</span><strong id="report-scope" data-sample-fact="scopeLabel"></strong></div>
+            <div><span>Simulation mode</span><strong id="report-simulation" data-report-context="simulationMode"></strong></div>
         </div>
 
         <section class="explanation-card" aria-labelledby="explanation-heading">
           <div class="explanation-copy">
             <p class="card-kicker">WHAT THE EVIDENCE SAYS</p>
-            <h3 id="explanation-heading">A repeatable focus visibility issue appeared.</h3>
-            <p>
-              The declared keyboard pass completed across all 7 sample page regions. Eighteen of 22 website checks passed. The repeated focus observation on the Products link supports a specific focus-indicator fix; this result describes the configured keyboard assessment only.
-            </p>
+            <h3 id="explanation-heading" data-sample-fact="explanationTitle"></h3>
+            <p data-sample-fact="explanation"></p>
             <ul id="explanation-evidence" class="evidence-reference-list" aria-label="Evidence supporting the explanation"></ul>
           </div>
           <div class="confidence-card">
             <span class="confidence-label">CONFIDENCE</span>
-            <strong>Medium</strong>
-            <span>Repeated focus observation; sample evidence only</span>
+            <strong data-sample-fact="confidence"></strong>
+            <span data-sample-fact="confidenceContext"></span>
           </div>
         </section>
 
@@ -176,8 +177,8 @@
           <div class="fix-icon" aria-hidden="true">↗</div>
           <div>
             <p class="card-kicker">EVIDENCE-SUPPORTED PROPOSED FIX</p>
-            <h3 id="fix-heading">Restore a visible focus indicator</h3>
-            <p>Give the Products navigation link a clear <code>:focus-visible</code> indicator that remains visible against its background.</p>
+            <h3 id="fix-heading" data-sample-fact="proposedFixTitle"></h3>
+            <p data-sample-fact="proposedFix"></p>
             <p class="fix-evidence">Supported by <span id="fix-evidence-references"></span>.</p>
           </div>
         </section>
@@ -186,21 +187,21 @@
           <section class="report-panel" aria-labelledby="wcag-heading">
             <p class="card-kicker">STANDARDS CONTEXT</p>
             <h3 id="wcag-heading">Relevant WCAG reference</h3>
-            <p class="wcag-reference"><a href="https://www.w3.org/WAI/WCAG22/Understanding/focus-visible" target="_blank" rel="noreferrer">2.4.7 Focus Visible (Level AA) <span aria-hidden="true">↗</span></a></p>
+            <p class="wcag-reference"><a id="wcag-reference-link" data-sample-link="wcagReference" target="_blank" rel="noreferrer"><span id="wcag-reference-label"></span> <span aria-hidden="true">↗</span></a></p>
             <p class="panel-note">This reference provides context for the focus observation. It is not a conformance result.</p>
           </section>
           <section class="report-panel" aria-labelledby="run-details-heading">
             <p class="card-kicker">RUN DETAILS</p>
             <h3 id="run-details-heading">Assessment context</h3>
             <dl class="run-details-grid">
-              <div><dt>Target</dt><dd id="details-target" data-report-context="target">http://127.0.0.1:4173/</dd></div>
-              <div><dt>Scope</dt><dd id="details-scope" data-report-context="scope">Whole-site</dd></div>
-              <div><dt>Goal</dt><dd>None supplied</dd></div>
-              <div><dt>Simulation mode</dt><dd id="details-simulation" data-report-context="simulationMode">On</dd></div>
-              <div><dt>Duration</dt><dd>1 min 18 sec <span class="sample-value">Sample value</span></dd></div>
-              <div><dt>Keyboard interactions</dt><dd>6 <span class="sample-value">Sample value</span></dd></div>
-              <div><dt>Coverage</dt><dd>7 of 7 declared regions</dd></div>
-              <div><dt>Agent failures</dt><dd>None recorded in sample</dd></div>
+              <div><dt>Target</dt><dd id="details-target" data-report-context="target"></dd></div>
+              <div><dt>Scope</dt><dd id="details-scope" data-sample-fact="scopeLabel"></dd></div>
+              <div><dt>Goal</dt><dd data-sample-fact="goalSummary"></dd></div>
+              <div><dt>Simulation mode</dt><dd id="details-simulation" data-report-context="simulationMode"></dd></div>
+              <div><dt>Duration</dt><dd><span data-sample-fact="duration"></span> <span class="sample-value">Sample value</span></dd></div>
+              <div><dt>Keyboard interactions</dt><dd><span data-sample-fact="interactionCount"></span> <span class="sample-value">Sample value</span></dd></div>
+              <div><dt>Coverage</dt><dd data-sample-fact="coverage"></dd></div>
+              <div><dt>Agent failures</dt><dd data-sample-fact="agentFailureSummary"></dd></div>
               <div><dt>Run record</dt><dd><a id="download-record" href="#">Download sample record JSON</a></dd></div>
             </dl>
             <p class="configuration-note">These are representative report values, not a browser run made with the current configuration.</p>
@@ -213,7 +214,7 @@
               <p class="step-label">03 <span aria-hidden="true">/</span> SUPPORTING EVIDENCE</p>
               <h3 id="evidence-heading">Inspect the observations behind the result</h3>
             </div>
-            <span class="evidence-count">6 ordered sample actions</span>
+            <span id="evidence-count" class="evidence-count"></span>
           </div>
 
           <div class="report-columns evidence-top-grid">
@@ -237,26 +238,26 @@
           <div class="report-columns evidence-bottom-grid">
             <section class="report-panel" aria-labelledby="screenshot-heading">
               <p class="card-kicker">STOPPING SCREENSHOT REFERENCE</p>
-              <h4 id="screenshot-heading">SHOT-02 · Focus visibility</h4>
-              <figure id="SHOT-02" class="sample-capture" role="img" aria-label="Illustrative sample screenshot, not a captured browser image. It shows the Products link in keyboard focus without a visible focus indicator.">
+              <h4 id="screenshot-heading" data-sample-fact="screenshotTitle"></h4>
+              <figure id="sample-screenshot" class="sample-capture" role="img" aria-label="">
                 <div class="capture-chrome" aria-hidden="true"><span></span><span></span><span></span><i>sample.local</i></div>
                 <div class="capture-content" aria-hidden="true">
-                  <div class="capture-brand">Northstar <span>▰</span></div>
-                  <div class="capture-nav"><span>Home</span><span class="capture-focused">Products</span><span>About</span></div>
+                  <div class="capture-brand"><span id="capture-site-name"></span><span aria-hidden="true">▰</span></div>
+                  <div id="capture-nav" class="capture-nav"></div>
                   <div class="capture-line capture-line-short"></div>
                   <div class="capture-line"></div>
                   <div class="capture-form"><span></span><span></span><b></b></div>
                 </div>
-                <figcaption>Illustrative report mockup; not a captured browser screenshot.</figcaption>
+                <figcaption data-sample-fact="screenshotDescription"></figcaption>
               </figure>
-              <p class="panel-note">Sample reference SHOT-02 is linked to the focus observation. No live screenshot was captured for this report.</p>
+              <p class="panel-note">This illustrative mockup is not a browser capture from a live run.</p>
             </section>
 
             <section class="report-panel" aria-labelledby="recovery-heading">
               <p class="card-kicker">RECOVERY EVIDENCE</p>
               <h4 id="recovery-heading">Repeat check and recovery</h4>
               <ul id="recovery-list" class="plain-evidence-list"></ul>
-              <div class="warning-note"><strong>Warnings</strong><p>No browser lifecycle warnings are included in this representative sample.</p></div>
+              <div class="warning-note"><strong>Warnings</strong><ul id="warning-list" data-sample-list="warnings"></ul></div>
             </section>
           </div>
 

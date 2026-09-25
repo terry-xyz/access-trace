@@ -18,7 +18,9 @@ export const WHOLE_SITE_SAMPLE = Object.freeze({
   runId: "SAMPLE-WS-01",
   target: CONTROLLED_TARGET_URL,
   scope: "whole-site",
+  goal: null,
   terminalStatus: "COMPLETED",
+  outcomeTitle: "Full declared coverage completed",
   coverage: "7 of 7 declared page regions checked",
   passed,
   attempted,
@@ -26,9 +28,12 @@ export const WHOLE_SITE_SAMPLE = Object.freeze({
   metrics,
   duration: "1 min 18 sec",
   interactionCount: 6,
+  explanationTitle: "A repeatable focus visibility issue appeared.",
   explanation:
-    "The declared keyboard pass completed across all 7 sample page regions. Eighteen of 22 website checks passed. The repeated focus observation on the Products link supports a specific focus-indicator fix; the result describes this configured keyboard assessment only.",
+    "A repeated keyboard check placed focus on the Products navigation link without a visible indicator. This evidence supports a specific focus-indicator fix. The result describes this keyboard assessment only.",
   confidence: "Medium",
+  confidenceContext: "Repeated focus observation; sample evidence only",
+  proposedFixTitle: "Restore a visible focus indicator",
   proposedFix:
     "Give the Products navigation link a clear :focus-visible indicator that remains visible against its background.",
   wcagReference: {
@@ -56,9 +61,17 @@ export const WHOLE_SITE_SAMPLE = Object.freeze({
   ],
   screenshot: {
     id: "SHOT-02",
+    title: "Focus visibility",
+    siteName: "Northstar",
+    navigation: [
+      { label: "Home", focused: false },
+      { label: "Products", focused: true },
+      { label: "About", focused: false },
+    ],
     description:
       "Illustrative sample screenshot showing the Products link in keyboard focus. It is a report mockup, not a captured browser image.",
   },
+  agentFailures: [],
   recoveryEvidence: [
     { id: "REC-TAB", text: "Tab advanced focus from Products to Search." },
     { id: "REC-01", text: "Shift+Tab returned to Products and reproduced the missing focus indicator." },

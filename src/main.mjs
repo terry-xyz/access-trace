@@ -16,6 +16,11 @@ const report = document.querySelector("#sample-report");
 const reportHeading = document.querySelector("#report-heading");
 let recordUrl;
 
+/** formatScopeLabel gives a stable presentation label to the stored assessment-scope value. */
+function formatScopeLabel(scope) {
+  return scope === "whole-site" ? "Whole site" : "Goal focused";
+}
+
 /** setError keeps the visible message and the field's programmatic invalid state aligned. */
 function setError(input, container, message) {
   container.textContent = message;
@@ -63,6 +68,66 @@ function renderOrderedActions() {
   }
 
   list.replaceChildren(fragment);
+}
+
+/** renderSampleFacts fills report copy, links, and illustrative evidence from the representative sample record. */
+function renderSampleFacts() {
+  const sample = WHOLE_SITE_SAMPLE;
+  const facts = {
+    terminalStatus: sample.terminalStatus,
+    scopeLabel: formatScopeLabel(sample.scope),
+    outcomeTitle: sample.outcomeTitle,
+    coverage: sample.coverage,
+    explanationTitle: sample.explanationTitle,
+    explanation: sample.explanation,
+    confidence: sample.confidence,
+    confidenceContext: sample.confidenceContext,
+    proposedFixTitle: sample.proposedFixTitle,
+    proposedFix: sample.proposedFix,
+    duration: sample.duration,
+    interactionCount: String(sample.interactionCount),
+    goalSummary: sample.goal ?? "None supplied",
+    agentFailureSummary: sample.agentFailures.length
+      ? sample.agentFailures.join(", ")
+      : "None recorded in sample",
+    screenshotTitle: `${sample.screenshot.id} · ${sample.screenshot.title}`,
+    screenshotDescription: sample.screenshot.description,
+  };
+
+  for (const [field, value] of Object.entries(facts)) {
+    for (const element of report.querySelectorAll(`[data-sample-fact="${field}"]`)) {
+      element.textContent = value;
+    }
+  }
+
+  const referenceLink = document.querySelector("#wcag-reference-link");
+  referenceLink.href = sample.wcagReference.url;
+  document.querySelector("#wcag-reference-label").textContent = sample.wcagReference.label;
+
+  const warningList = document.querySelector("#warning-list");
+  const warningItems = document.createDocumentFragment();
+  for (const warning of sample.warnings) {
+    const item = document.createElement("li");
+    item.textContent = warning;
+    warningItems.append(item);
+  }
+  warningList.replaceChildren(warningItems);
+
+  const screenshot = document.querySelector("#sample-screenshot");
+  screenshot.id = sample.screenshot.id;
+  screenshot.setAttribute("aria-label", sample.screenshot.description);
+  document.querySelector("#capture-site-name").textContent = sample.screenshot.siteName;
+
+  const navigation = document.querySelector("#capture-nav");
+  const navigationItems = document.createDocumentFragment();
+  for (const entry of sample.screenshot.navigation) {
+    const item = document.createElement("span");
+    item.textContent = entry.label;
+    if (entry.focused) item.className = "capture-focused";
+    navigationItems.append(item);
+  }
+  navigation.replaceChildren(navigationItems);
+  document.querySelector("#evidence-count").textContent = `${sample.orderedActions.length} ordered sample actions`;
 }
 
 /** renderFocusObservations gives each sample row the ID used by its evidence links. */
@@ -215,14 +280,13 @@ function showSampleReport() {
   const simulationMode = simulationInput.checked;
   const context = {
     targetUrl: normalizedUrl,
-    assessmentScope: "whole-site",
-    goal: null,
+    assessmentScope: WHOLE_SITE_SAMPLE.scope,
+    goal: WHOLE_SITE_SAMPLE.goal,
     simulationMode,
   };
 
   updateReportContext({
     target: normalizedUrl,
-    scope: "Whole site",
     simulationMode: simulationMode ? "On" : "Off",
   });
 
@@ -266,8 +330,11 @@ function clearTargetValidationError() {
 form.addEventListener("submit", handleAssessmentSubmit);
 targetInput.addEventListener("input", clearTargetValidationError);
 goalInput.addEventListener("input", updateScopePreview);
+targetInput.value = WHOLE_SITE_SAMPLE.target;
+document.querySelector("#recognized-target").textContent = WHOLE_SITE_SAMPLE.target;
 
 renderOrderedActions();
+renderSampleFacts();
 renderFocusObservations();
 renderRecoveryEvidence();
 renderEvidenceReferences();
