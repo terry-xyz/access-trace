@@ -80,6 +80,22 @@ function comparisonSummarizesDifferencesAcrossRecoveryScreenshotAndCitations() {
 }
 test("comparison models recovery, screenshot, and evidence-reference differences", comparisonSummarizesDifferencesAcrossRecoveryScreenshotAndCitations);
 
+/** comparisonKeepsAddedAndRemovedPassingAssessmentRecordsVisible. */
+function comparisonKeepsAddedAndRemovedPassingAssessmentRecordsVisible() {
+  const comparison = buildSiteComparison(
+    withSettings(WHOLE_SITE_SAMPLE),
+    withSettings(AGENT_UPDATED_WHOLE_SITE_SAMPLE),
+  );
+
+  assert.ok(comparison.evidence.assessmentChanges.some((change) => (
+    change.kind === "action" && change.change === "added" && change.record.target === "Submit control"
+  )));
+  assert.ok(comparison.evidence.assessmentChanges.some((change) => (
+    change.kind === "action" && change.change === "removed" && change.record.target === "Search field"
+  )));
+}
+test("comparison summarizes added and removed passing action evidence", comparisonKeepsAddedAndRemovedPassingAssessmentRecordsVisible);
+
 /** comparisonMetricTableCanBeReachedAndOperatedAtNarrowWidths. */
 function comparisonMetricTableCanBeReachedAndOperatedAtNarrowWidths() {
   const metricsPanel = pageMarkup.match(/<section class="report-panel comparison-metrics-panel"[\s\S]*?<\/section>/)?.[0];
@@ -261,8 +277,10 @@ function setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable() {
   assert.match(pageMarkup, /<th scope="col">Direction<\/th>/);
   assert.match(pageMarkup, /id="comparison-settings"/);
   assert.match(pageMarkup, /id="comparison-evidence-changes"/);
+  assert.match(pageMarkup, /Meaningful differences across actions, recovery, screenshots, and evidence citations/);
   assert.match(pageMarkup, /Representative sample — not live assessment/);
   assert.match(mainSource, /buildSiteComparison\(/);
+  assert.match(mainSource, /renderComparisonEvidence\(comparison\.evidence\)/);
   assert.match(mainSource, /validateTargetUrl\(/);
   assert.match(mainSource, /validateAssessmentGoal\(/);
   assert.match(mainSource, /interactionProfile: "Keyboard only"/);

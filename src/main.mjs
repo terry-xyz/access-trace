@@ -510,6 +510,24 @@ function renderComparisonEvidence(evidence) {
   };
 
   for (const change of evidence.assessmentChanges) {
+    if (change.change !== "changed") {
+      const version = change.change === "added" ? "updated" : "original";
+      const reportName = version === "updated" ? "Updated" : "Original";
+      const record = change.record;
+      const evidenceName = change.kind === "action" ? "keyboard action" : "focus observation";
+      const details = change.kind === "action"
+        ? `${record.key} at ${record.target}: ${record.result}`
+        : `${record.target} (${record.role}): ${record.indicator}`;
+      const addition = record.outcome === "passed"
+        ? `a passing ${evidenceName}`
+        : `a ${evidenceName} without a recorded outcome`;
+      const description = change.change === "added"
+        ? `${reportName} report adds ${addition}: ${details}.`
+        : `Original report has no matching updated ${evidenceName}: ${details} (${record.outcome ?? "outcome not recorded"}).`;
+      addEvidenceItem(description, [{ version, id: record.id, label: `${reportName} ${record.id}` }]);
+      continue;
+    }
+
     if (change.kind === "action") {
       addEvidenceItem(
         `Keyboard action at ${change.target}: original “${change.original.result}” (${change.original.outcome}), updated “${change.updated.result}” (${change.updated.outcome}).`,

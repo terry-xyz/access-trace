@@ -273,7 +273,7 @@ function compareEvidence(original, updated) {
   const supportingCollections = collections.filter(({ isAssessment }) => !isAssessment);
 
   return {
-    assessmentChanges: assessmentCollections.flatMap(({ changes }) => changes),
+    assessmentChanges: assessmentCollections.flatMap(toAssessmentChanges),
     persistentFailures: assessmentCollections.flatMap(({ persistentFailures }) => persistentFailures),
     additionalUpdatedFailures: assessmentCollections.flatMap(({ additionalFailures }) => additionalFailures),
     unpairedOriginalFailures: assessmentCollections.flatMap(({ unpairedFailures }) => unpairedFailures),
@@ -283,6 +283,19 @@ function compareEvidence(original, updated) {
     addedWarnings: findUnmatchedText(original.warnings, updated.warnings),
     resolvedWarnings: findUnmatchedText(updated.warnings, original.warnings),
   };
+}
+
+/** toAssessmentChanges keeps non-failure assessment records visible beside matched changes and failure summaries. */
+function toAssessmentChanges(collection) {
+  return [
+    ...collection.changes.map((change) => ({ ...change, change: "changed" })),
+    ...collection.added
+      .filter(({ record }) => record.outcome !== "failed")
+      .map(({ record }) => ({ kind: collection.kind, change: "added", record })),
+    ...collection.removed
+      .filter(({ record }) => record.outcome !== "failed")
+      .map(({ record }) => ({ kind: collection.kind, change: "removed", record })),
+  ];
 }
 
 /** compareEvidenceCollection aligns records once and derives changed, added, removed, and failed states. */
