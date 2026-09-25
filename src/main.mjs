@@ -15,6 +15,7 @@ const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
 const goalInput = document.querySelector("#assessment-goal");
 const simulationInput = document.querySelector("#simulation-mode");
+const consistencyInput = document.querySelector("#comparison-consistency");
 const targetError = document.querySelector("#target-error");
 const goalError = document.querySelector("#goal-error");
 const scopeStatus = document.querySelector("#scope-status");
@@ -26,6 +27,8 @@ const comparisonButton = document.querySelector("#view-comparison");
 const comparisonSection = document.querySelector("#sample-comparison");
 const comparisonHeading = document.querySelector("#comparison-heading");
 let recordUrl;
+
+const CONSISTENCY_RUN_COUNTS = Object.freeze({ Low: 1, Medium: 2, High: 3 });
 
 const ASSESSMENT_EVIDENCE_PRESENTATION = {
   action: {
@@ -216,16 +219,16 @@ function createEvidenceLink(reference) {
 }
 
 /** comparisonEvidenceLink labels a reference to its source report's underlying evidence. */
-function comparisonEvidenceLink(version, record) {
+function comparisonEvidenceLink(version, record, runNumber = 1) {
   const reportName = version === "original" ? "Original" : "Updated";
-  return { version, id: record.id, label: `${reportName} ${record.id}` };
+  return { version, id: record.id, runNumber, label: `${reportName} run ${runNumber} ${record.id}` };
 }
 
 /** comparisonEvidencePair links a changed item to both reports with consistent labels. */
-function comparisonEvidencePair(original, updated) {
+function comparisonEvidencePair(original, updated, runNumber = 1) {
   return [
-    comparisonEvidenceLink("original", original),
-    comparisonEvidenceLink("updated", updated),
+    comparisonEvidenceLink("original", original, runNumber),
+    comparisonEvidenceLink("updated", updated, runNumber),
   ];
 }
 
@@ -386,8 +389,9 @@ function handleAssessmentSubmit(event) {
   if (configuration) showSampleReport(configuration);
 }
 
-/** getComparisonSettings records every shared condition used for the two Low-consistency samples. */
+/** getComparisonSettings records the same selected run count and context for both versions. */
 function getComparisonSettings(configuration) {
+  const consistencyLevel = consistencyInput.value;
   return {
     targetUrl: configuration.targetUrl,
     scope: configuration.scope,
@@ -395,22 +399,27 @@ function getComparisonSettings(configuration) {
     simulationMode: configuration.simulationMode,
     interactionProfile: "Keyboard only",
     browserConditions: "Same controlled local browser conditions",
-    consistencyLevel: "Low",
-    runsPerVersion: 1,
+    consistencyLevel,
+    runsPerVersion: CONSISTENCY_RUN_COUNTS[consistencyLevel],
   };
 }
 
-/** createComparisonSamples gives each version the exact same configured assessment context. */
+/** createComparisonSamples creates the same number of explicitly labeled sample slots per version. */
 function createComparisonSamples(configuration, settings) {
   const samples = configuration.scope === "whole-site"
     ? [WHOLE_SITE_SAMPLE, AGENT_UPDATED_WHOLE_SITE_SAMPLE]
     : [GOAL_FOCUSED_SAMPLE, AGENT_UPDATED_GOAL_FOCUSED_SAMPLE];
 
-  return samples.map((sample) => ({
+  return samples.map((sample) => Array.from({ length: settings.runsPerVersion }, (_, index) => ({
     ...sample,
+    runId: index === 0 ? sample.runId : `${sample.runId}-RUN-${index + 1}`,
     goal: configuration.goal,
     assessmentSettings: settings,
-  }));
+    comparisonRunNumber: index + 1,
+    representativeRunNote: index === 0
+      ? "Representative sample slot; no browser run has taken place."
+      : `Illustrative repeat slot ${index + 1}; this repeats representative sample evidence and is not an independent browser run.`,
+  })));
 }
 
 /** handleComparisonRequest shows a validated comparison and moves focus to its result heading. */
@@ -436,32 +445,52 @@ function renderComparison(comparison) {
   document.querySelector("#comparison-summary").textContent = comparison.outcome.summary;
 
   document.querySelector("#comparison-original-score").textContent = formatScore(comparison.score.original);
-  document.querySelector("#comparison-original-count").textContent = `${comparison.score.original.passed} passed / ${comparison.score.original.attempted} attempted`;
+  document.querySelector("#comparison-original-count").textContent = formatScoreCounts(comparison.score.original);
+  document.querySelector("#comparison-original-range").textContent = formatScoreRange(comparison.score.original);
   document.querySelector("#comparison-updated-score").textContent = formatScore(comparison.score.updated);
-  document.querySelector("#comparison-updated-count").textContent = `${comparison.score.updated.passed} passed / ${comparison.score.updated.attempted} attempted`;
+  document.querySelector("#comparison-updated-count").textContent = formatScoreCounts(comparison.score.updated);
+  document.querySelector("#comparison-updated-range").textContent = formatScoreRange(comparison.score.updated);
   document.querySelector("#comparison-score-delta").textContent = formatSigned(comparison.score.deltaPercentagePoints);
   document.querySelector("#comparison-original-coverage").textContent = comparison.coverage.original.label;
   document.querySelector("#comparison-updated-coverage").textContent = comparison.coverage.updated.label;
   document.querySelector("#comparison-coverage-delta").textContent = formatCoverageChange(comparison.coverage);
 
+  renderComparisonRunResults(comparison.runs, comparison.runSummaries);
   renderComparisonMetrics(comparison.metrics);
-  renderComparisonEvidence(comparison.evidence);
+  renderComparisonEvidence(comparison.evidenceByRun);
   renderComparisonSettings(comparison.settings);
-  renderComparisonReport(
+  renderComparisonReports(
     document.querySelector("#comparison-original-report-content"),
-    comparison.original,
+    comparison.runs.original,
     "original",
   );
-  renderComparisonReport(
+  renderComparisonReports(
     document.querySelector("#comparison-updated-report-content"),
-    comparison.updated,
+    comparison.runs.updated,
     "updated",
   );
 }
 
-/** formatScore keeps a missing score explicit instead of presenting it as zero. */
+/** formatScore labels the average and keeps a missing score explicit instead of presenting it as zero. */
 function formatScore(score) {
-  return score.percentage === null ? "Unavailable" : `${score.percentage}%`;
+  const value = score.averagePercentage ?? score.percentage;
+  return value === null ? "Unavailable" : `${value}%`;
+}
+
+/** formatScoreCounts distinguishes pooled check totals from the number of scored runs. */
+function formatScoreCounts(score) {
+  if (score.passed === null || score.attempted === null) {
+    return `${score.scoredRuns} of ${score.totalRuns} runs scored`;
+  }
+  return `${score.passed} passed / ${score.attempted} attempted across ${score.totalRuns} runs`;
+}
+
+/** formatScoreRange reports only observed score bounds and names any runs without a score. */
+function formatScoreRange(score) {
+  const range = score.range
+    ? `Range ${score.range.minimum}–${score.range.maximum}%`
+    : "Range unavailable";
+  return `${range} · ${score.scoredRuns} of ${score.totalRuns} runs scored${score.unscoredRuns > 0 ? `; ${score.unscoredRuns} without a score` : ""}`;
 }
 
 /** formatSigned makes direction visible in score, coverage, and metric changes. */
@@ -497,7 +526,9 @@ function renderComparisonMetrics(metrics) {
     const change = document.createElement("td");
     change.textContent = metric.percentagePointDelta === null
       ? "Not comparable"
-      : `${formatSigned(metric.passedDelta)} checks; ${formatSigned(metric.percentagePointDelta)} pp`;
+      : metric.original?.totalRuns > 1
+        ? `${formatSigned(metric.percentagePointDelta)} pp average`
+        : `${formatSigned(metric.passedDelta)} checks; ${formatSigned(metric.percentagePointDelta)} pp`;
     const direction = document.createElement("td");
     const directionLabel = document.createElement("span");
     directionLabel.className = "metric-direction";
@@ -519,22 +550,66 @@ function renderComparisonMetrics(metrics) {
 
 /** formatMetricValue shows passed and attempted counts as well as the pass rate. */
 function formatMetricValue(metric) {
+  if (metric?.totalRuns > 1) {
+    return metric.scoredRuns === metric.totalRuns
+      ? `${metric.averagePercentage}% average (${metric.scoredRuns} runs)`
+      : `Unavailable (${metric.scoredRuns} of ${metric.totalRuns} runs recorded)`;
+  }
   return metric
     ? `${metric.passed} / ${metric.attempted} (${metric.percentage ?? "—"}%)`
     : "Not recorded";
 }
 
-/** renderComparisonEvidence names aligned changes and unmatched failures before users open either report. */
-function renderComparisonEvidence(evidence) {
+/** renderComparisonRunResults gives every result row status and failure context before report details open. */
+function renderComparisonRunResults(runs, summaries) {
+  const container = document.querySelector("#comparison-run-results");
+  const fragment = document.createDocumentFragment();
+  for (const [version, title] of [["original", "Original site"], ["updated", "Agent-updated site"]]) {
+    const group = document.createElement("section");
+    group.className = "comparison-run-group";
+    const heading = document.createElement("h4");
+    heading.textContent = title;
+    const list = document.createElement("ol");
+    for (const [index, run] of runs[version].entries()) {
+      const summary = summaries[version][index];
+      const item = document.createElement("li");
+      const score = summary.score.percentage === null ? "score unavailable" : `${summary.score.percentage}% score`;
+      const runHeading = document.createElement("strong");
+      runHeading.textContent = `Run ${index + 1} · ${summary.terminalStatus ?? "Unknown status"}`;
+      const details = document.createElement("span");
+      details.textContent = `${run.runId}: ${score}; ${summary.coverage ?? "coverage unavailable"}.`;
+      item.append(runHeading, document.createTextNode(" — "), details);
+      if (summary.agentFailures.length > 0) {
+        const failures = document.createElement("span");
+        failures.className = "comparison-run-agent-failures";
+        failures.textContent = `Agent failures: ${summary.agentFailures.join("; ")}`;
+        item.append(failures);
+      }
+      if (summary.warnings.length > 0) {
+        const warnings = document.createElement("span");
+        warnings.className = "comparison-run-agent-failures";
+        warnings.textContent = `Warnings: ${summary.warnings.join("; ")}`;
+        item.append(warnings);
+      }
+      list.append(item);
+    }
+    group.append(heading, list);
+    fragment.append(group);
+  }
+  container.replaceChildren(fragment);
+}
+
+/** renderComparisonEvidence names every run's differences and links to that run's report. */
+function renderComparisonEvidence(evidenceByRun) {
   const list = document.querySelector("#comparison-evidence-changes");
   const fragment = document.createDocumentFragment();
-  const addEvidenceItem = (text, links = []) => {
+  const addEvidenceItem = (runNumber, text, links = []) => {
     const item = document.createElement("li");
-    item.append(document.createTextNode(text));
-    for (const { version, id, label } of links) {
+    item.append(document.createTextNode(`Run ${runNumber}: ${text}`));
+    for (const { version, id, label, runNumber: linkRunNumber } of links) {
       item.append(document.createTextNode(" "));
       const link = document.createElement("a");
-      link.href = `#comparison-${version}-${id}`;
+      link.href = `#comparison-${version}-run-${linkRunNumber}-${id}`;
       link.textContent = label;
       link.addEventListener("click", () => {
         document.querySelector(`#comparison-${version}-report`).open = true;
@@ -544,7 +619,9 @@ function renderComparisonEvidence(evidence) {
     fragment.append(item);
   };
 
-  for (const change of evidence.assessmentChanges) {
+  for (const { runNumber, evidence } of evidenceByRun) {
+    const addRunEvidence = (text, links = []) => addEvidenceItem(runNumber, text, links);
+    for (const change of evidence.assessmentChanges) {
     const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[change.kind];
     if (change.change !== "changed") {
       const version = change.change === "added" ? "updated" : "original";
@@ -556,71 +633,72 @@ function renderComparisonEvidence(evidence) {
       const description = change.change === "added"
         ? `${reportName} report adds ${addition}: ${presentation.describeRecord(record)}.`
         : `Original report has no matching updated ${presentation.label}: ${presentation.describeRecord(record)} (${record.outcome ?? "outcome not recorded"}).`;
-      addEvidenceItem(description, [comparisonEvidenceLink(version, record)]);
+      addRunEvidence(description, [comparisonEvidenceLink(version, record, runNumber)]);
       continue;
     }
 
-    addEvidenceItem(presentation.describeChange(change), comparisonEvidencePair(change.original, change.updated));
-  }
-  for (const failure of evidence.persistentFailures) {
+    addRunEvidence(presentation.describeChange(change), comparisonEvidencePair(change.original, change.updated, runNumber));
+    }
+    for (const failure of evidence.persistentFailures) {
     const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
-    addEvidenceItem(
+    addRunEvidence(
       `Both reports record a failed ${presentation.shortLabel} check at ${failure.target}.`,
-      comparisonEvidencePair(failure.original, failure.updated),
+      comparisonEvidencePair(failure.original, failure.updated, runNumber),
     );
-  }
-  for (const failure of evidence.additionalUpdatedFailures) {
+    }
+    for (const failure of evidence.additionalUpdatedFailures) {
     const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
-    addEvidenceItem(
+    addRunEvidence(
       `Updated report adds a failed ${presentation.label}: ${presentation.describeFailure(failure.record)} at ${failure.target}.`,
-      [comparisonEvidenceLink("updated", failure.record)],
+      [comparisonEvidenceLink("updated", failure.record, runNumber)],
     );
-  }
-  for (const failure of evidence.unpairedOriginalFailures) {
+    }
+    for (const failure of evidence.unpairedOriginalFailures) {
     const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
-    addEvidenceItem(
+    addRunEvidence(
       `Original failed ${presentation.shortLabel} evidence at ${failure.target} has no matching updated observation; its outcome is unknown.`,
-      [comparisonEvidenceLink("original", failure.record)],
+      [comparisonEvidenceLink("original", failure.record, runNumber)],
     );
-  }
-  for (const change of evidence.supportingChanges) {
-    appendSupportingEvidenceDifference(addEvidenceItem, change);
-  }
-  for (const message of evidence.addedAgentFailures) {
-    addEvidenceItem(`Updated report also records an agent failure: ${message}`);
-  }
-  for (const warning of evidence.addedWarnings) {
-    addEvidenceItem(`Updated report adds a warning: ${warning}`);
-  }
-  for (const message of evidence.resolvedAgentFailures) {
-    addEvidenceItem(`Original report records an agent failure not present in the updated report: ${message}`);
-  }
-  for (const warning of evidence.resolvedWarnings) {
-    addEvidenceItem(`Original report adds a warning not present in the updated report: ${warning}`);
+    }
+    for (const change of evidence.supportingChanges) {
+      appendSupportingEvidenceDifference(addRunEvidence, change, runNumber);
+    }
+    for (const message of evidence.addedAgentFailures) {
+      addRunEvidence(`Updated report also records an agent failure: ${message}`);
+    }
+    for (const warning of evidence.addedWarnings) {
+      addRunEvidence(`Updated report adds a warning: ${warning}`);
+    }
+    for (const message of evidence.resolvedAgentFailures) {
+      addRunEvidence(`Original report records an agent failure not present in the updated report: ${message}`);
+    }
+    for (const warning of evidence.resolvedWarnings) {
+      addRunEvidence(`Original report adds a warning not present in the updated report: ${warning}`);
+    }
   }
 
   if (fragment.childNodes.length === 0) {
     const item = document.createElement("li");
-    item.textContent = "No action, focus, recovery, screenshot, or citation differences were recorded.";
+    item.textContent = "No action, focus, recovery, screenshot, or citation differences were recorded in any run.";
     fragment.append(item);
   }
   list.replaceChildren(fragment);
 }
 
 /** appendSupportingEvidenceDifference gives recovery notes, screenshots, and citations concise linked summaries. */
-function appendSupportingEvidenceDifference(addEvidenceItem, change) {
+function appendSupportingEvidenceDifference(addEvidenceItem, change, runNumber) {
   if (change.kind === "recovery") {
     if (change.change === "changed") {
       addEvidenceItem(
         `Recovery evidence ${change.original.id} changed: original “${change.original.text}”, updated “${change.updated.text}”.`,
-        comparisonEvidencePair(change.original, change.updated),
+        comparisonEvidencePair(change.original, change.updated, runNumber),
       );
     } else {
       const version = change.change === "added" ? "updated" : "original";
       const record = change.record;
       addEvidenceItem(
         `${version === "updated" ? "Updated" : "Original"} report ${change.change} recovery evidence ${record.id}: ${record.text}.`,
-        [comparisonEvidenceLink(version, record)],
+        [comparisonEvidenceLink(version, record, runNumber)],
       );
     }
     return;
@@ -631,8 +709,8 @@ function appendSupportingEvidenceDifference(addEvidenceItem, change) {
     const updated = change.updated;
     const record = change.record;
     const links = change.change === "changed"
-      ? comparisonEvidencePair(original, updated)
-      : [comparisonEvidenceLink(change.change === "added" ? "updated" : "original", record)];
+      ? comparisonEvidencePair(original, updated, runNumber)
+      : [comparisonEvidenceLink(change.change === "added" ? "updated" : "original", record, runNumber)];
     const description = change.change === "changed"
       ? `Citation ${original.id} changed label from “${original.label}” to “${updated.label}”.`
       : `${change.change === "added" ? "Updated" : "Original"} report ${change.change} evidence citation ${record.id}: ${record.label}.`;
@@ -649,13 +727,13 @@ function appendSupportingEvidenceDifference(addEvidenceItem, change) {
   if (change.change === "changed") {
     addEvidenceItem(
       `Screenshot mockup changed (${change.changedFields.join(", ")}): original ${describeScreenshot(original)}, updated ${describeScreenshot(updated)}.`,
-      comparisonEvidencePair(original, updated),
+      comparisonEvidencePair(original, updated, runNumber),
     );
   } else {
     const version = change.change === "added" ? "updated" : "original";
     addEvidenceItem(
       `${version === "updated" ? "Updated" : "Original"} report ${change.change} screenshot mockup ${record.id}: ${describeScreenshot(record)}.`,
-      [comparisonEvidenceLink(version, record)],
+      [comparisonEvidenceLink(version, record, runNumber)],
     );
   }
 }
@@ -678,7 +756,7 @@ function formatEvidenceDirection(direction) {
         : "direction unresolved";
 }
 
-/** renderComparisonSettings makes the shared setup and fixed Low run count explicit. */
+/** renderComparisonSettings makes the shared setup and selected run count explicit. */
 function renderComparisonSettings(settings) {
   const list = document.querySelector("#comparison-settings");
   const values = [
@@ -688,7 +766,7 @@ function renderComparisonSettings(settings) {
     ["Simulation mode", settings.simulationMode ? "On" : "Off"],
     ["Interaction profile", settings.interactionProfile],
     ["Browser conditions", settings.browserConditions],
-    ["Consistency", `${settings.consistencyLevel} — ${settings.runsPerVersion} assessment per version`],
+    ["Consistency", `${settings.consistencyLevel} — ${settings.runsPerVersion} ${settings.runsPerVersion === 1 ? "assessment" : "assessments"} per version`],
   ];
   const fragment = document.createDocumentFragment();
 
@@ -706,14 +784,30 @@ function renderComparisonSettings(settings) {
   list.replaceChildren(fragment);
 }
 
-/** renderComparisonReport keeps all report facts and evidence available inside each version's details. */
-function renderComparisonReport(container, sample, version) {
+/** renderComparisonReports keeps every run's report and evidence available inside its version details. */
+function renderComparisonReports(container, samples, version) {
   const fragment = document.createDocumentFragment();
-  const idPrefix = `comparison-${version}-`;
+  for (const [index, sample] of samples.entries()) {
+    const run = document.createElement("section");
+    run.className = "comparison-report-run";
+    const heading = document.createElement("h4");
+    heading.textContent = `Run ${index + 1} · ${sample.runId}`;
+    run.append(heading);
+    renderComparisonReport(run, sample, version, index + 1);
+    fragment.append(run);
+  }
+  container.replaceChildren(fragment);
+}
+
+/** renderComparisonReport keeps all report facts and evidence available inside one run's details. */
+function renderComparisonReport(container, sample, version, runNumber) {
+  const fragment = document.createDocumentFragment();
+  const idPrefix = `comparison-${version}-run-${runNumber}-`;
   const evidenceIds = getComparisonEvidenceIds(sample, idPrefix);
 
   appendComparisonHeading(fragment, "Report summary");
   appendComparisonParagraph(fragment, "Run", sample.runId);
+  appendComparisonParagraph(fragment, "Sample provenance", sample.representativeRunNote);
   appendComparisonParagraph(fragment, "Terminal state", sample.terminalStatus);
   appendComparisonParagraph(fragment, "Assessment scope", formatScopeLabel(sample.scope));
   appendComparisonParagraph(fragment, "Target", sample.assessmentSettings.targetUrl);
@@ -935,13 +1029,23 @@ function clearStaleSampleReport() {
   comparisonSection.hidden = true;
 }
 
+/** updateConsistencyPreview keeps the comparison action's promised run count aligned with the selector. */
+function updateConsistencyPreview() {
+  const level = consistencyInput.value;
+  const runsPerVersion = CONSISTENCY_RUN_COUNTS[level];
+  comparisonButton.textContent = `View ${level}-consistency comparison sample (${runsPerVersion} ${runsPerVersion === 1 ? "run" : "runs"} per version)`;
+  clearStaleSampleReport();
+}
+
 form.addEventListener("submit", handleAssessmentSubmit);
 comparisonButton.addEventListener("click", handleComparisonRequest);
 targetInput.addEventListener("input", clearTargetValidationError);
 goalInput.addEventListener("input", updateScopePreview);
 simulationInput.addEventListener("change", clearStaleSampleReport);
+consistencyInput.addEventListener("change", updateConsistencyPreview);
 targetInput.value = WHOLE_SITE_SAMPLE.target;
 document.querySelector("#recognized-target").textContent = WHOLE_SITE_SAMPLE.target;
 
 renderReportSample(WHOLE_SITE_SAMPLE);
 updateScopePreview();
+updateConsistencyPreview();

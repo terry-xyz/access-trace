@@ -30,6 +30,118 @@ function withSettings(sample, settings = sharedSettings) {
   return { ...sample, assessmentSettings: settings };
 }
 
+/** reportWithMetrics makes an independent sample run whose score still matches its named checks. */
+function reportWithMetrics(sample, settings, metrics, overrides = {}) {
+  const totals = metrics.reduce(
+    (result, metric) => ({
+      passed: result.passed + metric.passed,
+      attempted: result.attempted + metric.attempted,
+    }),
+    { passed: 0, attempted: 0 },
+  );
+  return withSettings({
+    ...sample,
+    ...overrides,
+    metrics,
+    ...totals,
+    score: calculateWebsiteScore(totals.passed, totals.attempted),
+  }, settings);
+}
+
+/** repeatedComparisonAveragesRunsAndRetainsEveryRunEvenWhenOneIsInconclusive. */
+function repeatedComparisonAveragesRunsAndRetainsEveryRunEvenWhenOneIsInconclusive() {
+  const settings = { ...sharedSettings, consistencyLevel: "Medium", runsPerVersion: 2 };
+  const originalRunTwo = reportWithMetrics(WHOLE_SITE_SAMPLE, settings, [
+    { name: "Keyboard reachability", passed: 6, attempted: 8 },
+    { name: "Visible focus", passed: 5, attempted: 5 },
+    { name: "Form labels and instructions", passed: 5, attempted: 5 },
+    { name: "Focus order", passed: 3, attempted: 4 },
+  ], { runId: "SAMPLE-WS-02", terminalStatus: "INCONCLUSIVE" });
+  const updatedRunTwo = reportWithMetrics(AGENT_UPDATED_WHOLE_SITE_SAMPLE, settings, [
+    { name: "Keyboard reachability", passed: 7, attempted: 8 },
+    { name: "Visible focus", passed: 5, attempted: 5 },
+    { name: "Form labels and instructions", passed: 3, attempted: 5 },
+    { name: "Focus order", passed: 4, attempted: 4 },
+  ], { runId: "SAMPLE-WS-UP-02", agentFailures: ["The sample planner retry was required."] });
+  const originalRunOne = withSettings(WHOLE_SITE_SAMPLE, settings);
+  const updatedRunOne = withSettings(AGENT_UPDATED_WHOLE_SITE_SAMPLE, settings);
+  const comparison = buildSiteComparison(
+    [originalRunOne, originalRunTwo],
+    [updatedRunOne, updatedRunTwo],
+  );
+
+  assert.equal(comparison.settings.consistencyLevel, "Medium");
+  assert.equal(comparison.settings.runsPerVersion, 2);
+  assert.equal(comparison.runs.original.length, 2);
+  assert.equal(comparison.runs.updated.length, 2);
+  assert.equal(comparison.runSummaries.original[1].terminalStatus, "INCONCLUSIVE");
+  assert.deepEqual(comparison.runSummaries.updated[1].agentFailures, ["The sample planner retry was required."]);
+  assert.equal(comparison.runs.original[1], originalRunTwo);
+  assert.equal(comparison.evidenceByRun.length, 2);
+  assert.ok(comparison.evidenceByRun[1].evidence.supportingChanges.length > 0);
+  assert.equal(comparison.score.original.averagePercentage, 84);
+  assert.deepEqual(comparison.score.original.range, { minimum: 82, maximum: 86 });
+  assert.equal(comparison.score.original.scoredRuns, 2);
+  assert.equal(comparison.score.updated.averagePercentage, 90.5);
+  assert.deepEqual(comparison.score.updated.range, { minimum: 86, maximum: 95 });
+  assert.equal(comparison.score.deltaPercentagePoints, 6.5);
+  assert.equal(comparison.coverage.original.checked, 7);
+  assert.equal(comparison.coverage.updated.checked, 7);
+  assert.equal(comparison.coverage.comparable, true);
+  assert.equal(comparison.outcome.label, "Mixed result");
+  assert.match(comparison.outcome.summary, /Visible focus|improv/i);
+  assert.match(comparison.outcome.summary, /Form labels and instructions|regress/i);
+  assert.equal(comparison.metrics.find(({ name }) => name === "Form labels and instructions").direction, "regressed");
+}
+test("a repeated comparison averages scores and keeps inconclusive and agent-failed runs visible", repeatedComparisonAveragesRunsAndRetainsEveryRunEvenWhenOneIsInconclusive);
+
+/** highConsistencyKeepsAnUnscoredRunVisibleAndUsesThreeRunsForBothVersions. */
+function highConsistencyKeepsAnUnscoredRunVisibleAndUsesThreeRunsForBothVersions() {
+  const settings = { ...sharedSettings, consistencyLevel: "High", runsPerVersion: 3 };
+  const emptyMetrics = WHOLE_SITE_SAMPLE.metrics.map((metric) => ({
+    name: metric.name,
+    passed: 0,
+    attempted: 0,
+  }));
+  const unscoredOriginal = reportWithMetrics(WHOLE_SITE_SAMPLE, settings, emptyMetrics, {
+    runId: "SAMPLE-WS-03",
+    terminalStatus: "INCONCLUSIVE",
+  });
+  const originalRuns = [
+    withSettings(WHOLE_SITE_SAMPLE, settings),
+    withSettings({ ...WHOLE_SITE_SAMPLE, runId: "SAMPLE-WS-02" }, settings),
+    unscoredOriginal,
+  ];
+  const updatedRuns = [
+    withSettings(AGENT_UPDATED_WHOLE_SITE_SAMPLE, settings),
+    withSettings({ ...AGENT_UPDATED_WHOLE_SITE_SAMPLE, runId: "SAMPLE-WS-UP-02" }, settings),
+    withSettings({ ...AGENT_UPDATED_WHOLE_SITE_SAMPLE, runId: "SAMPLE-WS-UP-03" }, settings),
+  ];
+  const comparison = buildSiteComparison(originalRuns, updatedRuns);
+
+  assert.equal(comparison.runs.original.length, 3);
+  assert.equal(comparison.runs.updated.length, 3);
+  assert.equal(comparison.settings.runsPerVersion, 3);
+  assert.equal(comparison.score.original.scoredRuns, 2);
+  assert.equal(comparison.score.original.unscoredRuns, 1);
+  assert.equal(comparison.runSummaries.original[2].score.percentage, null);
+  assert.match(comparison.outcome.summary, /original run 3 has no score/i);
+}
+test("High consistency retains all three runs and identifies an unscored run", highConsistencyKeepsAnUnscoredRunVisibleAndUsesThreeRunsForBothVersions);
+
+/** comparisonSetupOffersAccessibleDataDrivenConsistencyLevels. */
+function comparisonSetupOffersAccessibleDataDrivenConsistencyLevels() {
+  assert.match(pageMarkup, /<label[^>]*for="comparison-consistency"/);
+  assert.match(pageMarkup, /<select[^>]*id="comparison-consistency"[^>]*name="consistencyLevel"/);
+  assert.match(pageMarkup, /<option value="Low" selected>Low — 1 assessment per version/);
+  assert.match(pageMarkup, /<option value="Medium">Medium — 2 assessments per version/);
+  assert.match(pageMarkup, /<option value="High">High — 3 assessments per version/);
+  assert.match(mainSource, /const consistencyLevel = consistencyInput\.value/);
+  assert.match(mainSource, /    consistencyLevel,/);
+  assert.match(mainSource, /runsPerVersion: CONSISTENCY_RUN_COUNTS\[consistencyLevel\]/);
+}
+test("comparison setup exposes Low, Medium, and High consistency with Low selected by default", comparisonSetupOffersAccessibleDataDrivenConsistencyLevels);
+
 /** lowConsistencyComparisonExplainsBothScoresAndKeepsConflictingMetricsVisible. */
 function lowConsistencyComparisonExplainsBothScoresAndKeepsConflictingMetricsVisible() {
   const original = withSettings(WHOLE_SITE_SAMPLE);
@@ -223,6 +335,14 @@ function comparisonRefusesToCallMismatchedSettingsAnImprovement() {
 
   assert.equal(comparison.outcome.status, "unresolved");
   assert.ok(comparison.settingDifferences.includes("simulationMode"));
+
+  const mediumSettings = { ...sharedSettings, consistencyLevel: "Medium", runsPerVersion: 2 };
+  const missingRepeat = buildSiteComparison(
+    withSettings(WHOLE_SITE_SAMPLE, mediumSettings),
+    withSettings(AGENT_UPDATED_WHOLE_SITE_SAMPLE, mediumSettings),
+  );
+  assert.equal(missingRepeat.outcome.label, "Mixed result");
+  assert.match(missingRepeat.outcome.summary, /expects 2 runs per version/i);
 }
 test("different assessment settings make the comparison unresolved and name the difference", comparisonRefusesToCallMismatchedSettingsAnImprovement);
 
@@ -280,12 +400,17 @@ function setupCanOpenComparisonAndBothReportsKeepTheirEvidenceAvailable() {
   assert.match(pageMarkup, /Meaningful differences across actions, recovery, screenshots, and evidence citations/);
   assert.match(pageMarkup, /Representative sample — not live assessment/);
   assert.match(mainSource, /buildSiteComparison\(/);
-  assert.match(mainSource, /renderComparisonEvidence\(comparison\.evidence\)/);
+  assert.match(mainSource, /renderComparisonEvidence\(comparison\.evidenceByRun\)/);
   assert.match(mainSource, /validateTargetUrl\(/);
   assert.match(mainSource, /validateAssessmentGoal\(/);
   assert.match(mainSource, /interactionProfile: "Keyboard only"/);
   assert.match(mainSource, /browserConditions: "Same controlled local browser conditions"/);
-  assert.match(mainSource, /runsPerVersion: 1/);
+  assert.match(mainSource, /runsPerVersion: CONSISTENCY_RUN_COUNTS\[consistencyLevel\]/);
+  assert.match(mainSource, /renderComparisonReports\(/);
+  assert.match(mainSource, /representativeRunNote/);
+  assert.match(pageMarkup, /id="comparison-run-results"/);
+  assert.match(pageMarkup, /id="comparison-original-range"/);
+  assert.match(pageMarkup, /id="comparison-updated-range"/);
   assert.match(mainSource, /evidence\.persistentFailures/);
   assert.match(mainSource, /appendComparisonParagraph\(fragment, "Duration", sample\.duration\)/);
   assert.match(mainSource, /appendComparisonParagraph\(fragment, "Interaction count", String\(sample\.interactionCount\)\)/);

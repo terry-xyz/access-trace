@@ -82,6 +82,16 @@
             <p id="goal-error" class="field-error" hidden></p>
           </div>
 
+          <div class="field-group comparison-consistency-field">
+            <label for="comparison-consistency">Comparison consistency</label>
+            <select id="comparison-consistency" name="consistencyLevel" aria-describedby="comparison-consistency-hint">
+              <option value="Low" selected>Low — 1 assessment per version</option>
+              <option value="Medium">Medium — 2 assessments per version</option>
+              <option value="High">High — 3 assessments per version</option>
+            </select>
+            <p id="comparison-consistency-hint" class="field-hint">Low is the default. The selected number of runs applies equally to the original and agent-updated versions.</p>
+          </div>
+
           <div class="settings-row">
             <label class="toggle-card" for="simulation-mode">
               <input id="simulation-mode" name="simulationMode" type="checkbox" checked />
@@ -101,7 +111,7 @@
               <span id="submit-label">View whole-site sample report</span> <span aria-hidden="true">↗</span>
             </button>
             <button id="view-comparison" class="secondary-button" type="button">View Low-consistency comparison sample</button>
-            <p class="action-note">Preview only. No browser starts and no live assessment is performed.</p>
+            <p class="action-note">Preview only. No browser starts and no live assessment is performed; repeated sample slots are not independent runs.</p>
           </div>
         </form>
       </section>
@@ -279,7 +289,7 @@
           <span class="notice-icon" aria-hidden="true">S</span>
           <div>
             <strong>Representative sample — not live assessment</strong>
-            <p>Each version has one representative Low-consistency result. The reports share the setup shown below; these sample actions and findings are not evidence about a configured goal.</p>
+            <p>The selected level determines how many sample slots appear for each version. No browser runs take place; repeat slots reuse representative sample evidence and are not independent observations.</p>
           </div>
         </div>
 
@@ -299,8 +309,8 @@
           <h3 id="comparison-result-heading" class="visually-hidden">Comparison result</h3>
           <p id="comparison-summary" class="comparison-summary"></p>
           <div class="comparison-score-grid" aria-label="Original and updated overall scores">
-            <div><span>Original score</span><strong id="comparison-original-score"></strong><small id="comparison-original-count"></small></div>
-            <div><span>Updated score</span><strong id="comparison-updated-score"></strong><small id="comparison-updated-count"></small></div>
+            <div><span>Original average score</span><strong id="comparison-original-score"></strong><small id="comparison-original-count"></small><small id="comparison-original-range"></small></div>
+            <div><span>Updated average score</span><strong id="comparison-updated-score"></strong><small id="comparison-updated-count"></small><small id="comparison-updated-range"></small></div>
             <div><span>Score change</span><strong id="comparison-score-delta"></strong><small>percentage points</small></div>
           </div>
           <div class="comparison-coverage">
@@ -310,9 +320,16 @@
           </div>
         </section>
 
+        <section class="report-panel comparison-runs-panel" aria-labelledby="comparison-runs-heading">
+          <p class="card-kicker">INDIVIDUAL RUNS</p>
+          <h3 id="comparison-runs-heading">Every assessment run</h3>
+          <p>Each row keeps its terminal state, score availability, coverage, and agent failures visible.</p>
+          <div id="comparison-run-results" class="comparison-run-results"></div>
+        </section>
+
         <section class="report-panel comparison-metrics-panel" aria-labelledby="comparison-metrics-heading">
           <p class="card-kicker">METRIC CHANGES</p>
-          <h3 id="comparison-metrics-heading">Every named metric, including regressions</h3>
+          <h3 id="comparison-metrics-heading">Average pass rate for every named metric</h3>
           <p id="comparison-metrics-scroll-help" class="table-scroll-instruction">On narrow screens, focus this table region and use the Left and Right Arrow keys to scroll horizontally through all five columns.</p>
           <div class="table-scroll comparison-metrics-scroll" role="region" aria-labelledby="comparison-metrics-heading" aria-describedby="comparison-metrics-scroll-help" tabindex="0">
             <table>

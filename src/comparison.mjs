@@ -57,8 +57,42 @@ const EVIDENCE_COLLECTION_DESCRIPTORS = [
   },
 ];
 
-/** buildSiteComparison compares report evidence only when both versions share the same settings. */
+/** buildSiteComparison compares one report or aligned report runs under shared settings. */
 export function buildSiteComparison(original, updated) {
+  const originalRuns = Array.isArray(original) ? original : [original];
+  const updatedRuns = Array.isArray(updated) ? updated : [updated];
+
+  const oneRunSettings = originalRuns[0]?.assessmentSettings;
+  const updatedOneRunSettings = updatedRuns[0]?.assessmentSettings;
+  if (originalRuns.length === 1
+    && updatedRuns.length === 1
+    && hasSupportedConsistency(oneRunSettings)
+    && hasSupportedConsistency(updatedOneRunSettings)
+    && oneRunSettings.runsPerVersion === 1
+    && updatedOneRunSettings.runsPerVersion === 1) {
+    const comparison = buildSingleSiteComparison(originalRuns[0], updatedRuns[0]);
+    return {
+      ...comparison,
+      runs: { original: originalRuns, updated: updatedRuns },
+      runSummaries: {
+        original: originalRuns.map(summarizeRun),
+        updated: updatedRuns.map(summarizeRun),
+      },
+      runComparisons: [{ runNumber: 1, ...comparison }],
+      evidenceByRun: [{ runNumber: 1, evidence: comparison.evidence }],
+      score: {
+        ...comparison.score,
+        original: aggregateScores(originalRuns),
+        updated: aggregateScores(updatedRuns),
+      },
+    };
+  }
+
+  return buildRepeatedSiteComparison(originalRuns, updatedRuns);
+}
+
+/** buildSingleSiteComparison retains the established one-run comparison behavior. */
+function buildSingleSiteComparison(original, updated) {
   const settingDifferences = findSettingDifferences(
     original.assessmentSettings,
     updated.assessmentSettings,
@@ -76,8 +110,8 @@ export function buildSiteComparison(original, updated) {
     && metrics.every((metric) => metric.percentagePointDelta !== null);
   const integrityProblems = [
     ...settingDifferences.map((field) => `The versions use different ${field} settings.`),
-    ...(!isLowConsistencyPair(original.assessmentSettings)
-      ? ["This representative comparison requires one Low-consistency assessment per version."]
+    ...(!hasSupportedConsistency(original.assessmentSettings)
+      ? ["The comparison consistency setting and run count are not a supported pair."]
       : []),
     ...(!reportMatchesSettings(original)
       ? ["The original report does not match its declared assessment settings."]
@@ -131,13 +165,304 @@ export function buildSiteComparison(original, updated) {
     metrics,
     coverage,
     evidence,
+    integrityProblems,
     outcome,
   };
 }
 
-/** isLowConsistencyPair ensures one report per version is not mislabeled as a repeated comparison. */
-function isLowConsistencyPair(settings = {}) {
-  return settings.consistencyLevel === "Low" && settings.runsPerVersion === 1;
+/** hasSupportedConsistency keeps the displayed level tied to its promised run count. */
+function hasSupportedConsistency(settings = {}) {
+  return CONSISTENCY_RUN_COUNTS[settings.consistencyLevel] === settings.runsPerVersion;
+}
+
+const CONSISTENCY_RUN_COUNTS = Object.freeze({ Low: 1, Medium: 2, High: 3 });
+
+/** buildRepeatedSiteComparison summarizes averages while retaining each source run and report. */
+function buildRepeatedSiteComparison(originalRuns, updatedRuns) {
+  const allRuns = [...originalRuns, ...updatedRuns];
+  const firstReport = allRuns[0] ?? {};
+  const settings = { ...(firstReport.assessmentSettings ?? {}) };
+  const pairCount = Math.min(originalRuns.length, updatedRuns.length);
+  const runComparisons = Array.from({ length: pairCount }, (_, index) => ({
+    runNumber: index + 1,
+    ...buildSingleSiteComparison(originalRuns[index], updatedRuns[index]),
+  }));
+  const settingDifferences = [...new Set(allRuns.flatMap((report) => (
+    findSettingDifferences(settings, report.assessmentSettings)
+  )))];
+  const integrityProblems = collectRepeatedIntegrityProblems({
+    originalRuns,
+    updatedRuns,
+    allRuns,
+    settings,
+    settingDifferences,
+  });
+  const score = {
+    original: aggregateScores(originalRuns),
+    updated: aggregateScores(updatedRuns),
+  };
+  score.deltaPercentagePoints = getDelta(score.original.averagePercentage, score.updated.averagePercentage);
+  const metrics = aggregateMetrics(originalRuns, updatedRuns);
+  const coverage = aggregateCoverage(originalRuns, updatedRuns);
+  const evidenceByRun = runComparisons.map(({ runNumber, evidence: runEvidence }) => ({
+    runNumber,
+    evidence: runEvidence,
+  }));
+  const evidence = mergeRepeatedEvidence(evidenceByRun);
+  const outcome = chooseRepeatedOutcome({
+    integrityProblems,
+    metrics,
+    scoreDelta: score.deltaPercentagePoints,
+    coverage,
+    evidence,
+  });
+
+  return {
+    original: originalRuns[0] ?? null,
+    updated: updatedRuns[0] ?? null,
+    runs: { original: originalRuns, updated: updatedRuns },
+    runSummaries: {
+      original: originalRuns.map(summarizeRun),
+      updated: updatedRuns.map(summarizeRun),
+    },
+    runComparisons,
+    settings,
+    settingDifferences,
+    score,
+    metrics,
+    coverage,
+    evidence,
+    evidenceByRun,
+    integrityProblems,
+    outcome,
+  };
+}
+
+/** collectRepeatedIntegrityProblems names incomplete or mismatched runs instead of hiding them. */
+function collectRepeatedIntegrityProblems({
+  originalRuns,
+  updatedRuns,
+  allRuns,
+  settings,
+  settingDifferences,
+}) {
+  const problems = [
+    ...settingDifferences.map((field) => `The runs use different ${field} settings.`),
+    ...(!hasSupportedConsistency(settings)
+      ? ["The comparison consistency setting and run count are not a supported pair."]
+      : []),
+    ...(originalRuns.length !== updatedRuns.length
+      ? ["The original and updated versions have different numbers of runs."]
+      : []),
+    ...(settings.runsPerVersion !== originalRuns.length || settings.runsPerVersion !== updatedRuns.length
+      ? [`The selected ${settings.consistencyLevel ?? "consistency"} level expects ${settings.runsPerVersion ?? "a declared number of"} runs per version, but the reports do not match.`]
+      : []),
+  ];
+  const firstMetrics = allRuns[0]?.metrics;
+  if (allRuns.some((report) => !haveSameMetricNames(firstMetrics, report.metrics))) {
+    problems.push("The runs do not contain the same named metrics.");
+  }
+  for (const [index, report] of allRuns.entries()) {
+    const version = index < originalRuns.length ? "Original" : "Updated";
+    const runNumber = index < originalRuns.length ? index + 1 : index - originalRuns.length + 1;
+    if (!reportMatchesSettings(report)) {
+      problems.push(`The ${version.toLowerCase()} run ${runNumber} does not match its declared assessment settings.`);
+    }
+    if (report.terminalStatus !== "COMPLETED") {
+      problems.push(`The ${version.toLowerCase()} run ${runNumber} is ${String(report.terminalStatus ?? "unknown").toLowerCase()}.`);
+    }
+    if (!metricsAreInternallyConsistent(report)) {
+      problems.push(`The ${version.toLowerCase()} run ${runNumber} metric totals do not match its reported score counts.`);
+    }
+    if (!reportScoreMatchesCounts(report)) {
+      problems.push(`The ${version.toLowerCase()} run ${runNumber} score does not match its reported check counts.`);
+    }
+    if (getReportScore(report).percentage === null) {
+      problems.push(`The ${version.toLowerCase()} run ${runNumber} has no score to compare.`);
+    }
+  }
+  if (allRuns.some((report) => !isValidCoverage(report.coverageStats))) {
+    problems.push("At least one run has no valid coverage counts.");
+  }
+  return [...new Set(problems)];
+}
+
+/** summarizeRun keeps terminal state, score availability, agent failures, and warnings attached to a run. */
+function summarizeRun(report) {
+  return {
+    runId: report.runId,
+    terminalStatus: report.terminalStatus,
+    score: getReportScore(report),
+    coverage: report.coverage,
+    agentFailures: [...(report.agentFailures ?? [])],
+    warnings: [...(report.warnings ?? [])],
+  };
+}
+
+/** aggregateScores averages each recorded percentage and separately exposes its observed range. */
+function aggregateScores(reports) {
+  const scores = reports.map(getReportScore);
+  const scored = scores.filter(({ percentage: value }) => value !== null);
+  const percentages = scored.map(({ percentage: value }) => value);
+  const averagePercentage = average(percentages);
+  const range = percentages.length > 0
+    ? { minimum: Math.min(...percentages), maximum: Math.max(...percentages) }
+    : null;
+
+  return {
+    passed: sumKnownValues(scored.map(({ passed }) => passed)),
+    attempted: sumKnownValues(scored.map(({ attempted }) => attempted)),
+    percentage: averagePercentage,
+    averagePercentage,
+    range,
+    scoredRuns: scored.length,
+    totalRuns: reports.length,
+    unscoredRuns: reports.length - scored.length,
+  };
+}
+
+/** aggregateMetrics compares each named metric across every run and marks missing measurements unavailable. */
+function aggregateMetrics(originalRuns, updatedRuns) {
+  const names = [...new Set([...originalRuns, ...updatedRuns].flatMap((report) => (
+    Array.isArray(report.metrics) ? report.metrics.map(({ name }) => name) : []
+  )))];
+
+  return names.map((name) => {
+    const original = aggregateMetric(name, originalRuns);
+    const updated = aggregateMetric(name, updatedRuns);
+    const complete = original.scoredRuns === original.totalRuns
+      && updated.scoredRuns === updated.totalRuns;
+    const percentagePointDelta = complete
+      ? getDelta(original.averagePercentage, updated.averagePercentage)
+      : null;
+    return {
+      name,
+      original: { ...original, percentage: complete ? original.averagePercentage : null },
+      updated: { ...updated, percentage: complete ? updated.averagePercentage : null },
+      passedDelta: complete ? updated.passed - original.passed : null,
+      attemptedDelta: complete ? updated.attempted - original.attempted : null,
+      percentagePointDelta,
+      direction: percentagePointDelta === null
+        ? "unavailable"
+        : percentagePointDelta > 0
+          ? "improved"
+          : percentagePointDelta < 0
+            ? "regressed"
+            : "unchanged",
+    };
+  });
+}
+
+/** aggregateMetric returns averages only when every run recorded that named metric. */
+function aggregateMetric(name, reports) {
+  const records = reports.map((report) => report.metrics?.find((metric) => metric.name === name));
+  const scored = records.filter((record) => getPassPercentage(record) !== null);
+  return {
+    passed: sumKnownValues(scored.map(({ passed }) => passed)),
+    attempted: sumKnownValues(scored.map(({ attempted }) => attempted)),
+    averagePercentage: average(scored.map(getPassPercentage)),
+    scoredRuns: scored.length,
+    totalRuns: reports.length,
+  };
+}
+
+/** aggregateCoverage shows mean coverage while its run count makes missing observations explicit. */
+function aggregateCoverage(originalRuns, updatedRuns) {
+  const aggregateVersion = (reports) => {
+    const measured = reports.filter((report) => isValidCoverage(report.coverageStats));
+    const checked = average(measured.map(({ coverageStats }) => coverageStats.checked));
+    const total = average(measured.map(({ coverageStats }) => coverageStats.total));
+    const percentageValue = average(measured.map(({ coverageStats }) => percentage(
+      coverageStats.checked,
+      coverageStats.total,
+    )));
+    return {
+      label: measured.length === reports.length
+        ? `Average ${formatAverage(checked)} of ${formatAverage(total)} declared checks across ${reports.length} runs`
+        : `Coverage recorded for ${measured.length} of ${reports.length} runs`,
+      checked,
+      total,
+      percentage: measured.length === reports.length ? percentageValue : null,
+      measuredRuns: measured.length,
+      totalRuns: reports.length,
+    };
+  };
+  const original = aggregateVersion(originalRuns);
+  const updated = aggregateVersion(updatedRuns);
+  const comparable = original.percentage !== null && updated.percentage !== null;
+  return {
+    original,
+    updated,
+    checkedDelta: comparable ? getDelta(original.checked, updated.checked) : null,
+    totalDelta: comparable ? getDelta(original.total, updated.total) : null,
+    percentagePointDelta: comparable ? getDelta(original.percentage, updated.percentage) : null,
+    comparable,
+  };
+}
+
+/** mergeRepeatedEvidence adds run numbers so every evidence difference links to its own report. */
+function mergeRepeatedEvidence(evidenceByRun) {
+  const collectionNames = [
+    "assessmentChanges",
+    "persistentFailures",
+    "additionalUpdatedFailures",
+    "unpairedOriginalFailures",
+    "supportingChanges",
+  ];
+  const merged = Object.fromEntries(collectionNames.map((name) => [name, []]));
+  for (const { runNumber, evidence } of evidenceByRun) {
+    for (const name of collectionNames) {
+      merged[name].push(...evidence[name].map((entry) => ({ ...entry, runNumber })));
+    }
+    for (const [field, sourceField] of [
+      ["addedAgentFailures", "addedAgentFailures"],
+      ["resolvedAgentFailures", "resolvedAgentFailures"],
+      ["addedWarnings", "addedWarnings"],
+      ["resolvedWarnings", "resolvedWarnings"],
+    ]) {
+      merged[field] ??= [];
+      merged[field].push(...evidence[sourceField].map((message) => ({ message, runNumber })));
+    }
+  }
+  return merged;
+}
+
+/** chooseRepeatedOutcome states metric divergence even when another run is inconclusive. */
+function chooseRepeatedOutcome({ integrityProblems, metrics, scoreDelta, coverage, evidence }) {
+  const improved = metrics.filter(({ direction }) => direction === "improved").map(({ name }) => name);
+  const regressed = metrics.filter(({ direction }) => direction === "regressed").map(({ name }) => name);
+  if (improved.length > 0 && regressed.length > 0) {
+    const incomplete = integrityProblems.length > 0
+      ? ` ${integrityProblems.join(" ")}`
+      : "";
+    return {
+      status: "mixed",
+      label: "Mixed result",
+      summary: `Mixed result: ${improved.join(", ")} improved while ${regressed.join(", ")} regressed.${incomplete}`,
+      reasons: [
+        ...improved.map((name) => `${name} improved.`),
+        ...regressed.map((name) => `${name} regressed.`),
+        ...integrityProblems,
+      ],
+    };
+  }
+  return chooseOutcome({ integrityProblems, metrics, scoreDelta, coverage, evidence });
+}
+
+/** average rounds to one decimal place and returns null when no run has a comparable value. */
+function average(values) {
+  if (values.length === 0) return null;
+  return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+}
+
+/** sumKnownValues avoids turning unavailable report counts into zeroes. */
+function sumKnownValues(values) {
+  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
+}
+
+/** formatAverage keeps decimal coverage counts honest without trailing zeroes. */
+function formatAverage(value) {
+  return String(value);
 }
 
 /** findSettingDifferences names any assessment setting that prevents a fair comparison. */
