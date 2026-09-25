@@ -7,6 +7,7 @@ observation of the current page.
 
 import base64
 import binascii
+from collections import deque
 import json
 import os
 import shutil
@@ -47,6 +48,8 @@ PERMITTED_KEYS = {
     "Escape",
 }
 MAX_TYPED_CHARACTERS = 80
+MAX_PLANNER_SCREENSHOT_BYTES = 256 * 1024
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 OBSERVATION_SCRIPT = r"""
 (() => {
   const compact = (value) => String(value || "").trim().replace(/\s+/g, " ").slice(0, 80);
@@ -132,11 +135,7 @@ OBSERVATION_SCRIPT = r"""
     controlsTruncated: allControls.length > controls.length,
     successMatched,
     lifecycle: {
-      pageOpen: true,
       dialogOpen,
-      popupObserved: window.opener !== null,
-      crashed: false,
-      offLoopbackRedirect: false,
     },
   };
 })()
@@ -290,6 +289,77 @@ class _WebSocket:
             self.close()
             raise BrowserError("browser debugging endpoint refused the connection")
         self._next_call_id = 1
+        self._events = deque(maxlen=256)
+        self.events_overflowed = False
+
+    def _remember_event(self, message: Dict[str, Any]) -> None:
+        method = message.get("method")
+        params = message.get("params")
+        if not isinstance(method, str) or not isinstance(params, dict):
+            return
+        if method == "Target.targetCreated":
+            info = params.get("targetInfo")
+            if not isinstance(info, dict):
+                return
+            target_info = {
+                key: info.get(key)
+                for key in ("targetId", "type", "openerId")
+                if isinstance(info.get(key), str)
+            }
+            self._append_event({"method": method, "params": {"targetInfo": target_info}})
+        elif method in {"Target.targetDestroyed", "Target.targetCrashed"}:
+            target_id = params.get("targetId")
+            self._append_event(
+                {"method": method, "params": {"targetId": target_id}}
+            )
+        elif method in {
+            "Inspector.targetCrashed",
+            "Page.javascriptDialogOpening",
+            "Page.javascriptDialogClosed",
+            "Page.windowOpen",
+        }:
+            # Deliberately omit dialog messages and popup URLs from retained CDP
+            # event data; their contents are untrusted page data.
+            self._append_event({"method": method, "params": {}})
+        elif method == "Page.frameNavigated":
+            frame = params.get("frame")
+            if isinstance(frame, dict) and not frame.get("parentId"):
+                url = frame.get("url")
+                if isinstance(url, str):
+                    self._append_event(
+                        {
+                            "method": method,
+                            "params": {
+                                "frameId": frame.get("id"),
+                                "url": url[:4096],
+                            },
+                        }
+                    )
+        elif method in {"Network.requestWillBeSent", "Page.navigatedWithinDocument"}:
+            frame_id = params.get("frameId")
+            if isinstance(frame_id, str):
+                request = params.get("request")
+                url = request.get("url") if isinstance(request, dict) else params.get("url")
+                if isinstance(url, str) and (
+                    method != "Network.requestWillBeSent"
+                    or params.get("type") == "Document"
+                ):
+                    self._append_event(
+                        {
+                            "method": method,
+                            "params": {"frameId": frame_id, "url": url[:4096]},
+                        }
+                    )
+
+    def _append_event(self, event: Dict[str, Any]) -> None:
+        if len(self._events) == self._events.maxlen:
+            self.events_overflowed = True
+        self._events.append(event)
+
+    def drain_events(self) -> list:
+        events = list(self._events)
+        self._events.clear()
+        return events
 
     def send(self, payload: Dict[str, Any]) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -338,6 +408,9 @@ class _WebSocket:
         self.send({"id": call_id, "method": method, "params": params or {}})
         while True:
             message = self.receive()
+            if isinstance(message.get("method"), str):
+                self._remember_event(message)
+                continue
             if message.get("id") != call_id:
                 continue
             if "error" in message:
@@ -354,6 +427,9 @@ class _WebSocket:
         pending = set(call_ids)
         while pending:
             message = self.receive()
+            if isinstance(message.get("method"), str):
+                self._remember_event(message)
+                continue
             message_id = message.get("id")
             if message_id not in pending:
                 continue
@@ -430,7 +506,21 @@ class IsolatedKeyboardBrowser:
         self.profile_directory = Path(tempfile.mkdtemp(prefix="access-trace-browser-"))
         self.process: Optional[subprocess.Popen] = None
         self.connection: Optional[_WebSocket] = None
+        self.browser_connection: Optional[_WebSocket] = None
         self.target_url = target_url
+        self.target_id: Optional[str] = None
+        self._page_monitor_active = False
+        self._main_frame_id: Optional[str] = None
+        self._page_open: Optional[bool] = None
+        self._popup_observed: Optional[bool] = None
+        self._popup_attempted: Optional[bool] = None
+        self._crashed: Optional[bool] = None
+        self._native_dialog_open: Optional[bool] = None
+        self._dialog_observed: Optional[bool] = None
+        self._off_loopback_redirect_observed: Optional[bool] = None
+        self._navigation_redirect_observed: Optional[bool] = None
+        self._main_frame_url: Optional[str] = None
+        self._navigation_started = False
         self.debug_port = self._free_port()
         try:
             self.process = subprocess.Popen(
@@ -447,16 +537,35 @@ class IsolatedKeyboardBrowser:
                     "--user-data-dir={0}".format(self.profile_directory),
                     "--force-device-scale-factor=1",
                     "--window-size=1280,900",
-                    target_url,
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            websocket_url = self._wait_for_page()
+            browser_websocket_url = self._wait_for_browser()
+            self.browser_connection = _WebSocket(browser_websocket_url)
+            self.browser_connection.call(
+                "Target.setDiscoverTargets", {"discover": True}
+            )
+            target_id, websocket_url = self._wait_for_page()
+            self.target_id = target_id
             self.connection = _WebSocket(websocket_url)
             self.connection.call("Page.enable")
             self.connection.call("Runtime.enable")
+            self.connection.call("Inspector.enable")
+            frame_tree = self.connection.call("Page.getFrameTree")
+            tree = frame_tree.get("frameTree") if isinstance(frame_tree, dict) else None
+            main_frame = tree.get("frame") if isinstance(tree, dict) else None
+            self._main_frame_id = (
+                main_frame.get("id") if isinstance(main_frame, dict) else None
+            )
+            self.connection.call("Network.enable")
+            self._page_monitor_active = True
+            self._popup_attempted = False
+            self._native_dialog_open = False
+            self._crashed = False
+            self._refresh_target_state()
+            self._navigation_started = True
             self.connection.call("Page.navigate", {"url": target_url})
             self._wait_for_target()
         except Exception as error:
@@ -474,7 +583,24 @@ class IsolatedKeyboardBrowser:
             source.bind(("127.0.0.1", 0))
             return int(source.getsockname()[1])
 
-    def _wait_for_page(self) -> str:
+    def _wait_for_browser(self) -> str:
+        deadline = time.monotonic() + 5
+        endpoint = "http://127.0.0.1:{0}/json/version".format(self.debug_port)
+        while time.monotonic() < deadline:
+            if self.process is not None and self.process.poll() is not None:
+                raise BrowserError("isolated browser exited before it was ready")
+            try:
+                with urllib.request.urlopen(endpoint, timeout=0.5) as response:
+                    version = json.loads(response.read().decode("utf-8"))
+                websocket_url = version.get("webSocketDebuggerUrl")
+                if isinstance(websocket_url, str):
+                    return websocket_url
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.05)
+        raise BrowserError("isolated browser debugging endpoint did not become ready")
+
+    def _wait_for_page(self) -> tuple:
         deadline = time.monotonic() + 5
         endpoint = "http://127.0.0.1:{0}/json/list".format(self.debug_port)
         while time.monotonic() < deadline:
@@ -486,12 +612,10 @@ class IsolatedKeyboardBrowser:
                 for page in pages:
                     if (
                         page.get("type") == "page"
+                        and isinstance(page.get("id"), str)
                         and page.get("webSocketDebuggerUrl")
                     ):
-                        # The isolated profile has one page. Navigation is
-                        # issued explicitly after connecting so an initial
-                        # about:blank state cannot become an observation.
-                        return page["webSocketDebuggerUrl"]
+                        return page["id"], page["webSocketDebuggerUrl"]
             except (OSError, ValueError):
                 pass
             time.sleep(0.05)
@@ -505,35 +629,351 @@ class IsolatedKeyboardBrowser:
             raise BrowserError("browser is not connected")
         expected_url = self.target_url.rstrip("/")
         deadline = time.monotonic() + 5
+        previous_url = None
+        stable_observations = 0
         while time.monotonic() < deadline:
-            result = self.connection.call(
-                "Runtime.evaluate",
-                {"expression": "String(window.location.href)", "returnByValue": True},
-            )
+            try:
+                result = self.connection.call(
+                    "Runtime.evaluate",
+                    {"expression": "String(window.location.href)", "returnByValue": True},
+                )
+            except BrowserError:
+                self._refresh_target_state()
+                if self._page_open is False or self._crashed is True:
+                    return
+                time.sleep(0.05)
+                continue
             current_url = (
                 result.get("result", {}).get("value") if isinstance(result, dict) else None
             )
+            self._collect_page_events()
             if isinstance(current_url, str) and current_url.rstrip("/") == expected_url:
                 self._wait_for_settled_input()
                 return
+            if isinstance(current_url, str) and current_url not in {"", "about:blank"}:
+                stable_observations = (
+                    stable_observations + 1 if current_url == previous_url else 1
+                )
+                if stable_observations >= 2:
+                    self._wait_for_settled_input()
+                    return
+            previous_url = current_url
             time.sleep(0.05)
-        raise BrowserError("isolated browser did not reach the controlled target")
+        self._refresh_target_state()
+        if self._page_open is False or self._crashed is True:
+            return
+        raise BrowserError("isolated browser did not settle on a page")
+
+    def _collect_page_events(self) -> None:
+        if self.connection is None:
+            return
+        events = self.connection.drain_events()
+        main_frame_ids = {self._main_frame_id}
+        for event in events:
+            params = event.get("params")
+            frame_id = params.get("frameId") if isinstance(params, dict) else None
+            if event.get("method") == "Page.frameNavigated" and isinstance(
+                frame_id, str
+            ):
+                main_frame_ids.add(frame_id)
+        for event in events:
+            method = event.get("method")
+            params = event.get("params", {})
+            if method == "Inspector.targetCrashed":
+                self._crashed = True
+            elif method == "Page.javascriptDialogOpening":
+                self._native_dialog_open = True
+                self._dialog_observed = True
+                self._crashed = False
+            elif method == "Page.javascriptDialogClosed":
+                self._native_dialog_open = False
+            elif method == "Page.windowOpen":
+                self._popup_attempted = True
+            elif method in {
+                "Page.frameNavigated",
+                "Page.navigatedWithinDocument",
+                "Network.requestWillBeSent",
+            }:
+                url = params.get("url") if isinstance(params, dict) else None
+                frame_id = params.get("frameId") if isinstance(params, dict) else None
+                if (
+                    method == "Page.frameNavigated"
+                    and isinstance(frame_id, str)
+                ):
+                    self._main_frame_id = frame_id
+                if (
+                    isinstance(url, str)
+                    and isinstance(frame_id, str)
+                    and frame_id in main_frame_ids
+                ):
+                    self._record_main_frame_url(url)
+
+        if self.connection.events_overflowed:
+            self._native_dialog_open = None
+            if self._dialog_observed is not True:
+                self._dialog_observed = None
+            if self._popup_attempted is not True:
+                self._popup_attempted = None
+            if self._off_loopback_redirect_observed is not True:
+                self._off_loopback_redirect_observed = None
+            if self._navigation_redirect_observed is not True:
+                self._navigation_redirect_observed = None
+            if self._crashed is not True:
+                self._crashed = None
+
+    def _record_main_frame_url(self, url: str) -> None:
+        self._main_frame_url = url[:4096]
+        if not self._navigation_started or url == "about:blank":
+            return
+        if self._off_loopback_redirect(url) is True:
+            self._off_loopback_redirect_observed = True
+        elif not self._same_target_route(url):
+            self._navigation_redirect_observed = True
+
+    def _same_target_route(self, url: str) -> bool:
+        try:
+            observed = urlsplit(url[:4096])
+            target = urlsplit(self.target_url)
+            observed_port = observed.port or (80 if observed.scheme == "http" else 443)
+            target_port = target.port or (80 if target.scheme == "http" else 443)
+        except ValueError:
+            return False
+        return (
+            observed.scheme == target.scheme
+            and observed.hostname in {"localhost", "127.0.0.1", "::1"}
+            and target.hostname in {"localhost", "127.0.0.1", "::1"}
+            and observed_port == target_port
+            and (observed.path.rstrip("/") or "/")
+            == (target.path.rstrip("/") or "/")
+            and not observed.query
+            and not observed.fragment
+        )
+
+    def _collect_target_events(self) -> None:
+        if self.browser_connection is None:
+            return
+        for event in self.browser_connection.drain_events():
+            method = event.get("method")
+            params = event.get("params", {})
+            if method == "Target.targetCreated":
+                target_info = params.get("targetInfo", {})
+                if (
+                    isinstance(target_info, dict)
+                    and target_info.get("type") == "page"
+                    and target_info.get("targetId") != self.target_id
+                ):
+                    self._popup_observed = True
+            elif method == "Target.targetDestroyed":
+                if (
+                    isinstance(params, dict)
+                    and params.get("targetId") == self.target_id
+                ):
+                    self._page_open = False
+            elif method == "Target.targetCrashed":
+                if (
+                    isinstance(params, dict)
+                    and params.get("targetId") == self.target_id
+                ):
+                    self._crashed = True
+
+    def _refresh_target_state(self) -> None:
+        if self.browser_connection is None or self.target_id is None:
+            self._page_open = None
+            self._popup_observed = None
+            if self._crashed is not True:
+                self._crashed = None
+            return
+        try:
+            result = self.browser_connection.call("Target.getTargets")
+        except BrowserError:
+            if self.process is not None and self.process.poll() is not None:
+                self._page_open = False
+                if self._crashed is not True:
+                    self._crashed = None
+            else:
+                self._page_open = None
+                if self._popup_observed is not True:
+                    self._popup_observed = None
+                if self._crashed is not True:
+                    self._crashed = None
+            self._collect_target_events()
+            return
+
+        infos = result.get("targetInfos") if isinstance(result, dict) else None
+        if not isinstance(infos, list):
+            self._page_open = None
+            if self._popup_observed is not True:
+                self._popup_observed = None
+            if self._crashed is not True:
+                self._crashed = None
+            self._collect_target_events()
+            return
+
+        page_infos = [
+            info
+            for info in infos
+            if isinstance(info, dict) and info.get("type") == "page"
+        ]
+        self._page_open = any(info.get("targetId") == self.target_id for info in page_infos)
+        if any(info.get("targetId") != self.target_id for info in page_infos):
+            self._popup_observed = True
+        elif self._popup_observed is not True:
+            self._popup_observed = False
+        if (
+            self._page_open
+            and self._crashed is not True
+            and self._page_monitor_active
+            and self.connection is not None
+            and not self.connection.events_overflowed
+        ):
+            self._crashed = False
+        self._collect_target_events()
+        if self.browser_connection.events_overflowed:
+            if self._popup_observed is not True:
+                self._popup_observed = None
+            if self._crashed is not True:
+                self._crashed = None
+
+    def _off_loopback_redirect(self, url: Any) -> Optional[bool]:
+        if not isinstance(url, str):
+            return None
+        try:
+            observed = urlsplit(url[:4096])
+        except ValueError:
+            return None
+        if observed.hostname is None:
+            return None
+        return not (
+            observed.scheme in {"http", "https"}
+            and observed.hostname in LOOPBACK_HOSTS
+        )
+
+    def _lifecycle(self, url: Any = None, dialog_open: Optional[bool] = None) -> Dict[str, Any]:
+        if self._native_dialog_open is True or dialog_open is True:
+            observed_dialog = True
+        elif dialog_open is False and self._native_dialog_open is False:
+            observed_dialog = False
+        else:
+            observed_dialog = None
+        page_events_overflowed = (
+            self.connection is not None and self.connection.events_overflowed
+        )
+        dialog_observed = self._dialog_observed
+        if (
+            dialog_observed is None
+            and self._page_monitor_active
+            and not page_events_overflowed
+        ):
+            dialog_observed = False
+        off_loopback_redirect = self._off_loopback_redirect_observed
+        if isinstance(url, str) and self._off_loopback_redirect(url) is True:
+            off_loopback_redirect = True
+        elif (
+            off_loopback_redirect is not True
+            and isinstance(url, str)
+            and self._page_monitor_active
+            and not page_events_overflowed
+        ):
+            off_loopback_redirect = self._off_loopback_redirect(url)
+        if (
+            off_loopback_redirect is None
+            and isinstance(self._main_frame_url, str)
+            and self._page_monitor_active
+            and not page_events_overflowed
+        ):
+            off_loopback_redirect = self._off_loopback_redirect(self._main_frame_url)
+        navigation_redirect = self._navigation_redirect_observed
+        if isinstance(url, str) and not self._same_target_route(url):
+            navigation_redirect = True
+        elif (
+            navigation_redirect is not True
+            and isinstance(url, str)
+            and self._page_monitor_active
+            and not page_events_overflowed
+        ):
+            navigation_redirect = not self._same_target_route(url)
+        if (
+            navigation_redirect is None
+            and isinstance(self._main_frame_url, str)
+            and self._page_monitor_active
+            and not page_events_overflowed
+        ):
+            navigation_redirect = not self._same_target_route(self._main_frame_url)
+        return {
+            "pageOpen": self._page_open,
+            "dialogOpen": observed_dialog,
+            "dialogObserved": dialog_observed,
+            "popupObserved": self._popup_observed,
+            "popupAttempted": self._popup_attempted,
+            "crashed": self._crashed,
+            "offLoopbackRedirect": off_loopback_redirect,
+            "navigationRedirect": navigation_redirect,
+        }
+
+    def _unobservable_observation(self) -> Dict[str, Any]:
+        self._collect_page_events()
+        self._refresh_target_state()
+        return {
+            "url": self._main_frame_url,
+            "title": None,
+            "focus": {},
+            "controls": [],
+            "successMatched": False,
+            "lifecycle": self._lifecycle(),
+        }
 
     def observe(self) -> Dict[str, Any]:
         if self.connection is None:
             raise BrowserError("browser is not connected")
-        result = self.connection.call(
-            "Runtime.evaluate",
-            {"expression": OBSERVATION_SCRIPT, "returnByValue": True, "awaitPromise": True},
-        )
+        self._collect_page_events()
+        self._refresh_target_state()
+        if self._page_open is False or self._crashed is True:
+            return self._unobservable_observation()
+        try:
+            result = self.connection.call(
+                "Runtime.evaluate",
+                {"expression": OBSERVATION_SCRIPT, "returnByValue": True, "awaitPromise": True},
+            )
+        except BrowserError:
+            self._mark_page_monitor_unavailable()
+            return self._unobservable_observation()
         value = result.get("result", {}).get("value") if isinstance(result, dict) else None
         if not isinstance(value, dict):
-            raise BrowserError("browser returned no bounded observation")
+            return self._unobservable_observation()
+        raw_lifecycle = value.get("lifecycle")
+        dialog_open = (
+            raw_lifecycle.get("dialogOpen")
+            if isinstance(raw_lifecycle, dict)
+            and isinstance(raw_lifecycle.get("dialogOpen"), bool)
+            else None
+        )
+        self._collect_page_events()
+        self._refresh_target_state()
+        if isinstance(value.get("url"), str):
+            self._record_main_frame_url(value["url"])
+        if dialog_open is True:
+            self._dialog_observed = True
+        value["lifecycle"] = self._lifecycle(value.get("url"), dialog_open)
         return value
 
-    def capture_redacted_screenshot(self, destination: Path) -> str:
+    def _mark_page_monitor_unavailable(self) -> None:
+        self._page_monitor_active = False
+        self._native_dialog_open = None
+        if self._dialog_observed is not True:
+            self._dialog_observed = None
+        if self._popup_attempted is not True:
+            self._popup_attempted = None
+        if self._crashed is not True:
+            self._crashed = None
+        if self._off_loopback_redirect_observed is not True:
+            self._off_loopback_redirect_observed = None
+        if self._navigation_redirect_observed is not True:
+            self._navigation_redirect_observed = None
+
+    def _capture_redacted_screenshot_bytes(self) -> bytes:
         if self.connection is None:
             raise BrowserError("browser is not connected")
+        self._preflight_keyboard_action(None)
         bounds_result = self.connection.call(
             "Runtime.evaluate",
             {"expression": EDITABLE_BOUNDS_SCRIPT, "returnByValue": True},
@@ -550,6 +990,21 @@ class IsolatedKeyboardBrowser:
         except (ValueError, binascii.Error) as error:
             raise BrowserError("browser returned an invalid screenshot") from error
         redacted = _redact_png(screenshot, bounds)
+        self._preflight_keyboard_action(None)
+        return redacted
+
+    def capture_planner_screenshot(self) -> Optional[str]:
+        """Return a bounded redacted PNG data URL for multimodal planner input."""
+        try:
+            redacted = self._capture_redacted_screenshot_bytes()
+        except Exception:
+            return None
+        if len(redacted) > MAX_PLANNER_SCREENSHOT_BYTES:
+            return None
+        return "data:image/png;base64," + base64.b64encode(redacted).decode("ascii")
+
+    def capture_redacted_screenshot(self, destination: Path) -> str:
+        redacted = self._capture_redacted_screenshot_bytes()
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(redacted)
         return destination.name
@@ -559,6 +1014,7 @@ class IsolatedKeyboardBrowser:
             raise BrowserActionError("keyboard action is outside the permitted interaction set")
         if self.connection is None:
             raise BrowserActionError("browser is not connected")
+        self._preflight_keyboard_action(key)
         if key == "Shift+Tab":
             events = [
                 {
@@ -636,6 +1092,7 @@ class IsolatedKeyboardBrowser:
             raise BrowserActionError("typed input must be single-line plain text")
         if self.connection is None:
             raise BrowserActionError("browser is not connected")
+        self._preflight_keyboard_action(None)
         try:
             # Send real key events in one bounded batch. It does not use a
             # clipboard and the raw value never enters the planner context,
@@ -660,10 +1117,74 @@ class IsolatedKeyboardBrowser:
             raise BrowserActionError("bounded text could not be delivered") from error
         return len(text)
 
+    def _preflight_keyboard_action(self, key: Optional[str]) -> None:
+        """Avoid delivering keyboard input after leaving the controlled page."""
+        if self.connection is None:
+            raise BrowserActionError("browser is not connected")
+        self._collect_page_events()
+        self._refresh_target_state()
+        if self._page_open is False or self._crashed is True:
+            raise BrowserActionError("controlled browser page is no longer available")
+        if self._native_dialog_open is True:
+            if key == "Escape" and self._same_target_route(self._main_frame_url or ""):
+                lifecycle = self._lifecycle(self._main_frame_url)
+                if (
+                    lifecycle.get("pageOpen") is True
+                    and lifecycle.get("crashed") is False
+                    and lifecycle.get("popupObserved") is not None
+                    and lifecycle.get("offLoopbackRedirect") is False
+                    and lifecycle.get("navigationRedirect") is False
+                ):
+                    return
+            raise BrowserActionError("a browser dialog is blocking keyboard input")
+        try:
+            result = self.connection.call(
+                "Runtime.evaluate",
+                {"expression": "String(window.location.href)", "returnByValue": True},
+            )
+        except BrowserError as error:
+            self._mark_page_monitor_unavailable()
+            self._collect_page_events()
+            self._refresh_target_state()
+            raise BrowserActionError(
+                "controlled page could not be checked before input"
+            ) from error
+        current_url = (
+            result.get("result", {}).get("value") if isinstance(result, dict) else None
+        )
+        if not isinstance(current_url, str):
+            raise BrowserActionError("controlled page URL was unavailable before input")
+        self._record_main_frame_url(current_url)
+        self._collect_page_events()
+        self._refresh_target_state()
+        lifecycle = self._lifecycle(current_url)
+        if any(
+            lifecycle.get(field) is None
+            for field in (
+                "pageOpen",
+                "dialogOpen",
+                "dialogObserved",
+                "popupObserved",
+                "crashed",
+                "offLoopbackRedirect",
+                "navigationRedirect",
+            )
+        ):
+            raise BrowserActionError("browser lifecycle could not be verified before input")
+        if (
+            not self._same_target_route(current_url)
+            or lifecycle.get("offLoopbackRedirect")
+            or lifecycle.get("navigationRedirect")
+        ):
+            raise BrowserActionError("browser left the controlled target before input")
+
     def close(self) -> None:
         if self.connection is not None:
             self.connection.close()
             self.connection = None
+        if self.browser_connection is not None:
+            self.browser_connection.close()
+            self.browser_connection = None
         cleanup_errors = []
         process = self.process
         if process is not None:

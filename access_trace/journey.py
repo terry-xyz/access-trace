@@ -12,6 +12,7 @@ from .browser import (
     BrowserCleanupError,
     BrowserError,
     IsolatedKeyboardBrowser,
+    MAX_PLANNER_SCREENSHOT_BYTES,
 )
 from .domain import DEMO_TITLE, LOOPBACK_HOSTS, SUPPORTED_GOAL, utc_now
 from .evidence import attach_evidence_handoff
@@ -29,9 +30,11 @@ MAX_CONTROLS = 8
 LIFECYCLE_FIELDS = (
     "pageOpen",
     "dialogOpen",
+    "dialogObserved",
     "popupObserved",
     "crashed",
     "offLoopbackRedirect",
+    "navigationRedirect",
 )
 MISSING_LIFECYCLE = object()
 
@@ -59,8 +62,12 @@ def _lifecycle_warnings(raw_lifecycle: Dict[str, Any]) -> list:
     warnings = []
     if raw_lifecycle.get("dialogOpen"):
         warnings.append({"kind": "dialog-open"})
+    if raw_lifecycle.get("dialogObserved"):
+        warnings.append({"kind": "dialog-observed"})
     if raw_lifecycle.get("popupObserved"):
         warnings.append({"kind": "popup-observed"})
+    if raw_lifecycle.get("popupAttempted"):
+        warnings.append({"kind": "popup-attempted"})
     if raw_lifecycle.get("crashed"):
         warnings.append({"kind": "browser-crashed"})
     if raw_lifecycle.get("pageOpen") is False:
@@ -230,26 +237,32 @@ def _redacted_url(
     raw_url: Any, target_url: str, sensitive_values: Iterable[str]
 ) -> Tuple[Optional[str], Optional[str]]:
     if not isinstance(raw_url, str):
-        return None, "off-loopback-redirect"
+        return None, None
     try:
         observed = urlsplit(raw_url[:4096])
         target = urlsplit(target_url)
         observed_port = observed.port
         target_port = target.port
     except ValueError:
-        return None, "off-loopback-redirect"
-    same_loopback_origin = (
-        observed.hostname in LOOPBACK_HOSTS
-        and target.hostname in LOOPBACK_HOSTS
-    )
-    if (
-        observed.scheme != target.scheme
-        or not (observed.hostname == target.hostname or same_loopback_origin)
-        or observed_port != target_port
-    ):
-        return None, "off-loopback-redirect"
+        return None, "navigation-redirect"
     if observed.hostname is None:
+        return None, "navigation-redirect"
+    is_loopback_url = (
+        observed.scheme in {"http", "https"}
+        and observed.hostname in LOOPBACK_HOSTS
+    )
+    same_controlled_origin = (
+        observed.scheme == target.scheme
+        and (
+            observed.hostname == target.hostname
+            or (is_loopback_url and target.hostname in LOOPBACK_HOSTS)
+        )
+        and observed_port == target_port
+    )
+    if not is_loopback_url:
         return None, "off-loopback-redirect"
+    if not same_controlled_origin:
+        return None, "navigation-redirect"
     safe_host = observed.hostname
     if ":" in safe_host:
         safe_host = "[" + safe_host + "]"
@@ -306,18 +319,33 @@ def redacted_observation(
         lifecycle_evidence = "incomplete"
         raw_lifecycle = raw_lifecycle_value
     elif any(
-        not isinstance(raw_lifecycle_value[field], bool)
+        raw_lifecycle_value[field] is not None
+        and not isinstance(raw_lifecycle_value[field], bool)
         for field in LIFECYCLE_FIELDS
     ):
         lifecycle_evidence = "invalid"
         raw_lifecycle = raw_lifecycle_value
+    elif any(raw_lifecycle_value[field] is None for field in LIFECYCLE_FIELDS):
+        lifecycle_evidence = "incomplete"
+        raw_lifecycle = raw_lifecycle_value
     else:
         lifecycle_evidence = "observed"
         raw_lifecycle = raw_lifecycle_value
+    for field in ("popupAttempted",):
+        if field not in raw_lifecycle:
+            continue
+        value = raw_lifecycle[field]
+        if value is not None and not isinstance(value, bool):
+            lifecycle_evidence = "invalid"
+        elif value is None and lifecycle_evidence == "observed":
+            lifecycle_evidence = "incomplete"
     lifecycle = {
-        key: bool(raw_lifecycle.get(key))
-        for key in LIFECYCLE_FIELDS + ("navigationRedirect",)
+        key: raw_lifecycle.get(key)
+        for key in LIFECYCLE_FIELDS + ("popupAttempted",)
     }
+    for key, value in lifecycle.items():
+        if value is not None and not isinstance(value, bool):
+            lifecycle[key] = None
     lifecycle["evidence"] = lifecycle_evidence
     is_whole_site = assessment_scope == "whole-site"
     observation = {
@@ -367,7 +395,7 @@ def redacted_observation(
         observation["coverage"] = _coverage_progress(raw, covered_focus_ids)
     for warning in _lifecycle_warnings(raw_lifecycle):
         _append_warning(observation["warnings"], warning)
-    if bounded_url is None:
+    if navigation_warning == "off-loopback-redirect":
         _append_warning(observation["warnings"], {"kind": "off-loopback-redirect"})
         observation["lifecycle"]["offLoopbackRedirect"] = True
     elif navigation_warning is not None:
@@ -1025,6 +1053,25 @@ def _execute_assessment(
                 if barrier_status in {"blocked", "completed", "inconclusive"}:
                     return run
 
+            screenshot_data_url = None
+            capture_planner_screenshot = getattr(
+                browser, "capture_planner_screenshot", None
+            )
+            if callable(capture_planner_screenshot):
+                try:
+                    screenshot_data_url = capture_planner_screenshot()
+                except BrowserError:
+                    # Screenshots are optional planner context. If capture or
+                    # redaction fails, omit the image rather than use raw pixels.
+                    screenshot_data_url = None
+            if (
+                not isinstance(screenshot_data_url, str)
+                or not screenshot_data_url.startswith("data:image/png;base64,")
+                or len(screenshot_data_url)
+                > (MAX_PLANNER_SCREENSHOT_BYTES * 4 // 3) + 64
+            ):
+                screenshot_data_url = None
+
             bounded_for_planner = {
                 "assessmentScope": run["assessmentScope"],
                 "goal": run["goal"],
@@ -1042,6 +1089,7 @@ def _execute_assessment(
                         if isinstance(current.get("success"), dict)
                         else None
                     ),
+                    "screenshotAvailable": screenshot_data_url is not None,
                 },
                 "goalProgress": current["goalProgress"],
                 "coverage": current["coverage"],
@@ -1056,8 +1104,41 @@ def _execute_assessment(
                     for action in run["actions"][-4:]
                 ],
             }
-            action = _planner_action(planner, bounded_for_planner)
+            if screenshot_data_url is not None:
+                bounded_for_planner["pageEvidence"][
+                    "screenshotDataUrl"
+                ] = screenshot_data_url
+            try:
+                action = _planner_action(planner, bounded_for_planner)
+            except PlannerError:
+                current = _redacted_observation(
+                    browser.observe(),
+                    run["targetUrl"],
+                    typed_values.values(),
+                    run.get("assessmentScope", "goal-focused"),
+                    run.get("goal"),
+                    covered_focus_ids,
+                )
+                run["observations"].append(current)
+                _record_observation_warnings(run, current)
+                lifecycle_failure = _lifecycle_failure(current)
+                if lifecycle_failure is not None:
+                    raise BrowserError(lifecycle_failure)
+                raise
             if action["kind"] == "complete":
+                current = _redacted_observation(
+                    browser.observe(),
+                    run["targetUrl"],
+                    typed_values.values(),
+                    run.get("assessmentScope", "goal-focused"),
+                    run.get("goal"),
+                    covered_focus_ids,
+                )
+                run["observations"].append(current)
+                _record_observation_warnings(run, current)
+                lifecycle_failure = _lifecycle_failure(current)
+                if lifecycle_failure is not None:
+                    raise BrowserError(lifecycle_failure)
                 if run.get("assessmentScope") == "whole-site":
                     if _complete_whole_site_if_verified(
                         run, current, started, browser, evidence_directory

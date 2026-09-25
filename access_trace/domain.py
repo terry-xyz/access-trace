@@ -161,11 +161,15 @@ def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
         "controls": _controls(),
         "warnings": [],
         "lifecycle": {
-            "pageOpen": True,
-            "dialogOpen": False,
-            "popupObserved": False,
-            "crashed": False,
-            "offLoopbackRedirect": False,
+            "pageOpen": None,
+            "dialogOpen": None,
+            "dialogObserved": None,
+            "popupObserved": None,
+            "popupAttempted": None,
+            "crashed": None,
+            "offLoopbackRedirect": None,
+            "navigationRedirect": None,
+            "evidence": "not-observed",
         },
     }
 

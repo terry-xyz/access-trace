@@ -136,11 +136,13 @@ def _coverage(value: Any) -> Optional[Dict[str, Any]]:
 def _lifecycle(value: Any) -> Dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     result = {
-        key: bool(source.get(key))
+        key: _optional_bool(source.get(key))
         for key in (
             "pageOpen",
             "dialogOpen",
+            "dialogObserved",
             "popupObserved",
+            "popupAttempted",
             "crashed",
             "offLoopbackRedirect",
             "navigationRedirect",
