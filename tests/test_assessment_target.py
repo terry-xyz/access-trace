@@ -439,6 +439,194 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertNotIn("avery@example.test", serialized)
         self.assertNotIn("A fictional message", serialized)
 
+    def test_barrier_probe_retries_one_failed_delivery_before_classifying_the_barrier(self):
+        class BarrierRetryBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.focus = "submit"
+                self.failed_enter = False
+
+            def observe(self):
+                if self.focus == "submit":
+                    focus = {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    }
+                else:
+                    focus = {
+                        "role": "textbox",
+                        "accessibleName": "Message",
+                        "tag": "textarea",
+                        "stableId": "message",
+                        "isStable": True,
+                        "characterCount": 16,
+                        "acceptedInput": True,
+                        "validationState": "valid",
+                    }
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": focus,
+                    "controls": [
+                        {
+                            "role": "textbox",
+                            "accessibleName": field.title(),
+                            "tag": "textarea" if field == "message" else "input",
+                            "stableId": field,
+                            "focusable": True,
+                            "isStable": True,
+                            "characterCount": 16,
+                            "acceptedInput": True,
+                            "validationState": "valid",
+                        }
+                        for field in ("name", "email", "message")
+                    ]
+                    + [
+                        {
+                            "role": "button",
+                            "accessibleName": "Submit",
+                            "tag": "button",
+                            "stableId": "submit",
+                            "focusable": True,
+                            "isStable": True,
+                        }
+                    ],
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if key == "Enter" and not self.failed_enter:
+                    self.failed_enter = True
+                    raise BrowserActionError("temporary barrier probe failure")
+                if key == "Shift+Tab":
+                    self.focus = "message"
+                elif key == "Tab":
+                    self.focus = "submit"
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", BarrierRetryBrowser
+        ):
+            result = execute_contact_goal(run, self.run_directory, planner=mock.Mock())
+
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertIsNone(result["browserFailure"])
+        enter_actions = [
+            action for action in result["actions"] if action.get("key") == "Enter"
+        ]
+        self.assertEqual(["failed", "delivered"], [action["status"] for action in enter_actions])
+        self.assertEqual(
+            ["Enter", "Space"], result["recoveryEvidence"][0]["attemptedActivations"]
+        )
+
+    def test_missing_lifecycle_evidence_cannot_preserve_a_successful_observation(self):
+        class MissingLifecycleBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.success = False
+
+            def observe(self):
+                observation = {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    },
+                    "controls": [
+                        {
+                            "role": "textbox",
+                            "accessibleName": field.title(),
+                            "tag": "textarea" if field == "message" else "input",
+                            "stableId": field,
+                            "focusable": True,
+                            "isStable": True,
+                            "characterCount": 16,
+                            "acceptedInput": True,
+                            "validationState": "valid",
+                        }
+                        for field in ("name", "email", "message")
+                    ]
+                    + [
+                        {
+                            "role": "button",
+                            "accessibleName": "Submit",
+                            "tag": "button",
+                            "stableId": "submit",
+                            "focusable": True,
+                            "isStable": True,
+                        }
+                    ],
+                    "successMatched": self.success,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
+                }
+                if self.success:
+                    observation["lifecycle"] = None
+                return observation
+
+            def press_key(self, key):
+                if key == "Enter":
+                    self.success = True
+
+            def close(self):
+                return None
+
+        class SubmitPlanner:
+            def next_action(self, context):
+                return {"kind": "key", "key": "Enter"}
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", MissingLifecycleBrowser
+        ):
+            result = execute_fixed_goal(
+                run, self.run_directory, planner=SubmitPlanner()
+            )
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertTrue(result["observations"][-1]["success"]["matched"])
+        self.assertEqual("invalid", result["observations"][-1]["lifecycle"]["evidence"])
+        self.assertEqual({"kind": "browser-failure"}, result["browserFailure"])
+        self.assertIsNone(result["stoppingScreenshotRef"])
+
     def test_page_wrap_and_generic_no_progress_do_not_become_blocked(self):
         class WrappingBrowser:
             def __init__(self, target_url):
@@ -462,6 +650,7 @@ class AssessmentTargetTests(unittest.TestCase):
                         "dialogOpen": False,
                         "popupObserved": False,
                         "crashed": False,
+                        "offLoopbackRedirect": False,
                     },
                 }
 
@@ -527,6 +716,7 @@ class AssessmentTargetTests(unittest.TestCase):
                         "dialogOpen": False,
                         "popupObserved": False,
                         "crashed": False,
+                        "offLoopbackRedirect": False,
                     },
                 }
 
@@ -597,6 +787,7 @@ class AssessmentTargetTests(unittest.TestCase):
                         "dialogOpen": False,
                         "popupObserved": False,
                         "crashed": False,
+                        "offLoopbackRedirect": False,
                     },
                 }
 
@@ -666,6 +857,7 @@ class AssessmentTargetTests(unittest.TestCase):
                         "dialogOpen": self.dialog_open,
                         "popupObserved": False,
                         "crashed": False,
+                        "offLoopbackRedirect": False,
                     },
                 }
 
@@ -731,6 +923,7 @@ class AssessmentTargetTests(unittest.TestCase):
                         "dialogOpen": False,
                         "popupObserved": False,
                         "crashed": False,
+                        "offLoopbackRedirect": False,
                     },
                 }
 
@@ -783,7 +976,13 @@ class AssessmentTargetTests(unittest.TestCase):
                     },
                     "controls": [],
                     "successMatched": False,
-                    "lifecycle": {"pageOpen": True},
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
                 }
 
             def close(self):
@@ -854,7 +1053,13 @@ class AssessmentTargetTests(unittest.TestCase):
                         }
                     ],
                     "successMatched": False,
-                    "lifecycle": {"pageOpen": True},
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
                 }
 
             def press_key(self, key):
@@ -912,7 +1117,13 @@ class AssessmentTargetTests(unittest.TestCase):
                     },
                     "controls": [],
                     "successMatched": False,
-                    "lifecycle": {"pageOpen": True},
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                        "offLoopbackRedirect": False,
+                    },
                 }
 
             def press_key(self, key):
@@ -956,6 +1167,7 @@ class AssessmentTargetTests(unittest.TestCase):
                         "dialogOpen": True,
                         "popupObserved": True,
                         "crashed": False,
+                        "offLoopbackRedirect": False,
                     },
                 }
 
@@ -1418,6 +1630,7 @@ class AssessmentTargetTests(unittest.TestCase):
                         "dialogOpen": False,
                         "popupObserved": False,
                         "crashed": False,
+                        "offLoopbackRedirect": False,
                     },
                 }
 

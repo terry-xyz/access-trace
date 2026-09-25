@@ -25,14 +25,28 @@ MAX_PAGE_URL_LENGTH = 256
 MAX_PAGE_STRING_LENGTH = 80
 MAX_CHARACTER_COUNT = 100_000
 MAX_CONTROLS = 8
+LIFECYCLE_FIELDS = (
+    "pageOpen",
+    "dialogOpen",
+    "popupObserved",
+    "crashed",
+    "offLoopbackRedirect",
+)
+MISSING_LIFECYCLE = object()
 
 
 class ActionDeliveryFailure(BrowserActionError):
     """A permitted action was not delivered, with a fresh observation attached."""
 
-    def __init__(self, message: str, observation: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        message: str,
+        observation: Optional[Dict[str, Any]] = None,
+        attempts: int = 1,
+    ):
         super().__init__(message)
         self.observation = observation
+        self.attempts = attempts
 
 
 def _append_warning(target: list, warning: Dict[str, Any]) -> None:
@@ -276,20 +290,30 @@ def redacted_observation(
     bounded_url, navigation_warning = _redacted_url(
         raw.get("url"), target_url, sensitive_values or ()
     )
-    raw_lifecycle = raw.get("lifecycle", {})
-    if not isinstance(raw_lifecycle, dict):
+    raw_lifecycle_value = raw.get("lifecycle", MISSING_LIFECYCLE)
+    if raw_lifecycle_value is MISSING_LIFECYCLE:
+        lifecycle_evidence = "missing"
         raw_lifecycle = {}
+    elif not isinstance(raw_lifecycle_value, dict):
+        lifecycle_evidence = "invalid"
+        raw_lifecycle = {}
+    elif any(field not in raw_lifecycle_value for field in LIFECYCLE_FIELDS):
+        lifecycle_evidence = "incomplete"
+        raw_lifecycle = raw_lifecycle_value
+    elif any(
+        not isinstance(raw_lifecycle_value[field], bool)
+        for field in LIFECYCLE_FIELDS
+    ):
+        lifecycle_evidence = "invalid"
+        raw_lifecycle = raw_lifecycle_value
+    else:
+        lifecycle_evidence = "observed"
+        raw_lifecycle = raw_lifecycle_value
     lifecycle = {
         key: bool(raw_lifecycle.get(key))
-        for key in (
-            "pageOpen",
-            "dialogOpen",
-            "popupObserved",
-            "crashed",
-            "offLoopbackRedirect",
-            "navigationRedirect",
-        )
+        for key in LIFECYCLE_FIELDS + ("navigationRedirect",)
     }
+    lifecycle["evidence"] = lifecycle_evidence
     is_whole_site = assessment_scope == "whole-site"
     observation = {
         "kind": "settled-observation",
@@ -440,6 +464,10 @@ def _lifecycle_failure(observation: Dict[str, Any]) -> Optional[str]:
     lifecycle = observation.get("lifecycle", {})
     if not isinstance(lifecycle, dict):
         return "browser lifecycle evidence was invalid"
+    if lifecycle.get("evidence") != "observed":
+        return "browser lifecycle evidence is " + str(
+            lifecycle.get("evidence", "missing")
+        )
     if lifecycle.get("crashed"):
         return "browser page crashed"
     if {"kind": "page-closed"} in observation.get("warnings", []):
@@ -581,6 +609,45 @@ def _settle_action(
     return current
 
 
+def _settle_barrier_action(
+    run: Dict[str, Any],
+    browser: IsolatedKeyboardBrowser,
+    action: Dict[str, Any],
+    before: Dict[str, Any],
+    typed_values: Dict[str, str],
+    covered_focus_ids: Optional[set] = None,
+) -> Dict[str, Any]:
+    """Retry one barrier-probe delivery once after its fresh observation."""
+    try:
+        return _settle_action(
+            run,
+            browser,
+            action,
+            before,
+            typed_values,
+            covered_focus_ids,
+        )
+    except ActionDeliveryFailure as first_failure:
+        current = first_failure.observation or before
+        if _lifecycle_failure(current) is not None:
+            raise
+        try:
+            return _settle_action(
+                run,
+                browser,
+                action,
+                current,
+                typed_values,
+                covered_focus_ids,
+            )
+        except ActionDeliveryFailure as second_failure:
+            raise ActionDeliveryFailure(
+                "permitted keyboard action failed twice during barrier probing",
+                second_failure.observation or current,
+                attempts=2,
+            ) from second_failure
+
+
 def _record_recovery_step(
     recovery_actions: list, action: Dict[str, Any], before: Dict[str, Any], after: Dict[str, Any]
 ) -> None:
@@ -604,7 +671,7 @@ def _dismiss_relevant_overlay(
 ) -> Tuple[Dict[str, Any], bool]:
     if not _has_relevant_overlay(current):
         return current, False
-    after = _settle_action(
+    after = _settle_barrier_action(
         run,
         browser,
         {"kind": "key", "key": "Escape"},
@@ -677,7 +744,7 @@ def _classify_broken_barrier(
 
     for key in ("Enter", "Space"):
         before = current
-        current = _settle_action(
+        current = _settle_barrier_action(
             run,
             browser,
             {"kind": "key", "key": key},
@@ -702,7 +769,7 @@ def _classify_broken_barrier(
             break
 
     for key in ("Shift+Tab", "Tab"):
-        after = _settle_action(
+        after = _settle_barrier_action(
             run,
             browser,
             {"kind": "key", "key": key},
@@ -1017,7 +1084,7 @@ def _execute_assessment(
     except ActionDeliveryFailure as error:
         failure = {
             "kind": "action-delivery-failure",
-            "attempts": 1,
+            "attempts": int(getattr(error, "attempts", 1)),
         }
         _append_warning(run["warnings"], failure)
         run["browserFailure"] = failure
