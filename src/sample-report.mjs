@@ -79,3 +79,83 @@ export const WHOLE_SITE_SAMPLE = Object.freeze({
   ],
   warnings: ["No browser lifecycle warnings are included in this representative sample."],
 });
+
+const goalMetrics = [
+  { name: "Planned goal actions", passed: 5, attempted: 6 },
+  { name: "Keyboard reachability", passed: 5, attempted: 5 },
+  { name: "Form labels and instructions", passed: 4, attempted: 4 },
+];
+
+const goalTotals = goalMetrics.reduce(
+  (totals, metric) => ({
+    passed: totals.passed + metric.passed,
+    attempted: totals.attempted + metric.attempted,
+  }),
+  { passed: 0, attempted: 0 },
+);
+
+/** GOAL_FOCUSED_SAMPLE shows a completed sample goal with a website failure and a recovered agent failure. */
+export const GOAL_FOCUSED_SAMPLE = Object.freeze({
+  runId: "SAMPLE-GF-01",
+  target: CONTROLLED_TARGET_URL,
+  scope: "goal-focused",
+  goal: "Submit the contact form using only the keyboard",
+  terminalStatus: "COMPLETED",
+  outcomeTitle: "The goal completed after one website check failed",
+  coverage: "5 of 6 planned goal actions passed; the success condition was reached",
+  passed: goalTotals.passed,
+  attempted: goalTotals.attempted,
+  score: calculateWebsiteScore(goalTotals.passed, goalTotals.attempted),
+  metrics: goalMetrics,
+  duration: "52 sec",
+  interactionCount: 6,
+  explanationTitle: "The form was submitted after a focus check failed.",
+  explanation:
+    "The representative contact-form goal reached its visible confirmation. One website check found no visible focus indicator on the Email field; the assessment continued through the remaining planned actions. This sample does not assess the goal entered above.",
+  confidence: "Medium",
+  confidenceContext: "Sample action sequence and visible confirmation; not live evidence",
+  proposedFixTitle: "Make the Email field focus indicator visible",
+  proposedFix:
+    "Add a clear :focus-visible style to the Email field so keyboard focus remains easy to locate.",
+  wcagReference: {
+    label: "2.4.7 Focus Visible (Level AA)",
+    url: "https://www.w3.org/WAI/WCAG22/Understanding/focus-visible",
+  },
+  evidenceReferences: [
+    { id: "ACT-GF-03", label: "The Email field had no visible focus indicator" },
+    { id: "FOC-GF-03", label: "Focus observation for the Email field" },
+    { id: "REC-GF-01", label: "Assessment continued after the failed check" },
+    { id: "SHOT-GF-01", label: "Sample screenshot reference for the confirmation" },
+  ],
+  orderedActions: [
+    { id: "ACT-GF-01", key: "Tab", target: "Contact form", result: "Reached the form; focus indicator visible", outcome: "passed" },
+    { id: "ACT-GF-02", key: "Tab", target: "Name field", result: "Reached; field label announced", outcome: "passed" },
+    { id: "ACT-GF-03", key: "Tab", target: "Email field", result: "Reached; no visible focus indicator observed", outcome: "failed" },
+    { id: "ACT-GF-04", key: "Tab", target: "Message field", result: "Reached; focus indicator visible and label announced", outcome: "passed" },
+    { id: "ACT-GF-05", key: "Tab", target: "Submit button", result: "Reached with visible focus", outcome: "passed" },
+    { id: "ACT-GF-06", key: "Enter", target: "Submission confirmation", result: "Visible confirmation reached; goal completed", outcome: "passed" },
+  ],
+  focusObservations: [
+    { id: "FOC-GF-01", target: "Name field", role: "Text field", indicator: "Visible outline" },
+    { id: "FOC-GF-03", target: "Email field", role: "Email field", indicator: "No visible indicator observed" },
+    { id: "FOC-GF-04", target: "Message field", role: "Text area", indicator: "Visible outline" },
+  ],
+  screenshot: {
+    id: "SHOT-GF-01",
+    title: "Contact form confirmation",
+    siteName: "Northstar",
+    navigation: [
+      { label: "Home", focused: false },
+      { label: "Contact", focused: true },
+      { label: "Help", focused: false },
+    ],
+    description:
+      "Illustrative sample screenshot reference for the contact form confirmation. It is not a captured browser image.",
+  },
+  agentFailures: ["A planner attempt timed out; its single retry completed from the same observation."],
+  recoveryEvidence: [
+    { id: "REC-GF-01", text: "After the Email focus check failed, Tab advanced to Message and assessment continued." },
+    { id: "REC-GF-02", text: "The remaining planned actions reached the Submit control and visible confirmation." },
+  ],
+  warnings: ["No browser lifecycle warnings are included in this representative sample."],
+});

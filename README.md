@@ -1,6 +1,8 @@
 # AccessTrace report preview
 
-This ticket implements the accessible setup and representative whole-site report. It does not start a browser assessment; every report value and evidence item is sample data and is labeled as such.
+This ticket implements the accessible setup and representative whole-site and goal-focused reports. It does not start a browser assessment; every report value and evidence item is sample data and is labeled as such. Entered goals are shown in the report, but the representative goal sample may not match the entered goal.
+
+Goals are limited to keyboard assessment of the controlled local demo. Remote URLs, non-keyboard interaction modes, full-conformance requests, and requests to override safeguards or run code are rejected before a sample report is shown.
 
 Serve the page from the repository root so its JavaScript modules load:
 

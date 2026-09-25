@@ -1,8 +1,9 @@
 import {
   getAssessmentScope,
+  validateAssessmentGoal,
   validateTargetUrl,
 } from "./assessment.mjs";
-import { WHOLE_SITE_SAMPLE } from "./sample-report.mjs";
+import { GOAL_FOCUSED_SAMPLE, WHOLE_SITE_SAMPLE } from "./sample-report.mjs";
 
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
@@ -12,6 +13,7 @@ const targetError = document.querySelector("#target-error");
 const goalError = document.querySelector("#goal-error");
 const scopeStatus = document.querySelector("#scope-status");
 const scopeChip = document.querySelector("#scope-chip");
+const submitLabel = document.querySelector("#submit-label");
 const report = document.querySelector("#sample-report");
 const reportHeading = document.querySelector("#report-heading");
 let recordUrl;
@@ -36,15 +38,19 @@ function updateScopePreview() {
     ? "Whole-site assessment selected"
     : "Goal-focused assessment selected";
   scopeChip.textContent = isWholeSite ? "Whole site" : "Goal focused";
+  submitLabel.textContent = isWholeSite
+    ? "View whole-site sample report"
+    : "View goal-focused sample report";
   setError(goalInput, goalError, "");
+  report.hidden = true;
 }
 
 /** renderOrderedActions shows the bounded keyboard action sequence from the representative sample. */
-function renderOrderedActions() {
+function renderOrderedActions(sample) {
   const list = document.querySelector("#action-list");
   const fragment = document.createDocumentFragment();
 
-  for (const action of WHOLE_SITE_SAMPLE.orderedActions) {
+  for (const action of sample.orderedActions) {
     const item = document.createElement("li");
     item.id = action.id;
     item.className = `action-item action-${action.outcome}`;
@@ -58,7 +64,7 @@ function renderOrderedActions() {
     target.textContent = action.target;
     const outcome = document.createElement("span");
     outcome.className = "action-outcome";
-    outcome.textContent = action.outcome === "passed" ? "Check passed" : "Check failed";
+    outcome.textContent = action.outcome === "passed" ? "Website check passed" : "Website check failed";
     topLine.append(key, target, outcome);
 
     const result = document.createElement("p");
@@ -71,8 +77,7 @@ function renderOrderedActions() {
 }
 
 /** renderSampleFacts fills report copy, links, and illustrative evidence from the representative sample record. */
-function renderSampleFacts() {
-  const sample = WHOLE_SITE_SAMPLE;
+function renderSampleFacts(sample) {
   const facts = {
     terminalStatus: sample.terminalStatus,
     scopeLabel: formatScopeLabel(sample.scope),
@@ -113,7 +118,7 @@ function renderSampleFacts() {
   }
   warningList.replaceChildren(warningItems);
 
-  const screenshot = document.querySelector("#sample-screenshot");
+  const screenshot = report.querySelector("[data-sample-screenshot]");
   screenshot.id = sample.screenshot.id;
   screenshot.setAttribute("aria-label", sample.screenshot.description);
   document.querySelector("#capture-site-name").textContent = sample.screenshot.siteName;
@@ -131,11 +136,11 @@ function renderSampleFacts() {
 }
 
 /** renderFocusObservations gives each sample row the ID used by its evidence links. */
-function renderFocusObservations() {
+function renderFocusObservations(sample) {
   const body = document.querySelector("#focus-table-body");
   const fragment = document.createDocumentFragment();
 
-  for (const observation of WHOLE_SITE_SAMPLE.focusObservations) {
+  for (const observation of sample.focusObservations) {
     const row = document.createElement("tr");
     row.id = observation.id;
     const referenceCell = document.createElement("td");
@@ -156,11 +161,11 @@ function renderFocusObservations() {
 }
 
 /** renderRecoveryEvidence attaches stable sample IDs so a reference lands on the cited recovery item. */
-function renderRecoveryEvidence() {
+function renderRecoveryEvidence(sample) {
   const list = document.querySelector("#recovery-list");
   const fragment = document.createDocumentFragment();
 
-  for (const evidence of WHOLE_SITE_SAMPLE.recoveryEvidence) {
+  for (const evidence of sample.recoveryEvidence) {
     const item = document.createElement("li");
     item.id = evidence.id;
     item.textContent = evidence.text;
@@ -180,19 +185,19 @@ function createEvidenceLink(reference) {
 }
 
 /** renderEvidenceReferences attaches the same sample citations to both the explanation and proposed fix. */
-function renderEvidenceReferences() {
+function renderEvidenceReferences(sample) {
   const explanationList = document.querySelector("#explanation-evidence");
   const fixReferences = document.querySelector("#fix-evidence-references");
   const listFragment = document.createDocumentFragment();
   const fixFragment = document.createDocumentFragment();
 
-  for (const [index, reference] of WHOLE_SITE_SAMPLE.evidenceReferences.entries()) {
+  for (const [index, reference] of sample.evidenceReferences.entries()) {
     const item = document.createElement("li");
     item.append(createEvidenceLink(reference), document.createTextNode(` ${reference.label}`));
     listFragment.append(item);
 
     if (index > 0) {
-      fixFragment.append(document.createTextNode(index === WHOLE_SITE_SAMPLE.evidenceReferences.length - 1 ? ", and " : ", "));
+      fixFragment.append(document.createTextNode(index === sample.evidenceReferences.length - 1 ? ", and " : ", "));
     }
     fixFragment.append(createEvidenceLink(reference));
   }
@@ -202,8 +207,8 @@ function renderEvidenceReferences() {
 }
 
 /** renderScoreAndMetrics uses one sample record for the score formula and all named metric values. */
-function renderScoreAndMetrics() {
-  const score = WHOLE_SITE_SAMPLE.score;
+function renderScoreAndMetrics(sample) {
+  const score = sample.score;
   document.querySelector("#score-percent").textContent = score.percentage ?? "—";
   const separator = document.createElement("span");
   separator.textContent = "/";
@@ -225,7 +230,7 @@ function renderScoreAndMetrics() {
 
   const grid = document.querySelector("#metrics-grid");
   const fragment = document.createDocumentFragment();
-  for (const metric of WHOLE_SITE_SAMPLE.metrics) {
+  for (const metric of sample.metrics) {
     const card = document.createElement("div");
     card.className = "metric-card";
     const name = document.createElement("dt");
@@ -248,11 +253,11 @@ function renderScoreAndMetrics() {
 }
 
 /** prepareSampleRecord packages the sample evidence with the current configuration without implying a live run. */
-function prepareSampleRecord(context) {
+function prepareSampleRecord(sample, context) {
   const record = {
-    ...WHOLE_SITE_SAMPLE,
+    ...sample,
     isRepresentativeSample: true,
-    recordNote: "This example record is not the result of a live browser assessment.",
+    recordNote: "Representative report data, not a live assessment or evidence about the configured goal.",
     configuredContext: context,
   };
   const file = new Blob([JSON.stringify(record, null, 2)], {
@@ -263,7 +268,7 @@ function prepareSampleRecord(context) {
   recordUrl = URL.createObjectURL(file);
   const downloadLink = document.querySelector("#download-record");
   downloadLink.href = recordUrl;
-  downloadLink.download = `${WHOLE_SITE_SAMPLE.runId.toLowerCase()}.json`;
+  downloadLink.download = `${sample.runId.toLowerCase()}.json`;
 }
 
 /** updateReportContext copies validated settings into every report field that presents them. */
@@ -275,13 +280,17 @@ function updateReportContext(context) {
 }
 
 /** showSampleReport reveals the labeled sample after validation and never starts a browser run. */
-function showSampleReport() {
+function showSampleReport(goal) {
   const normalizedUrl = validateTargetUrl(targetInput.value).normalizedUrl;
   const simulationMode = simulationInput.checked;
+  const scope = getAssessmentScope(goal);
+  const sample = scope === "whole-site"
+    ? WHOLE_SITE_SAMPLE
+    : { ...GOAL_FOCUSED_SAMPLE, goal };
   const context = {
     targetUrl: normalizedUrl,
-    assessmentScope: WHOLE_SITE_SAMPLE.scope,
-    goal: WHOLE_SITE_SAMPLE.goal,
+    assessmentScope: sample.scope,
+    goal: sample.goal,
     simulationMode,
   };
 
@@ -290,15 +299,17 @@ function showSampleReport() {
     simulationMode: simulationMode ? "On" : "Off",
   });
 
-  prepareSampleRecord(context);
+  renderReportSample(sample);
+  prepareSampleRecord(sample, context);
   report.hidden = false;
   reportHeading.focus({ preventScroll: true });
   reportHeading.scrollIntoView({ behavior: "auto", block: "start" });
 }
 
-/** handleAssessmentSubmit validates the local target before allowing the whole-site sample preview. */
+/** handleAssessmentSubmit validates the target and goal before showing the matching sample report. */
 function handleAssessmentSubmit(event) {
   event.preventDefault();
+  report.hidden = true;
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
 
@@ -309,34 +320,43 @@ function handleAssessmentSubmit(event) {
     return;
   }
 
-  if (getAssessmentScope(goalInput.value) !== "whole-site") {
-    setError(
-      goalInput,
-      goalError,
-      "This preview contains a whole-site sample only. Clear the goal to view it; no goal-focused sample is available here.",
-    );
+  const goalValidation = validateAssessmentGoal(goalInput.value);
+  if (!goalValidation.valid) {
+    setError(goalInput, goalError, goalValidation.message);
     goalInput.focus();
     return;
   }
 
-  showSampleReport();
+  showSampleReport(goalValidation.goal);
+}
+
+/** renderReportSample keeps every visible fact and evidence item sourced from the chosen sample record. */
+function renderReportSample(sample) {
+  renderOrderedActions(sample);
+  renderSampleFacts(sample);
+  renderFocusObservations(sample);
+  renderRecoveryEvidence(sample);
+  renderEvidenceReferences(sample);
+  renderScoreAndMetrics(sample);
 }
 
 /** clearTargetValidationError removes stale feedback once the target input changes. */
 function clearTargetValidationError() {
   setError(targetInput, targetError, "");
+  report.hidden = true;
+}
+
+/** clearStaleSampleReport prevents an old preview from appearing to describe changed simulation settings. */
+function clearStaleSampleReport() {
+  report.hidden = true;
 }
 
 form.addEventListener("submit", handleAssessmentSubmit);
 targetInput.addEventListener("input", clearTargetValidationError);
 goalInput.addEventListener("input", updateScopePreview);
+simulationInput.addEventListener("change", clearStaleSampleReport);
 targetInput.value = WHOLE_SITE_SAMPLE.target;
 document.querySelector("#recognized-target").textContent = WHOLE_SITE_SAMPLE.target;
 
-renderOrderedActions();
-renderSampleFacts();
-renderFocusObservations();
-renderRecoveryEvidence();
-renderEvidenceReferences();
-renderScoreAndMetrics();
+renderReportSample(WHOLE_SITE_SAMPLE);
 updateScopePreview();

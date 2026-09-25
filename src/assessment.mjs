@@ -1,6 +1,18 @@
 export const CONTROLLED_TARGET_URL = "http://127.0.0.1:4173/";
 
 const TARGET_ERROR = `Use the controlled local demo at ${CONTROLLED_TARGET_URL}`;
+const UNSAFE_GOAL_PATTERNS = [
+  /\b(?:ignore|override|disregard)\b.*\b(?:instructions|rules|safeguards|guardrails)\b/i,
+  /\b(?:run|execute)\b.*\b(?:javascript|shell commands?|arbitrary code)\b/i,
+];
+const UNSUPPORTED_GOAL_PATTERNS = [
+  /https?:\/\/\S+/i,
+  /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i,
+  /\b(?:wcag (?:conformance|compliance)|full accessibility (?:audit|assessment|score))\b/i,
+];
+
+const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed.";
+const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts keyboard goals for the controlled local demo and cannot assess remote sites, other interaction modes, or full-conformance requests.";
 
 /** validateTargetUrl accepts only the normalized controlled endpoint so other loopback services remain out of scope. */
 export function validateTargetUrl(value) {
@@ -35,6 +47,38 @@ export function getAssessmentScope(goal) {
   return typeof goal === "string" && goal.trim() !== ""
     ? "goal-focused"
     : "whole-site";
+}
+
+/** validateAssessmentGoal keeps free text intact and rejects only clearly unsafe or out-of-bound requests. */
+export function validateAssessmentGoal(value) {
+  const goal = typeof value === "string" ? value.trim() : "";
+  const scope = getAssessmentScope(goal);
+
+  if (scope === "whole-site") {
+    return { valid: true, scope, goal: "", reason: "", message: "" };
+  }
+
+  if (UNSAFE_GOAL_PATTERNS.some((pattern) => pattern.test(goal))) {
+    return {
+      valid: false,
+      scope,
+      goal,
+      reason: "unsafe",
+      message: UNSAFE_GOAL_ERROR,
+    };
+  }
+
+  if (UNSUPPORTED_GOAL_PATTERNS.some((pattern) => pattern.test(goal))) {
+    return {
+      valid: false,
+      scope,
+      goal,
+      reason: "unsupported",
+      message: UNSUPPORTED_GOAL_ERROR,
+    };
+  }
+
+  return { valid: true, scope, goal, reason: "", message: "" };
 }
 
 /** calculateWebsiteScore reports the passed-to-attempted website-check ratio without grading agent failures. */
