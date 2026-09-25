@@ -84,11 +84,14 @@ test("a valid free-text goal is preserved while an empty goal remains whole-site
 function keyboardGoalPhrasingAcceptsMultipleOutcomes() {
   const formGoal = " Please fill out and submit the contact form using only Tab and Enter. ";
   const menuGoal = "Check that I can reach the menu and open it with the keyboard.";
+  const passwordFieldGoal = "Using only the keyboard, reach the password field on the contact form";
 
   assert.equal(validateAssessmentGoal(formGoal).valid, true);
   assert.equal(validateAssessmentGoal(formGoal).goal, formGoal);
   assert.equal(validateAssessmentGoal(menuGoal).valid, true);
   assert.equal(validateAssessmentGoal(menuGoal).goal, menuGoal);
+  assert.equal(validateAssessmentGoal(passwordFieldGoal).valid, true);
+  assert.equal(validateAssessmentGoal(passwordFieldGoal).goal, passwordFieldGoal);
 }
 test("supported free-text keyboard goals keep their exact phrasing across different controls", keyboardGoalPhrasingAcceptsMultipleOutcomes);
 
@@ -115,6 +118,7 @@ test("remote and non-keyboard goals are rejected with an explicit scope explanat
 function unsupportedAssessmentCriteriaAreNotReinterpreted() {
   const unsupportedGoals = [
     "Check whether the contact form sends submissions securely",
+    "Check whether passwords are stored safely",
     "Review the contact form's error messages for clarity",
   ];
 
@@ -123,7 +127,7 @@ function unsupportedAssessmentCriteriaAreNotReinterpreted() {
     assert.equal(result.valid, false, `${goal} should be rejected`);
     assert.equal(result.reason, "unsupported");
     assert.match(result.message, /not be reinterpreted/i);
-    if (/securely/.test(goal)) {
+    if (/securely|passwords/.test(goal)) {
       assert.match(result.message, /cannot assess whether a site or form is secure/i);
     } else {
       assert.match(result.message, /keyboard interactions and outcomes/i);

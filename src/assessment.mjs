@@ -7,7 +7,9 @@ const UNSAFE_GOAL_PATTERNS = [
 ];
 const REMOTE_TARGET_PATTERN = /\b(?:remote|external|off[- ]site|off[- ]target|third[- ]party)\b|\b(?:another|other)\s+(?:site|website)\b|(?:https?:\/\/|www\.)\S+/i;
 const OTHER_INPUT_MODE_PATTERN = /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i;
-const SECURITY_GOAL_PATTERN = /\b(?:secure\w*|security|privacy|encrypt\w*|credentials?|passwords?|authentication|authorization)\b/i;
+const SECURITY_PROPERTY_PATTERN = /\b(?:secure\w*|security|privacy|encrypt\w*)\b/i;
+const SENSITIVE_DATA_PATTERN = /\b(?:passwords?|credentials?|authentication|authorization)\b/i;
+const SENSITIVE_DATA_HANDLING_PATTERN = /\b(?:strength|policy|stor\w*|transmit\w*|protect\w*|hash\w*|encrypt\w*|expos\w*|leak\w*|share\w*|safely|security|privacy|secure\w*)\b/i;
 const NON_KEYBOARD_CRITERIA_PATTERN = /\b(?:color|colour)\s+contrast\b|\b(?:alt(?:ernative)?\s+text|image descriptions?)\b|\bwcag\s+(?:conformance|compliance)\b/i;
 const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter|space|arrow keys?|shift[-+ ]?tab|focus|navigate|navigation)\b/i;
 const SITE_CONTROL_PATTERN = /\b(?:site|website|page|form|menu|link|button|field|control|dialog|navigation|element)\b/i;
@@ -24,6 +26,15 @@ function describesKeyboardGoal(candidate) {
 
   // Without that cue, require both a concrete interaction and a named control so a vague outcome is not inferred.
   return IMPLICIT_KEYBOARD_ACTION_PATTERN.test(candidate) && SITE_CONTROL_PATTERN.test(candidate);
+}
+
+/** describesSecurityAssessment distinguishes security criteria from keyboard goals targeting sensitive controls. */
+function describesSecurityAssessment(candidate) {
+  // Security properties are out of scope even when the goal names a particular site control.
+  if (SECURITY_PROPERTY_PATTERN.test(candidate)) return true;
+
+  // A sensitive control is not itself a security request; its handling must also be the assessment subject.
+  return SENSITIVE_DATA_PATTERN.test(candidate) && SENSITIVE_DATA_HANDLING_PATTERN.test(candidate);
 }
 
 /** validateTargetUrl accepts only the normalized controlled endpoint so other loopback services remain out of scope. */
@@ -81,7 +92,7 @@ export function validateAssessmentGoal(value) {
     };
   }
 
-  if (SECURITY_GOAL_PATTERN.test(candidate)) {
+  if (describesSecurityAssessment(candidate)) {
     return {
       valid: false,
       scope,
