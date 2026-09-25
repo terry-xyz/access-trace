@@ -563,8 +563,7 @@ function getReportScore(report) {
 function reportScoreMatchesCounts(report) {
   if (!report.score) return false;
   const calculated = getReportScore(report);
-  return calculated.percentage !== null
-    && report.score.passed === calculated.passed
+  return report.score.passed === calculated.passed
     && report.score.attempted === calculated.attempted
     && report.score.percentage === calculated.percentage;
 }

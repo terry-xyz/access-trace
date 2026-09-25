@@ -139,6 +139,23 @@ function repeatedComparisonAveragesRunsAndRetainsEveryRunEvenWhenOneIsInconclusi
 }
 test("a repeated comparison averages scores and keeps inconclusive and agent-failed runs visible", repeatedComparisonAveragesRunsAndRetainsEveryRunEvenWhenOneIsInconclusive);
 
+/** validZeroAttemptReportIsUnscoredWithoutBeingReportedAsAnIntegrityMismatch. */
+function validZeroAttemptReportIsUnscoredWithoutBeingReportedAsAnIntegrityMismatch() {
+  const noAttempts = WHOLE_SITE_SAMPLE.metrics.map((metric) => ({
+    name: metric.name,
+    passed: 0,
+    attempted: 0,
+  }));
+  const original = reportWithMetrics(WHOLE_SITE_SAMPLE, sharedSettings, noAttempts);
+  const updated = reportWithMetrics(AGENT_UPDATED_WHOLE_SITE_SAMPLE, sharedSettings, noAttempts);
+  const comparison = buildSiteComparison(original, updated);
+
+  assert.match(comparison.outcome.summary, /original report has no score to compare/i);
+  assert.match(comparison.outcome.summary, /updated report has no score to compare/i);
+  assert.doesNotMatch(comparison.outcome.summary, /score does not match its reported check counts/i);
+}
+test("valid zero-attempt reports are unscored without an integrity mismatch", validZeroAttemptReportIsUnscoredWithoutBeingReportedAsAnIntegrityMismatch);
+
 /** highConsistencyKeepsAnUnscoredRunVisibleAndUsesThreeRunsForBothVersions. */
 function highConsistencyKeepsAnUnscoredRunVisibleAndUsesThreeRunsForBothVersions() {
   const settings = { ...sharedSettings, consistencyLevel: "High", runsPerVersion: 3 };
