@@ -109,6 +109,10 @@ OBSERVATION_SCRIPT = r"""
     .map(control);
   const active = document.activeElement || document.body;
   const statuses = Array.from(document.querySelectorAll('[role="status"]'));
+  const dialogOpen = Array.from(document.querySelectorAll(
+    'dialog[open], [role="dialog"], [aria-modal="true"], [data-overlay], '
+    + '[data-modal], .overlay, .modal, [class*="overlay"], [class*="modal"]'
+  )).some(visible);
   const successMatched = statuses.some(
     (node) => visible(node) && compact(node.textContent) === "Message sent"
   );
@@ -120,8 +124,8 @@ OBSERVATION_SCRIPT = r"""
     successMatched,
     lifecycle: {
       pageOpen: true,
-      dialogOpen: false,
-      popupObserved: false,
+      dialogOpen,
+      popupObserved: window.opener !== null,
       crashed: false,
       offLoopbackRedirect: false,
     },
@@ -546,21 +550,53 @@ class IsolatedKeyboardBrowser:
             raise BrowserActionError("keyboard action is outside the permitted interaction set")
         if self.connection is None:
             raise BrowserActionError("browser is not connected")
-        actual_key = " " if key == "Space" else key
-        code = "Space" if key == "Space" else key
-        key_code = {
-            "Tab": 9,
-            "Enter": 13,
-            " ": 32,
-            "ArrowLeft": 37,
-            "ArrowUp": 38,
-            "ArrowRight": 39,
-            "ArrowDown": 40,
-            "Escape": 27,
-        }.get(actual_key, 0)
-        try:
-            self.connection.call(
-                "Input.dispatchKeyEvent",
+        if key == "Shift+Tab":
+            events = [
+                {
+                    "type": "keyDown",
+                    "key": "Shift",
+                    "code": "ShiftLeft",
+                    "windowsVirtualKeyCode": 16,
+                    "nativeVirtualKeyCode": 16,
+                },
+                {
+                    "type": "keyDown",
+                    "key": "Tab",
+                    "code": "Tab",
+                    "modifiers": 8,
+                    "windowsVirtualKeyCode": 9,
+                    "nativeVirtualKeyCode": 9,
+                },
+                {
+                    "type": "keyUp",
+                    "key": "Tab",
+                    "code": "Tab",
+                    "modifiers": 8,
+                    "windowsVirtualKeyCode": 9,
+                    "nativeVirtualKeyCode": 9,
+                },
+                {
+                    "type": "keyUp",
+                    "key": "Shift",
+                    "code": "ShiftLeft",
+                    "windowsVirtualKeyCode": 16,
+                    "nativeVirtualKeyCode": 16,
+                },
+            ]
+        else:
+            actual_key = " " if key == "Space" else key
+            code = "Space" if key == "Space" else key
+            key_code = {
+                "Tab": 9,
+                "Enter": 13,
+                " ": 32,
+                "ArrowLeft": 37,
+                "ArrowUp": 38,
+                "ArrowRight": 39,
+                "ArrowDown": 40,
+                "Escape": 27,
+            }.get(actual_key, 0)
+            events = [
                 {
                     "type": "keyDown",
                     "key": actual_key,
@@ -569,9 +605,6 @@ class IsolatedKeyboardBrowser:
                     "windowsVirtualKeyCode": key_code,
                     "nativeVirtualKeyCode": key_code,
                 },
-            )
-            self.connection.call(
-                "Input.dispatchKeyEvent",
                 {
                     "type": "keyUp",
                     "key": actual_key,
@@ -579,7 +612,10 @@ class IsolatedKeyboardBrowser:
                     "windowsVirtualKeyCode": key_code,
                     "nativeVirtualKeyCode": key_code,
                 },
-            )
+            ]
+        try:
+            for event in events:
+                self.connection.call("Input.dispatchKeyEvent", event)
             self._wait_for_settled_input()
         except BrowserError as error:
             raise BrowserActionError("keyboard action could not be delivered") from error

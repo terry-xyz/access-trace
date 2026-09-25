@@ -10,7 +10,7 @@ from urllib.parse import unquote, urlsplit
 
 from .demo import demo_page, landing_page
 from .domain import CONTROLLED_SCHEME, ValidationError, create_run
-from .journey import execute_fixed_goal
+from .journey import execute_contact_goal
 from .planner import CodexPlanner
 from .store import RunStore
 
@@ -110,7 +110,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             )
             return
         try:
-            completed = execute_fixed_goal(
+            completed = execute_contact_goal(
                 run,
                 self.server.run_store.directory,
                 planner=self.server.planner_factory(),

@@ -1,4 +1,4 @@
-"""The fixed contact-form keyboard journey and redacted evidence lifecycle."""
+"""The contact-form keyboard journeys and redacted evidence lifecycle."""
 
 import threading
 import time
@@ -274,30 +274,41 @@ def _set_terminal_state(
     }
 
 
-def _submit_activation_observed(run: Dict[str, Any]) -> bool:
-    if not run.get("actions"):
-        return False
-    action = run["actions"][-1]
-    focus = action.get("focusBefore", {})
+def _is_submit_focus(observation: Dict[str, Any]) -> bool:
+    focus = observation.get("focus", {})
     return (
-        action.get("kind") == "key"
-        and action.get("key") == "Enter"
+        isinstance(focus, dict)
         and focus.get("role") == "button"
         and focus.get("accessibleName") == "Submit"
     )
 
 
-def _complete_if_verified(
-    run: Dict[str, Any],
-    observation: Dict[str, Any],
-    started: float,
-    browser: IsolatedKeyboardBrowser,
-    evidence_directory: Optional[Path],
-) -> bool:
-    if not observation["success"]["matched"] or not _submit_activation_observed(run):
+def _is_submit_focus_snapshot(focus: Dict[str, Any]) -> bool:
+    return _is_submit_focus({"focus": focus})
+
+
+def _same_submit_focus(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    if not _is_submit_focus(left) or not _is_submit_focus(right):
         return False
+    return _focus_snapshot(left) == _focus_snapshot(right)
+
+
+def _unchanged_goal_progress(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    return left.get("goalProgress") == right.get("goalProgress")
+
+
+def _has_relevant_overlay(observation: Dict[str, Any]) -> bool:
+    lifecycle = observation.get("lifecycle", {})
+    return isinstance(lifecycle, dict) and bool(
+        lifecycle.get("dialogOpen") or lifecycle.get("popupObserved")
+    )
+
+
+def _persist_stopping_screenshot(
+    run: Dict[str, Any], browser: IsolatedKeyboardBrowser, evidence_directory: Optional[Path]
+) -> None:
     if evidence_directory is None:
-        raise BrowserError("completed evidence requires a screenshot directory")
+        raise BrowserError("terminal evidence requires a screenshot directory")
     destination = evidence_directory / (run["id"] + "-stopping.png")
     try:
         screenshot_ref = browser.capture_redacted_screenshot(destination)
@@ -314,8 +325,241 @@ def _complete_if_verified(
     except (OSError, ValueError) as error:
         raise BrowserError("browser did not persist a redacted PNG screenshot") from error
     run["stoppingScreenshotRef"] = screenshot_ref
+
+
+def _settle_action(
+    run: Dict[str, Any],
+    browser: IsolatedKeyboardBrowser,
+    action: Dict[str, Any],
+    before: Dict[str, Any],
+    typed_values: Dict[str, str],
+) -> Dict[str, Any]:
+    try:
+        if action["kind"] == "key":
+            browser.press_key(action["key"])
+        else:
+            browser.type_text(action["text"])
+            typed_values[action["field"]] = action["text"]
+    except BrowserActionError:
+        _append_action(run, action, before, "failed")
+        try:
+            current = _redacted_observation(
+                browser.observe(), run["targetUrl"], typed_values.values()
+            )
+            run["observations"].append(current)
+        except BrowserError:
+            pass
+        raise
+    _append_action(run, action, before, "delivered")
+    current = _redacted_observation(
+        browser.observe(), run["targetUrl"], typed_values.values()
+    )
+    run["observations"].append(current)
+    if current["lifecycle"].get("offLoopbackRedirect") or current["lifecycle"].get(
+        "navigationRedirect"
+    ):
+        raise BrowserError("browser navigated away from the controlled target")
+    return current
+
+
+def _record_recovery_step(
+    recovery_actions: list, action: Dict[str, Any], before: Dict[str, Any], after: Dict[str, Any]
+) -> None:
+    recovery_actions.append(
+        {
+            "key": action["key"],
+            "status": "delivered",
+            "focusBefore": _focus_snapshot(before),
+            "focusAfter": _focus_snapshot(after),
+        }
+    )
+
+
+def _dismiss_relevant_overlay(
+    run: Dict[str, Any],
+    browser: IsolatedKeyboardBrowser,
+    current: Dict[str, Any],
+    typed_values: Dict[str, str],
+    recovery_actions: list,
+) -> Tuple[Dict[str, Any], bool]:
+    if not _has_relevant_overlay(current):
+        return current, False
+    after = _settle_action(
+        run,
+        browser,
+        {"kind": "key", "key": "Escape"},
+        current,
+        typed_values,
+    )
+    _record_recovery_step(
+        recovery_actions,
+        {"kind": "key", "key": "Escape"},
+        current,
+        after,
+    )
+    return after, True
+
+
+def _local_submit_recovery(
+    initial_submit: Dict[str, Any], recovery_actions: list
+) -> bool:
+    navigation = [
+        step
+        for step in recovery_actions
+        if step.get("key") in {"Shift+Tab", "Tab"}
+    ]
+    if len(navigation) != 2 or [step["key"] for step in navigation] != [
+        "Shift+Tab",
+        "Tab",
+    ]:
+        return False
+    controls = initial_submit.get("controls", [])
+    if not isinstance(controls, list):
+        return False
+    control_ids = [
+        control.get("stableId")
+        for control in controls
+        if isinstance(control, dict) and control.get("stableId")
+    ]
+    try:
+        submit_index = control_ids.index("submit")
+    except ValueError:
+        return False
+    if submit_index == 0:
+        return False
+    previous_id = control_ids[submit_index - 1]
+    return (
+        navigation[0]["focusAfter"].get("stableId") == previous_id
+        and _is_submit_focus_snapshot(navigation[1]["focusAfter"])
+    )
+
+
+def _classify_broken_barrier(
+    run: Dict[str, Any],
+    browser: IsolatedKeyboardBrowser,
+    initial_submit: Dict[str, Any],
+    started: float,
+    evidence_directory: Optional[Path],
+    typed_values: Dict[str, str],
+) -> Tuple[str, Dict[str, Any]]:
+    """Probe a semantic Submit stopping point before calling it a barrier."""
+    activation_actions = []
+    recovery_actions = []
+    overlay_seen = False
+    current = initial_submit
+
+    current, dismissed_overlay = _dismiss_relevant_overlay(
+        run, browser, current, typed_values, recovery_actions
+    )
+    overlay_seen = dismissed_overlay
+
+    for key in ("Enter", "Space"):
+        before = current
+        current = _settle_action(
+            run, browser, {"kind": "key", "key": key}, before, typed_values
+        )
+        activation_actions.append(key)
+        if current["success"]["matched"]:
+            if _complete_if_verified(
+                run, current, started, browser, evidence_directory
+            ):
+                return "completed", current
+            return "inconclusive", current
+        current, dismissed_overlay = _dismiss_relevant_overlay(
+            run, browser, current, typed_values, recovery_actions
+        )
+        overlay_seen = overlay_seen or dismissed_overlay
+        if not _same_submit_focus(initial_submit, current) or not _unchanged_goal_progress(
+            initial_submit, current
+        ):
+            break
+
+    for key in ("Shift+Tab", "Tab"):
+        after = _settle_action(
+            run,
+            browser,
+            {"kind": "key", "key": key},
+            current,
+            typed_values,
+        )
+        _record_recovery_step(
+            recovery_actions,
+            {"kind": "key", "key": key},
+            current,
+            after,
+        )
+        current = after
+
+    unchanged_progress = _unchanged_goal_progress(initial_submit, current)
+    same_submit_focus = _same_submit_focus(initial_submit, current)
+    local_focus_recovery = _local_submit_recovery(initial_submit, recovery_actions)
+    whole_page_wrapped = not local_focus_recovery
+    recovery_record = {
+        "kind": "submit-barrier-recovery",
+        "attemptedActivations": activation_actions,
+        "actions": recovery_actions,
+        "initialFocus": _focus_snapshot(initial_submit),
+        "finalFocus": _focus_snapshot(current),
+        "unchangedProgress": unchanged_progress,
+        "sameSubmitFocus": same_submit_focus,
+        "localFocusRecovery": local_focus_recovery,
+        "wholePageWrapped": whole_page_wrapped,
+        "successMatched": bool(current["success"]["matched"]),
+    }
+    run.setdefault("recoveryEvidence", []).append(recovery_record)
+
+    if (
+        len(activation_actions) == 2
+        and activation_actions == ["Enter", "Space"]
+        and not overlay_seen
+        and not whole_page_wrapped
+        and not current["success"]["matched"]
+        and unchanged_progress
+        and same_submit_focus
+    ):
+        _persist_stopping_screenshot(run, browser, evidence_directory)
+        _set_terminal_state(run, "BLOCKED", current, started)
+        return "blocked", current
+
+    run["warnings"].append({"kind": "barrier-evidence-inconclusive"})
+    _set_terminal_state(run, "INCONCLUSIVE", current, started)
+    return "inconclusive", current
+
+
+def _submit_activation_observed(run: Dict[str, Any]) -> bool:
+    if not run.get("actions"):
+        return False
+    action = run["actions"][-1]
+    focus = action.get("focusBefore", {})
+    return (
+        action.get("kind") == "key"
+        and action.get("key") in {"Enter", "Space"}
+        and _is_submit_focus_snapshot(focus)
+    )
+
+
+def _complete_if_verified(
+    run: Dict[str, Any],
+    observation: Dict[str, Any],
+    started: float,
+    browser: IsolatedKeyboardBrowser,
+    evidence_directory: Optional[Path],
+) -> bool:
+    if not observation["success"]["matched"] or not _submit_activation_observed(run):
+        return False
+    _persist_stopping_screenshot(run, browser, evidence_directory)
     _set_terminal_state(run, "COMPLETED", observation, started)
     return True
+
+
+def execute_contact_goal(
+    run: Dict[str, Any],
+    evidence_directory: Optional[Path] = None,
+    planner: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Execute the supported fixed or broken contact-form goal."""
+    with BROWSER_RUN_LOCK:
+        return _execute_contact_goal(run, evidence_directory, planner)
 
 
 def execute_fixed_goal(
@@ -323,16 +567,20 @@ def execute_fixed_goal(
     evidence_directory: Optional[Path] = None,
     planner: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Execute one fixed-goal run and return the durable, redacted record."""
-    with BROWSER_RUN_LOCK:
-        return _execute_fixed_goal(run, evidence_directory, planner)
+    """Backward-compatible public entry point for the fixed contact form."""
+    if run.get("targetVersion") != "fixed":
+        raise ValueError("this lifecycle only supports the fixed contact-form goal")
+    return execute_contact_goal(run, evidence_directory, planner)
 
 
-def _execute_fixed_goal(
+def _execute_contact_goal(
     run: Dict[str, Any], evidence_directory: Optional[Path], planner: Optional[Any]
 ) -> Dict[str, Any]:
-    if run.get("goal") != SUPPORTED_GOAL or run.get("targetVersion") != "fixed":
-        raise ValueError("this lifecycle only supports the fixed contact-form goal")
+    if run.get("goal") != SUPPORTED_GOAL or run.get("targetVersion") not in {
+        "fixed",
+        "broken",
+    }:
+        raise ValueError("this lifecycle only supports the fixed or broken contact-form goal")
     started = time.monotonic()
     run["startedAt"] = utc_now()
     run["browserSession"]["isolation"] = "fresh"
@@ -363,6 +611,18 @@ def _execute_fixed_goal(
             raise BrowserError("browser navigated away from the controlled target")
 
         for _ in range(MAX_INTERACTIONS):
+            if run.get("targetVersion") == "broken" and _is_submit_focus(current):
+                barrier_status, current = _classify_broken_barrier(
+                    run,
+                    browser,
+                    current,
+                    started,
+                    evidence_directory,
+                    typed_values,
+                )
+                if barrier_status in {"blocked", "completed", "inconclusive"}:
+                    return run
+
             bounded_for_planner = {
                 "goal": run["goal"],
                 "successCondition": run["successCondition"],
@@ -397,32 +657,7 @@ def _execute_fixed_goal(
                 ):
                     return run
                 raise BrowserError("planner stopped without locally verified success")
-            before = current
-            try:
-                if action["kind"] == "key":
-                    browser.press_key(action["key"])
-                else:
-                    browser.type_text(action["text"])
-                    typed_values[action["field"]] = action["text"]
-            except BrowserActionError:
-                _append_action(run, action, before, "failed")
-                try:
-                    current = _redacted_observation(
-                        browser.observe(), run["targetUrl"], typed_values.values()
-                    )
-                    run["observations"].append(current)
-                except BrowserError:
-                    pass
-                raise
-            _append_action(run, action, before, "delivered")
-            current = _redacted_observation(
-                browser.observe(), run["targetUrl"], typed_values.values()
-            )
-            run["observations"].append(current)
-            if current["lifecycle"].get("offLoopbackRedirect") or current[
-                "lifecycle"
-            ].get("navigationRedirect"):
-                raise BrowserError("browser navigated away from the controlled target")
+            current = _settle_action(run, browser, action, current, typed_values)
             if _complete_if_verified(
                 run, current, started, browser, evidence_directory
             ):
@@ -463,7 +698,7 @@ def _execute_fixed_goal(
                     "status": "failed",
                     "profileRemoved": False,
                 }
-                if run.get("status") == "COMPLETED":
+                if run.get("status") in {"COMPLETED", "BLOCKED"}:
                     _set_terminal_state(
                         run, "INCONCLUSIVE", run["observations"][-1], started
                     )

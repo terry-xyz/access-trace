@@ -14,6 +14,7 @@ from access_trace.journey import (
     CodexPlanner,
     PlannerError,
     _complete_if_verified,
+    execute_contact_goal,
     execute_fixed_goal,
     redacted_observation,
 )
@@ -256,6 +257,385 @@ class AssessmentTargetTests(unittest.TestCase):
 
         stored = self.run_directory / (created["id"] + ".json")
         self.assertEqual(completed, json.loads(stored.read_text()))
+
+    def test_broken_contact_goal_classifies_a_repeatable_submit_barrier(self):
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+        )
+
+        status, blocked = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=10
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual("BLOCKED", blocked["status"])
+        self.assertEqual("verified", blocked["browserSession"]["cleanup"]["status"])
+        self.assertTrue(blocked["browserSession"]["cleanup"]["profileRemoved"])
+        self.assertIsNone(blocked["browserFailure"])
+        self.assertIsNone(blocked["agentFailure"])
+        self.assertEqual("Submit", blocked["stoppingPoint"]["focus"]["accessibleName"])
+        self.assertFalse(blocked["stoppingPoint"]["successMatched"])
+        self.assertEqual("Message sent", blocked["stoppingPoint"]["successCondition"])
+
+        submit_actions = [
+            action
+            for action in blocked["actions"]
+            if action["focusBefore"].get("stableId") == "submit"
+            and action["key"] in {"Enter", "Space"}
+        ]
+        self.assertEqual(
+            ["Enter", "Space"],
+            [action["key"] for action in submit_actions],
+        )
+        self.assertTrue(all(action["status"] == "delivered" for action in submit_actions))
+        self.assertEqual(1, len(blocked["recoveryEvidence"]))
+        self.assertEqual(
+            {"Tab", "Shift+Tab"},
+            {step["key"] for step in blocked["recoveryEvidence"][0]["actions"]},
+        )
+        self.assertTrue(blocked["recoveryEvidence"][0]["unchangedProgress"])
+        self.assertTrue(blocked["recoveryEvidence"][0]["sameSubmitFocus"])
+        self.assertTrue(blocked["recoveryEvidence"][0]["localFocusRecovery"])
+        self.assertFalse(blocked["recoveryEvidence"][0]["wholePageWrapped"])
+        self.assertEqual(len(blocked["actions"]) + 1, len(blocked["observations"]))
+        self.assertNotIn("Escape", [action.get("key") for action in blocked["actions"]])
+        self.assertEqual("submit", blocked["observations"][-1]["focus"]["stableId"])
+
+        screenshot = self.run_directory / blocked["stoppingScreenshotRef"]
+        self.assertTrue(screenshot.is_file())
+        self.assertTrue(screenshot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(blocked["interactionCount"], len(blocked["actions"]))
+        self.assertEqual(blocked, json.loads((self.run_directory / (created["id"] + ".json")).read_text()))
+
+        serialized = json.dumps(blocked)
+        self.assertNotIn("Avery Example", serialized)
+        self.assertNotIn("avery@example.test", serialized)
+        self.assertNotIn("A fictional message", serialized)
+
+    def test_page_wrap_and_generic_no_progress_do_not_become_blocked(self):
+        class WrappingBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+
+            def observe(self):
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    },
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                    },
+                }
+
+            def press_key(self, key):
+                return None
+
+            def close(self):
+                return None
+
+        class NoProgressPlanner:
+            def next_action(self, context):
+                return {"kind": "key", "key": "Tab"}
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", WrappingBrowser):
+            result = execute_contact_goal(
+                run,
+                self.run_directory,
+                planner=NoProgressPlanner(),
+            )
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertEqual([], result["recoveryEvidence"])
+        self.assertNotEqual("BLOCKED", result["status"])
+
+    def test_submit_recovery_that_wraps_the_page_is_not_a_barrier(self):
+        class WrapAroundSubmitBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.focus = "submit"
+
+            def observe(self):
+                if self.focus == "submit":
+                    focus = {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    }
+                else:
+                    focus = {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    }
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": focus,
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if key == "Shift+Tab":
+                    self.focus = "document"
+                elif key == "Tab":
+                    self.focus = "submit"
+
+            def close(self):
+                return None
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", WrapAroundSubmitBrowser
+        ):
+            result = execute_contact_goal(
+                run,
+                self.run_directory,
+                planner=mock.Mock(),
+            )
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertTrue(result["recoveryEvidence"][0]["wholePageWrapped"])
+
+    def test_unexpected_space_success_is_terminal_and_verified(self):
+        class SpaceSuccessBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.success = False
+
+            def observe(self):
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    },
+                    "controls": [
+                        {
+                            "role": "textbox",
+                            "accessibleName": "Message",
+                            "tag": "textarea",
+                            "stableId": "message",
+                            "focusable": True,
+                        },
+                        {
+                            "role": "button",
+                            "accessibleName": "Submit",
+                            "tag": "button",
+                            "stableId": "submit",
+                            "focusable": True,
+                        },
+                    ],
+                    "successMatched": self.success,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if key == "Space":
+                    self.success = True
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", SpaceSuccessBrowser
+        ):
+            result = execute_contact_goal(
+                run,
+                self.run_directory,
+                planner=mock.Mock(),
+            )
+
+        self.assertEqual("COMPLETED", result["status"])
+        self.assertEqual("Space", result["actions"][-1]["key"])
+        self.assertIsNotNone(result["stoppingPoint"])
+
+    def test_escapable_dialog_is_recovered_but_not_called_a_barrier(self):
+        class DialogBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.focus = "document"
+                self.dialog_open = False
+
+            def observe(self):
+                if self.focus == "submit":
+                    focus = {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    }
+                else:
+                    focus = {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    }
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": focus,
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": self.dialog_open,
+                        "popupObserved": False,
+                        "crashed": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if key == "Tab" and not self.dialog_open:
+                    self.focus = "submit" if self.focus == "document" else "document"
+                elif key == "Shift+Tab" and not self.dialog_open:
+                    self.focus = "submit" if self.focus == "document" else "document"
+                elif key in {"Enter", "Space"} and self.focus == "submit":
+                    self.dialog_open = True
+                elif key == "Escape":
+                    self.dialog_open = False
+
+            def close(self):
+                return None
+
+        class ReachSubmitPlanner:
+            def next_action(self, context):
+                return {"kind": "key", "key": "Tab"}
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", DialogBrowser):
+            result = execute_contact_goal(
+                run,
+                self.run_directory,
+                planner=ReachSubmitPlanner(),
+            )
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertNotEqual("BLOCKED", result["status"])
+        self.assertGreaterEqual(
+            [action["key"] for action in result["actions"]].count("Escape"), 1
+        )
+        self.assertIn("Tab", [action["key"] for action in result["actions"]])
+        self.assertIn("Shift+Tab", [action["key"] for action in result["actions"]])
+
+    def test_planner_timeout_does_not_become_blocked(self):
+        class StableBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+
+            def observe(self):
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    },
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                    },
+                }
+
+            def close(self):
+                return None
+
+        class TimeoutPlanner:
+            def next_action(self, context):
+                raise PlannerError("planner timed out")
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/broken",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", StableBrowser):
+            result = execute_contact_goal(
+                run,
+                self.run_directory,
+                planner=TimeoutPlanner(),
+            )
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertNotEqual("BLOCKED", result["status"])
+        self.assertEqual("planner-failure", result["agentFailure"]["kind"])
 
     def test_fixed_goal_without_evidence_directory_cannot_complete(self):
         run = create_run(

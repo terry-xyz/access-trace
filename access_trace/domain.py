@@ -224,6 +224,7 @@ def create_run(
         "actions": [],
         "observations": [observation],
         "warnings": [],
+        "recoveryEvidence": [],
         "stoppingPoint": None,
         "stoppingScreenshotRef": None,
         "agentFailure": None,
