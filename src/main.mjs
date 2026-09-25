@@ -3,7 +3,13 @@ import {
   validateAssessmentGoal,
   validateTargetUrl,
 } from "./assessment.mjs";
-import { GOAL_FOCUSED_SAMPLE, WHOLE_SITE_SAMPLE } from "./sample-report.mjs";
+import { buildSiteComparison } from "./comparison.mjs";
+import {
+  AGENT_UPDATED_GOAL_FOCUSED_SAMPLE,
+  AGENT_UPDATED_WHOLE_SITE_SAMPLE,
+  GOAL_FOCUSED_SAMPLE,
+  WHOLE_SITE_SAMPLE,
+} from "./sample-report.mjs";
 
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
@@ -16,6 +22,9 @@ const scopeChip = document.querySelector("#scope-chip");
 const submitLabel = document.querySelector("#submit-label");
 const report = document.querySelector("#sample-report");
 const reportHeading = document.querySelector("#report-heading");
+const comparisonButton = document.querySelector("#view-comparison");
+const comparisonSection = document.querySelector("#sample-comparison");
+const comparisonHeading = document.querySelector("#comparison-heading");
 let recordUrl;
 
 /** formatScopeLabel gives a stable presentation label to the stored assessment-scope value. */
@@ -43,6 +52,7 @@ function updateScopePreview() {
     : "View goal-focused sample report";
   setError(goalInput, goalError, "");
   report.hidden = true;
+  comparisonSection.hidden = true;
 }
 
 /** renderOrderedActions shows the bounded keyboard action sequence from the representative sample. */
@@ -280,36 +290,35 @@ function updateReportContext(context) {
 }
 
 /** showSampleReport reveals the labeled sample after validation and never starts a browser run. */
-function showSampleReport(goal) {
-  const normalizedUrl = validateTargetUrl(targetInput.value).normalizedUrl;
-  const simulationMode = simulationInput.checked;
-  const scope = getAssessmentScope(goal);
-  const sample = scope === "whole-site"
+function showSampleReport(configuration) {
+  const goal = configuration.goal;
+  const sample = configuration.scope === "whole-site"
     ? WHOLE_SITE_SAMPLE
     : { ...GOAL_FOCUSED_SAMPLE, goal };
   const context = {
-    targetUrl: normalizedUrl,
+    targetUrl: configuration.targetUrl,
     assessmentScope: sample.scope,
     goal: sample.goal,
-    simulationMode,
+    simulationMode: configuration.simulationMode,
   };
 
   updateReportContext({
-    target: normalizedUrl,
-    simulationMode: simulationMode ? "On" : "Off",
+    target: configuration.targetUrl,
+    simulationMode: configuration.simulationMode ? "On" : "Off",
   });
 
   renderReportSample(sample);
   prepareSampleRecord(sample, context);
+  comparisonSection.hidden = true;
   report.hidden = false;
   reportHeading.focus({ preventScroll: true });
   reportHeading.scrollIntoView({ behavior: "auto", block: "start" });
 }
 
-/** handleAssessmentSubmit validates the target and goal before showing the matching sample report. */
-function handleAssessmentSubmit(event) {
-  event.preventDefault();
+/** validateCurrentConfiguration applies the same target and goal boundary to reports and comparisons. */
+function validateCurrentConfiguration() {
   report.hidden = true;
+  comparisonSection.hidden = true;
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
 
@@ -317,17 +326,339 @@ function handleAssessmentSubmit(event) {
   if (!validation.valid) {
     setError(targetInput, targetError, validation.message);
     targetInput.focus();
-    return;
+    return null;
   }
 
   const goalValidation = validateAssessmentGoal(goalInput.value);
   if (!goalValidation.valid) {
     setError(goalInput, goalError, goalValidation.message);
     goalInput.focus();
-    return;
+    return null;
   }
 
-  showSampleReport(goalValidation.goal);
+  return {
+    targetUrl: validation.normalizedUrl,
+    scope: goalValidation.scope,
+    goal: goalValidation.goal || null,
+    simulationMode: simulationInput.checked,
+  };
+}
+
+/** handleAssessmentSubmit validates the target and goal before showing the matching sample report. */
+function handleAssessmentSubmit(event) {
+  event.preventDefault();
+  const configuration = validateCurrentConfiguration();
+  if (configuration) showSampleReport(configuration);
+}
+
+/** getComparisonSettings records every shared condition used for the two Low-consistency samples. */
+function getComparisonSettings(configuration) {
+  return {
+    targetUrl: configuration.targetUrl,
+    scope: configuration.scope,
+    goal: configuration.goal,
+    simulationMode: configuration.simulationMode,
+    interactionProfile: "Keyboard only",
+    browserConditions: "Same controlled local browser conditions",
+    consistencyLevel: "Low",
+    runsPerVersion: 1,
+  };
+}
+
+/** createComparisonSamples gives each version the exact same configured assessment context. */
+function createComparisonSamples(configuration, settings) {
+  const samples = configuration.scope === "whole-site"
+    ? [WHOLE_SITE_SAMPLE, AGENT_UPDATED_WHOLE_SITE_SAMPLE]
+    : [GOAL_FOCUSED_SAMPLE, AGENT_UPDATED_GOAL_FOCUSED_SAMPLE];
+
+  return samples.map((sample) => ({
+    ...sample,
+    goal: configuration.goal,
+    assessmentSettings: settings,
+  }));
+}
+
+/** handleComparisonRequest shows a validated comparison and moves focus to its result heading. */
+function handleComparisonRequest() {
+  const configuration = validateCurrentConfiguration();
+  if (!configuration) return;
+
+  const settings = getComparisonSettings(configuration);
+  const [original, updated] = createComparisonSamples(configuration, settings);
+  const comparison = buildSiteComparison(original, updated);
+  renderComparison(comparison);
+  report.hidden = true;
+  comparisonSection.hidden = false;
+  comparisonHeading.focus({ preventScroll: true });
+  comparisonHeading.scrollIntoView({ behavior: "auto", block: "start" });
+}
+
+/** renderComparison puts score, metric, and coverage changes ahead of its supporting reports. */
+function renderComparison(comparison) {
+  const status = document.querySelector("#comparison-status");
+  status.textContent = comparison.outcome.label;
+  status.dataset.outcome = comparison.outcome.status;
+  document.querySelector("#comparison-summary").textContent = comparison.outcome.summary;
+
+  document.querySelector("#comparison-original-score").textContent = formatScore(comparison.score.original);
+  document.querySelector("#comparison-original-count").textContent = `${comparison.score.original.passed} passed / ${comparison.score.original.attempted} attempted`;
+  document.querySelector("#comparison-updated-score").textContent = formatScore(comparison.score.updated);
+  document.querySelector("#comparison-updated-count").textContent = `${comparison.score.updated.passed} passed / ${comparison.score.updated.attempted} attempted`;
+  document.querySelector("#comparison-score-delta").textContent = formatSigned(comparison.score.deltaPercentagePoints);
+  document.querySelector("#comparison-original-coverage").textContent = comparison.coverage.original.label;
+  document.querySelector("#comparison-updated-coverage").textContent = comparison.coverage.updated.label;
+  document.querySelector("#comparison-coverage-delta").textContent = formatCoverageChange(comparison.coverage);
+
+  renderComparisonMetrics(comparison.metrics);
+  renderComparisonSettings(comparison.settings);
+  renderComparisonReport(
+    document.querySelector("#comparison-original-report-content"),
+    comparison.original,
+    "original",
+  );
+  renderComparisonReport(
+    document.querySelector("#comparison-updated-report-content"),
+    comparison.updated,
+    "updated",
+  );
+}
+
+/** formatScore keeps a missing score explicit instead of presenting it as zero. */
+function formatScore(score) {
+  return score.percentage === null ? "Unavailable" : `${score.percentage}%`;
+}
+
+/** formatSigned makes direction visible in score, coverage, and metric changes. */
+function formatSigned(value) {
+  if (value === null) return "Not comparable";
+  if (value === 0) return "No change";
+  return `${value > 0 ? "+" : ""}${value}`;
+}
+
+/** formatCoverageChange keeps both coverage counts visible alongside their percentage-point change. */
+function formatCoverageChange(coverage) {
+  if (!coverage.comparable) return "Coverage change unavailable";
+  const changed = coverage.checkedDelta === 0 && coverage.totalDelta === 0
+    ? "No change in checked or declared coverage"
+    : `${formatSigned(coverage.checkedDelta)} checked; ${formatSigned(coverage.totalDelta)} declared`;
+  return `${changed}; ${formatSigned(coverage.percentagePointDelta)} percentage points`;
+}
+
+/** renderComparisonMetrics exposes every metric row and labels its direction in words. */
+function renderComparisonMetrics(metrics) {
+  const body = document.querySelector("#comparison-metrics-body");
+  const fragment = document.createDocumentFragment();
+
+  for (const metric of metrics) {
+    const row = document.createElement("tr");
+    const name = document.createElement("th");
+    name.scope = "row";
+    name.textContent = metric.name;
+    const original = document.createElement("td");
+    original.textContent = formatMetricValue(metric.original);
+    const updated = document.createElement("td");
+    updated.textContent = formatMetricValue(metric.updated);
+    const change = document.createElement("td");
+    change.textContent = metric.percentagePointDelta === null
+      ? "Not comparable"
+      : `${formatSigned(metric.passedDelta)} checks; ${formatSigned(metric.percentagePointDelta)} pp`;
+    const direction = document.createElement("td");
+    const directionLabel = document.createElement("span");
+    directionLabel.className = "metric-direction";
+    directionLabel.dataset.direction = metric.direction;
+    directionLabel.textContent = metric.direction === "unavailable"
+      ? "Unavailable"
+      : metric.direction === "unchanged"
+        ? "No change"
+        : metric.direction === "improved"
+          ? "Improved"
+          : "Regression";
+    direction.append(directionLabel);
+    row.append(name, original, updated, change, direction);
+    fragment.append(row);
+  }
+
+  body.replaceChildren(fragment);
+}
+
+/** formatMetricValue shows passed and attempted counts as well as the pass rate. */
+function formatMetricValue(metric) {
+  return metric
+    ? `${metric.passed} / ${metric.attempted} (${metric.percentage ?? "—"}%)`
+    : "Not recorded";
+}
+
+/** renderComparisonSettings makes the shared setup and fixed Low run count explicit. */
+function renderComparisonSettings(settings) {
+  const list = document.querySelector("#comparison-settings");
+  const values = [
+    ["Target", settings.targetUrl],
+    ["Assessment scope", formatScopeLabel(settings.scope)],
+    ["Goal", settings.goal ?? "None (whole-site)"],
+    ["Simulation mode", settings.simulationMode ? "On" : "Off"],
+    ["Interaction profile", settings.interactionProfile],
+    ["Browser conditions", settings.browserConditions],
+    ["Consistency", `${settings.consistencyLevel} — ${settings.runsPerVersion} assessment per version`],
+  ];
+  const fragment = document.createDocumentFragment();
+
+  for (const [label, value] of values) {
+    const item = document.createElement("div");
+    item.className = "comparison-setting";
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    item.append(term, description);
+    fragment.append(item);
+  }
+
+  list.replaceChildren(fragment);
+}
+
+/** renderComparisonReport keeps all report facts and evidence available inside each version's details. */
+function renderComparisonReport(container, sample, version) {
+  const fragment = document.createDocumentFragment();
+  const idPrefix = `comparison-${version}-`;
+  const evidenceIds = getComparisonEvidenceIds(sample, idPrefix);
+
+  appendComparisonHeading(fragment, "Report summary");
+  appendComparisonParagraph(fragment, "Run", sample.runId);
+  appendComparisonParagraph(fragment, "Terminal state", sample.terminalStatus);
+  appendComparisonParagraph(fragment, "Assessment scope", formatScopeLabel(sample.scope));
+  appendComparisonParagraph(fragment, "Target", sample.assessmentSettings.targetUrl);
+  appendComparisonParagraph(fragment, "Goal", sample.assessmentSettings.goal ?? "None supplied");
+  appendComparisonParagraph(fragment, "Simulation mode", sample.assessmentSettings.simulationMode ? "On" : "Off");
+  appendComparisonParagraph(fragment, "Coverage", sample.coverage);
+  appendComparisonParagraph(fragment, "Score", `${sample.score.label} (${sample.score.percentage}%)`);
+  appendComparisonParagraph(fragment, "Outcome", sample.outcomeTitle);
+
+  appendComparisonHeading(fragment, "Named metrics");
+  const metricsList = document.createElement("ul");
+  for (const metric of sample.metrics) {
+    const item = document.createElement("li");
+    item.textContent = `${metric.name}: ${metric.passed} of ${metric.attempted} checks passed`;
+    metricsList.append(item);
+  }
+  fragment.append(metricsList);
+
+  appendComparisonHeading(fragment, "Explanation and proposed fix");
+  appendComparisonParagraph(fragment, sample.explanationTitle, sample.explanation);
+  appendComparisonParagraph(fragment, "Confidence", `${sample.confidence} — ${sample.confidenceContext}`);
+  if (sample.proposedFix) {
+    appendComparisonParagraph(fragment, sample.proposedFixTitle, sample.proposedFix);
+  } else {
+    appendComparisonParagraph(fragment, "Proposed fix", "No evidence-supported proposed fix is available.");
+  }
+  const reference = document.createElement("p");
+  reference.className = "comparison-report-evidence";
+  reference.append(document.createTextNode("WCAG context: "));
+  const referenceLink = document.createElement("a");
+  referenceLink.href = sample.wcagReference.url;
+  referenceLink.target = "_blank";
+  referenceLink.rel = "noreferrer";
+  referenceLink.textContent = sample.wcagReference.label;
+  reference.append(referenceLink, document.createTextNode(". This is not a conformance result."));
+  fragment.append(reference);
+
+  appendComparisonHeading(fragment, "Ordered action evidence");
+  const actions = document.createElement("ol");
+  for (const action of sample.orderedActions) {
+    const item = document.createElement("li");
+    item.id = evidenceIds.get(action.id);
+    item.textContent = `${action.id} · ${action.key} · ${action.target}: ${action.result} (${action.outcome})`;
+    actions.append(item);
+  }
+  fragment.append(actions);
+
+  appendComparisonHeading(fragment, "Focus observations");
+  const focus = document.createElement("ul");
+  for (const observation of sample.focusObservations) {
+    const item = document.createElement("li");
+    item.id = evidenceIds.get(observation.id);
+    item.textContent = `${observation.id} · ${observation.target} (${observation.role}): ${observation.indicator}`;
+    focus.append(item);
+  }
+  fragment.append(focus);
+
+  appendComparisonHeading(fragment, "Screenshot reference");
+  const screenshot = document.createElement("figure");
+  screenshot.id = evidenceIds.get(sample.screenshot.id);
+  const caption = document.createElement("figcaption");
+  caption.textContent = `${sample.screenshot.id} · ${sample.screenshot.title} · ${sample.screenshot.description}`;
+  screenshot.append(caption);
+  fragment.append(screenshot);
+
+  appendComparisonHeading(fragment, "Evidence references");
+  const references = document.createElement("ul");
+  for (const evidenceReference of sample.evidenceReferences) {
+    const item = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = `#${evidenceIds.get(evidenceReference.id)}`;
+    link.textContent = evidenceReference.id;
+    item.append(link, document.createTextNode(` ${evidenceReference.label}`));
+    references.append(item);
+  }
+  fragment.append(references);
+
+  appendComparisonHeading(fragment, "Recovery evidence");
+  appendComparisonList(fragment, sample.recoveryEvidence, "text", evidenceIds);
+  appendComparisonHeading(fragment, "Agent failures");
+  appendComparisonList(fragment, sample.agentFailures, null);
+  appendComparisonHeading(fragment, "Warnings");
+  appendComparisonList(fragment, sample.warnings, null);
+
+  container.replaceChildren(fragment);
+}
+
+/** getComparisonEvidenceIds gives each embedded report unique in-page anchors. */
+function getComparisonEvidenceIds(sample, prefix) {
+  const ids = new Map();
+  const records = [
+    ...sample.orderedActions,
+    ...sample.focusObservations,
+    ...sample.recoveryEvidence,
+    sample.screenshot,
+  ];
+  for (const record of records) ids.set(record.id, `${prefix}${record.id}`);
+  return ids;
+}
+
+/** appendComparisonHeading keeps each evidence section's name visible to keyboard and screen-reader users. */
+function appendComparisonHeading(parent, text) {
+  const heading = document.createElement("h4");
+  heading.textContent = text;
+  parent.append(heading);
+}
+
+/** appendComparisonParagraph creates text-only report facts without injecting sample HTML. */
+function appendComparisonParagraph(parent, label, value) {
+  const paragraph = document.createElement("p");
+  const strong = document.createElement("strong");
+  strong.textContent = `${label}: `;
+  paragraph.append(strong, document.createTextNode(value));
+  parent.append(paragraph);
+}
+
+/** appendComparisonList preserves recovery and warning records with their stable evidence anchors. */
+function appendComparisonList(parent, items, textKey, evidenceIds = new Map()) {
+  const list = document.createElement("ul");
+  if (items.length === 0) {
+    const empty = document.createElement("li");
+    empty.textContent = "None recorded in this representative sample.";
+    list.append(empty);
+  }
+  for (const entry of items) {
+    const item = document.createElement("li");
+    if (textKey) {
+      item.id = evidenceIds.get(entry.id);
+      item.textContent = `${entry.id}: ${entry[textKey]}`;
+    } else {
+      item.textContent = entry;
+    }
+    list.append(item);
+  }
+  parent.append(list);
 }
 
 /** renderReportSample keeps every visible fact and evidence item sourced from the chosen sample record. */
@@ -344,14 +675,17 @@ function renderReportSample(sample) {
 function clearTargetValidationError() {
   setError(targetInput, targetError, "");
   report.hidden = true;
+  comparisonSection.hidden = true;
 }
 
 /** clearStaleSampleReport prevents an old preview from appearing to describe changed simulation settings. */
 function clearStaleSampleReport() {
   report.hidden = true;
+  comparisonSection.hidden = true;
 }
 
 form.addEventListener("submit", handleAssessmentSubmit);
+comparisonButton.addEventListener("click", handleComparisonRequest);
 targetInput.addEventListener("input", clearTargetValidationError);
 goalInput.addEventListener("input", updateScopePreview);
 simulationInput.addEventListener("change", clearStaleSampleReport);

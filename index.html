@@ -100,6 +100,7 @@
             <button class="primary-button" type="submit">
               <span id="submit-label">View whole-site sample report</span> <span aria-hidden="true">↗</span>
             </button>
+            <button id="view-comparison" class="secondary-button" type="button">View Low-consistency comparison sample</button>
             <p class="action-note">Preview only. No browser starts and no live assessment is performed.</p>
           </div>
         </form>
@@ -271,6 +272,80 @@
         </section>
 
         <p class="limitation-banner"><span aria-hidden="true">i</span> This result is only keyboard-assessment evidence for the configured local site. It is not a full accessibility or WCAG conformance assessment.</p>
+      </section>
+
+      <section id="sample-comparison" class="report-section comparison-section" aria-labelledby="comparison-heading" hidden>
+        <div class="sample-notice" role="status">
+          <span class="notice-icon" aria-hidden="true">S</span>
+          <div>
+            <strong>Representative sample — not live assessment</strong>
+            <p>Each version has one representative Low-consistency result. The reports share the setup shown below; these sample actions and findings are not evidence about a configured goal.</p>
+          </div>
+        </div>
+
+        <div class="report-heading-row">
+          <div>
+            <p class="step-label">03 <span aria-hidden="true">/</span> ORIGINAL AND UPDATED</p>
+            <h2 id="comparison-heading" tabindex="-1">Compare the original and agent-updated site</h2>
+            <p class="report-subtitle">Compare the displayed scores, metric changes, coverage, and evidence under the same assessment settings.</p>
+          </div>
+        </div>
+
+        <section class="outcome-card comparison-outcome" aria-labelledby="comparison-result-heading">
+          <div class="report-scope-lead">
+            <span class="card-kicker">COMPARISON RESULT</span>
+            <strong id="comparison-status"></strong>
+          </div>
+          <h3 id="comparison-result-heading" class="visually-hidden">Comparison result</h3>
+          <p id="comparison-summary" class="comparison-summary"></p>
+          <div class="comparison-score-grid" aria-label="Original and updated overall scores">
+            <div><span>Original score</span><strong id="comparison-original-score"></strong><small id="comparison-original-count"></small></div>
+            <div><span>Updated score</span><strong id="comparison-updated-score"></strong><small id="comparison-updated-count"></small></div>
+            <div><span>Score change</span><strong id="comparison-score-delta"></strong><small>percentage points</small></div>
+          </div>
+          <div class="comparison-coverage">
+            <strong>Coverage change</strong>
+            <p><span id="comparison-original-coverage"></span> <span aria-hidden="true">→</span> <span id="comparison-updated-coverage"></span></p>
+            <p id="comparison-coverage-delta"></p>
+          </div>
+        </section>
+
+        <section class="report-panel comparison-metrics-panel" aria-labelledby="comparison-metrics-heading">
+          <p class="card-kicker">METRIC CHANGES</p>
+          <h3 id="comparison-metrics-heading">Every named metric, including regressions</h3>
+          <div class="table-scroll">
+            <table>
+              <caption>Original and updated website check counts and pass-rate changes</caption>
+              <thead><tr><th scope="col">Metric</th><th scope="col">Original</th><th scope="col">Updated</th><th scope="col">Change</th><th scope="col">Direction</th></tr></thead>
+              <tbody id="comparison-metrics-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="report-panel comparison-settings-panel" aria-labelledby="comparison-settings-heading">
+          <p class="card-kicker">IDENTICAL SETTINGS</p>
+          <h3 id="comparison-settings-heading">Shared assessment context</h3>
+          <dl id="comparison-settings" class="comparison-settings-grid"></dl>
+        </section>
+
+        <section class="comparison-reports" aria-labelledby="comparison-reports-heading">
+          <div class="evidence-heading-row">
+            <div>
+              <p class="step-label">SUPPORTING REPORTS</p>
+              <h3 id="comparison-reports-heading">Inspect both reports and their evidence</h3>
+            </div>
+          </div>
+          <details id="comparison-original-report" class="comparison-report-details">
+            <summary>Original site report and evidence</summary>
+            <div id="comparison-original-report-content" class="comparison-report-content"></div>
+          </details>
+          <details id="comparison-updated-report" class="comparison-report-details">
+            <summary>Agent-updated site report and evidence</summary>
+            <div id="comparison-updated-report-content" class="comparison-report-content"></div>
+          </details>
+        </section>
+
+        <p class="limitation-banner"><span aria-hidden="true">i</span> This representative comparison is sample keyboard-assessment evidence for the configured local site. It is not a live assessment, a full accessibility assessment, or a WCAG conformance result.</p>
       </section>
 
       <footer class="site-footer">
