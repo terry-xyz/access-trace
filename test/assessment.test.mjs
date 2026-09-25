@@ -138,6 +138,7 @@ function unsupportedAssessmentCriteriaAreNotReinterpreted() {
     { goal: "Use Tab to focus the contact form and assess its security", security: true },
     { goal: "Use Tab to check whether the form's error messages are clear", security: false },
     { goal: "Use the keyboard to assess whether the form is easy to understand", security: false },
+    { goal: "Open the policy", security: false },
     { goal: "Review the contact form's error messages for clarity", security: false },
   ];
 

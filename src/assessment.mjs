@@ -9,9 +9,11 @@ const REMOTE_TARGET_PATTERN = /\b(?:remote|external|off[- ]site|off[- ]target|th
 const OTHER_INPUT_MODE_PATTERN = /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i;
 const SECURITY_RESULT_PATTERN = /\b(?:securely|safely|privately|confidentially|encrypt\w*|vulnerab\w*|insecure\w*)\b|\b(?:is|are|be|remains?|becomes?|seems?|stays?)\s+(?:not\s+)?(?:secure|safe|private|confidential|encrypted|vulnerable)\b/i;
 const SECURITY_TOPIC_PATTERN = /\b(?:security|privacy)\b/i;
-const SECURITY_LABEL_MODIFIERS = "policy|settings?";
-const SECURITY_LABEL_CONTROL_WORDS = `page|menu|link|button|field|control|element|dialog|tab|${SECURITY_LABEL_MODIFIERS}`;
-const SITE_CONTROL_WORDS = `site|website|form|navigation|${SECURITY_LABEL_CONTROL_WORDS}`;
+const CONTROL_SETTINGS_WORD = "settings?";
+const COMMON_CONTROL_WORDS = `page|menu|link|button|field|control|element|dialog|${CONTROL_SETTINGS_WORD}`;
+const SECURITY_LABEL_MODIFIERS = `policy|${CONTROL_SETTINGS_WORD}`;
+const SECURITY_LABEL_CONTROL_WORDS = `${COMMON_CONTROL_WORDS}|tab|policy`;
+const SITE_CONTROL_WORDS = `site|website|form|navigation|${COMMON_CONTROL_WORDS}`;
 const SITE_CONTROL_PATTERN = new RegExp(`\\b(?:${SITE_CONTROL_WORDS})\\b`, "i");
 const SECURITY_CONTROL_LABEL_PATTERN = new RegExp(
   `\\b(?:security|privacy)(?:\\s+(?:${SECURITY_LABEL_MODIFIERS}))?\\s+(?:${SECURITY_LABEL_CONTROL_WORDS})\\b`,
