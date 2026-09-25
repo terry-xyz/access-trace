@@ -90,15 +90,18 @@ function unsupportedGoalsAreExplained() {
 }
 test("remote and non-keyboard goals are rejected with an explicit scope explanation", unsupportedGoalsAreExplained);
 
-/** visualOnlyGoalsAreExplained rejects checks outside the keyboard evidence boundary. */
-function visualOnlyGoalsAreExplained() {
-  const result = validateAssessmentGoal("Check the local demo's color contrast");
-  assert.equal(result.valid, false);
-  assert.equal(result.reason, "unsupported");
+/** unsupportedContentGoalsAreExplained rejects non-keyboard checks with accurate category wording. */
+function unsupportedContentGoalsAreExplained() {
+  for (const goal of ["Check the local demo's color contrast", "Check the local demo's alt text"]) {
+    const result = validateAssessmentGoal(goal);
+    assert.equal(result.valid, false, `${goal} should be rejected`);
+    assert.equal(result.reason, "unsupported");
   assert.match(result.message, /keyboard interaction/i);
-  assert.match(result.message, /color contrast/i);
+  assert.match(result.message, /non-keyboard criteria/i);
+  assert.match(result.message, /alternative text/i);
+  }
 }
-test("visual-only accessibility goals are rejected with a keyboard-scope explanation", visualOnlyGoalsAreExplained);
+test("non-keyboard accessibility goals are rejected with accurate scope wording", unsupportedContentGoalsAreExplained);
 
 /** unsafeGoalsAreExplained rejects guardrail overrides and arbitrary code execution. */
 function unsafeGoalsAreExplained() {
@@ -294,6 +297,7 @@ function goalSetupAndReportExposeScope() {
   assert.ok(reportMarkup.includes("Representative sample — not live assessment"));
   assert.ok(reportMarkup.includes("may not match the supplied goal"));
   assert.ok(reportMarkup.includes("Remote URLs, other interaction modes"));
+  assert.ok(reportMarkup.includes("non-keyboard criteria such as color contrast and alternative text"));
   assert.ok(reportMarkup.includes("requests to override safeguards or run code are rejected"));
   assert.ok(mainSource.includes("validateAssessmentGoal(goalInput.value)"));
   assert.ok(mainSource.includes("{ ...GOAL_FOCUSED_SAMPLE, goal }"));

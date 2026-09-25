@@ -14,7 +14,7 @@ const UNSUPPORTED_GOAL_PATTERNS = [
 ];
 
 const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed.";
-const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview only covers keyboard interaction with the controlled local demo. It cannot assess remote sites, other interaction modes, visual-only checks such as color contrast, or overall conformance.";
+const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview only covers keyboard interaction with the controlled local demo. It cannot assess remote sites, other interaction modes, non-keyboard criteria such as color contrast or alternative text, or overall conformance.";
 
 /** validateTargetUrl accepts only the normalized controlled endpoint so other loopback services remain out of scope. */
 export function validateTargetUrl(value) {
