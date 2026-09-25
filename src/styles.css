@@ -39,7 +39,7 @@ body {
 a { color: var(--blue-dark); text-decoration-thickness: 1px; text-underline-offset: 0.2em; }
 a:hover { color: #111f69; text-decoration-thickness: 2px; }
 
-button, input, textarea { font: inherit; }
+button, input, select, textarea { font: inherit; }
 
 :focus-visible {
   outline: 3px solid #142c8c;

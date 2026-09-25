@@ -11,6 +11,26 @@ const COMPARISON_SETTING_FIELDS = [
   "runsPerVersion",
 ];
 
+const TERMINAL_STATUS_LABELS = Object.freeze({
+  COMPLETED: "Completed",
+  BLOCKED: "Blocked",
+  INCONCLUSIVE: "Inconclusive",
+  AGENT_FAILED: "Agent failed",
+});
+
+/** formatTerminalStatus maps internal state tokens to a constrained human-readable vocabulary. */
+export function formatTerminalStatus(status) {
+  return Object.hasOwn(TERMINAL_STATUS_LABELS, status)
+    ? TERMINAL_STATUS_LABELS[status]
+    : "Unknown";
+}
+
+/** formatCount keeps visible run and assessment counts grammatically correct. */
+export function formatCount(count, unit) {
+  if (!Number.isInteger(count) || count < 0) return `an unknown number of ${unit}s`;
+  return `${count} ${unit}${count === 1 ? "" : "s"}`;
+}
+
 const EVIDENCE_COLLECTION_DESCRIPTORS = [
   {
     kind: "action",
@@ -113,36 +133,10 @@ function buildSingleSiteComparison(original, updated) {
     ...(!hasSupportedConsistency(original.assessmentSettings)
       ? ["The comparison consistency setting and run count are not a supported pair."]
       : []),
-    ...(!reportMatchesSettings(original)
-      ? ["The original report does not match its declared assessment settings."]
-      : []),
-    ...(!reportMatchesSettings(updated)
-      ? ["The updated report does not match its declared assessment settings."]
-      : []),
-    ...(original.terminalStatus !== "COMPLETED"
-      ? [`The original assessment is ${original.terminalStatus.toLowerCase()}.`]
-      : []),
-    ...(updated.terminalStatus !== "COMPLETED"
-      ? [`The updated assessment is ${updated.terminalStatus.toLowerCase()}.`]
-      : []),
+    ...collectReportIntegrityProblems(original, "original"),
+    ...collectReportIntegrityProblems(updated, "updated"),
     ...(!metricNamesMatch ? ["The versions do not contain the same named metrics."] : []),
     ...(!everyMetricComparable ? ["At least one named metric has insufficient check data to compare."] : []),
-    ...(!coverage.comparable ? ["Comparable coverage counts are unavailable."] : []),
-    ...(!metricsAreInternallyConsistent(original)
-      ? ["The original metric totals do not match its reported score counts."]
-      : []),
-    ...(!metricsAreInternallyConsistent(updated)
-      ? ["The updated metric totals do not match its reported score counts."]
-      : []),
-    ...(!reportScoreMatchesCounts(original)
-      ? ["The original score does not match its reported check counts."]
-      : []),
-    ...(!reportScoreMatchesCounts(updated)
-      ? ["The updated score does not match its reported check counts."]
-      : []),
-    ...(originalScore.percentage === null || updatedScore.percentage === null
-      ? ["At least one assessment has no score to compare."]
-      : []),
   ];
   const outcome = chooseOutcome({
     integrityProblems,
@@ -257,7 +251,7 @@ function collectRepeatedIntegrityProblems({
       ? ["The original and updated versions have different numbers of runs."]
       : []),
     ...(settings.runsPerVersion !== originalRuns.length || settings.runsPerVersion !== updatedRuns.length
-      ? [`The selected ${settings.consistencyLevel ?? "consistency"} level expects ${settings.runsPerVersion ?? "a declared number of"} runs per version, but the reports do not match.`]
+      ? [`The selected ${settings.consistencyLevel ?? "consistency"} level expects ${formatCount(settings.runsPerVersion, "run")} per version, but the reports do not match.`]
       : []),
   ];
   const firstMetrics = allRuns[0]?.metrics;
@@ -267,28 +261,10 @@ function collectRepeatedIntegrityProblems({
   if (metrics.length === 0 || metrics.some(({ direction }) => direction === "unavailable")) {
     problems.push("At least one named metric has insufficient repeated-run data to compare.");
   }
-  for (const [index, report] of allRuns.entries()) {
-    const version = index < originalRuns.length ? "Original" : "Updated";
-    const runNumber = index < originalRuns.length ? index + 1 : index - originalRuns.length + 1;
-    if (!reportMatchesSettings(report)) {
-      problems.push(`The ${version.toLowerCase()} run ${runNumber} does not match its declared assessment settings.`);
-    }
-    if (report.terminalStatus !== "COMPLETED") {
-      problems.push(`The ${version.toLowerCase()} run ${runNumber} is ${String(report.terminalStatus ?? "unknown").toLowerCase()}.`);
-    }
-    if (!metricsAreInternallyConsistent(report)) {
-      problems.push(`The ${version.toLowerCase()} run ${runNumber} metric totals do not match its reported score counts.`);
-    }
-    if (!reportScoreMatchesCounts(report)) {
-      problems.push(`The ${version.toLowerCase()} run ${runNumber} score does not match its reported check counts.`);
-    }
-    if (getReportScore(report).percentage === null) {
-      problems.push(`The ${version.toLowerCase()} run ${runNumber} has no score to compare.`);
-    }
-  }
-  if (allRuns.some((report) => !isValidCoverage(report.coverageStats))) {
-    problems.push("At least one run has no valid coverage counts.");
-  }
+  problems.push(
+    ...originalRuns.flatMap((report, index) => collectReportIntegrityProblems(report, "original", index + 1)),
+    ...updatedRuns.flatMap((report, index) => collectReportIntegrityProblems(report, "updated", index + 1)),
+  );
   return [...new Set(problems)];
 }
 
@@ -383,8 +359,8 @@ function aggregateCoverage(originalRuns, updatedRuns) {
     )));
     return {
       label: measured.length === reports.length
-        ? `Average ${formatAverage(checked)} of ${formatAverage(total)} declared checks across ${reports.length} runs`
-        : `Coverage recorded for ${measured.length} of ${reports.length} runs`,
+        ? `Average ${formatAverage(checked)} of ${formatAverage(total)} declared checks across ${formatCount(reports.length, "run")}`
+        : `Coverage recorded for ${measured.length} of ${formatCount(reports.length, "run")}`,
       checked,
       total,
       percentage: measured.length === reports.length ? percentageValue : null,
@@ -497,6 +473,33 @@ function reportMatchesSettings(report) {
     && report.target === settings.targetUrl
     && report.scope === settings.scope
     && (report.goal ?? null) === settings.goal;
+}
+
+/** collectReportIntegrityProblems applies the same per-report trust checks to both comparison modes. */
+function collectReportIntegrityProblems(report, version, runNumber) {
+  const reportName = runNumber === undefined
+    ? `${version} report`
+    : `${version} run ${runNumber}`;
+  const problems = [];
+  if (!reportMatchesSettings(report)) {
+    problems.push(`The ${reportName} does not match its declared assessment settings.`);
+  }
+  if (report.terminalStatus !== "COMPLETED") {
+    problems.push(`The ${reportName} is ${formatTerminalStatus(report.terminalStatus).toLowerCase()}.`);
+  }
+  if (!metricsAreInternallyConsistent(report)) {
+    problems.push(`The ${reportName} metric totals do not match its reported score counts.`);
+  }
+  if (!reportScoreMatchesCounts(report)) {
+    problems.push(`The ${reportName} score does not match its reported check counts.`);
+  }
+  if (getReportScore(report).percentage === null) {
+    problems.push(`The ${reportName} has no score to compare.`);
+  }
+  if (!isValidCoverage(report.coverageStats)) {
+    problems.push(`The ${reportName} has no valid coverage counts.`);
+  }
+  return problems;
 }
 
 /** compareMetrics keeps every named measurement and its direction in the comparison result. */

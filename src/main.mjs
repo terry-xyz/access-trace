@@ -6,6 +6,8 @@ import {
 import {
   CONSISTENCY_RUN_COUNTS,
   buildSiteComparison,
+  formatCount,
+  formatTerminalStatus,
 } from "./comparison.mjs";
 import {
   AGENT_UPDATED_GOAL_FOCUSED_SAMPLE,
@@ -519,9 +521,9 @@ function formatScore(score) {
 /** formatScoreCounts distinguishes pooled check totals from the number of scored runs. */
 function formatScoreCounts(score) {
   if (score.passed === null || score.attempted === null) {
-    return `${score.scoredRuns} of ${score.totalRuns} runs scored`;
+    return `${score.scoredRuns} of ${formatCount(score.totalRuns, "run")} scored`;
   }
-  return `${score.passed} passed / ${score.attempted} attempted across ${score.totalRuns} runs`;
+  return `${score.passed} passed / ${score.attempted} attempted across ${formatCount(score.totalRuns, "run")}`;
 }
 
 /** formatScoreRange reports only observed score bounds and names any runs without a score. */
@@ -529,7 +531,7 @@ function formatScoreRange(score) {
   const range = score.range
     ? `Range ${score.range.minimum}–${score.range.maximum}%`
     : "Range unavailable";
-  return `${range} · ${score.scoredRuns} of ${score.totalRuns} runs scored${score.unscoredRuns > 0 ? `; ${score.unscoredRuns} without a score` : ""}`;
+  return `${range} · ${score.scoredRuns} of ${formatCount(score.totalRuns, "run")} scored${score.unscoredRuns > 0 ? `; ${score.unscoredRuns} without a score` : ""}`;
 }
 
 /** formatSigned makes direction visible in score, coverage, and metric changes. */
@@ -614,7 +616,7 @@ function renderComparisonRunResults(runs, summaries) {
       const item = document.createElement("li");
       const score = summary.score.percentage === null ? "score unavailable" : `${summary.score.percentage}% score`;
       const runHeading = document.createElement("strong");
-      runHeading.textContent = `Run ${index + 1} · ${summary.terminalStatus ?? "Unknown status"}`;
+      runHeading.textContent = `Run ${index + 1} · ${formatTerminalStatus(summary.terminalStatus)}`;
       const details = document.createElement("span");
       details.textContent = `${run.runId}: ${score}; ${summary.coverage ?? "coverage unavailable"}.`;
       item.append(runHeading, document.createTextNode(" — "), details);
@@ -805,7 +807,7 @@ function renderComparisonSettings(settings) {
     ["Simulation mode", settings.simulationMode ? "On" : "Off"],
     ["Interaction profile", settings.interactionProfile],
     ["Browser conditions", settings.browserConditions],
-    ["Consistency", `${settings.consistencyLevel} — ${settings.runsPerVersion} ${settings.runsPerVersion === 1 ? "assessment" : "assessments"} per version`],
+    ["Consistency", `${settings.consistencyLevel} — ${formatCount(settings.runsPerVersion, "assessment")} per version`],
   ];
   const fragment = document.createDocumentFragment();
 
@@ -847,7 +849,7 @@ function renderComparisonReport(container, sample, version, runNumber) {
   appendComparisonHeading(fragment, "Report summary");
   appendComparisonParagraph(fragment, "Run", sample.runId);
   appendComparisonParagraph(fragment, "Sample provenance", sample.representativeRunNote);
-  appendComparisonParagraph(fragment, "Terminal state", sample.terminalStatus);
+  appendComparisonParagraph(fragment, "Terminal state", formatTerminalStatus(sample.terminalStatus));
   appendComparisonParagraph(fragment, "Assessment scope", formatScopeLabel(sample.scope));
   appendComparisonParagraph(fragment, "Target", sample.assessmentSettings.targetUrl);
   appendComparisonParagraph(fragment, "Goal", sample.assessmentSettings.goal ?? "None supplied");
@@ -1078,7 +1080,7 @@ function clearStaleSampleReport() {
 function updateConsistencyPreview() {
   const level = consistencyInput.value;
   const runsPerVersion = CONSISTENCY_RUN_COUNTS[level];
-  comparisonButton.textContent = `View ${level}-consistency comparison sample (${runsPerVersion} ${runsPerVersion === 1 ? "run" : "runs"} per version)`;
+  comparisonButton.textContent = `View ${level}-consistency comparison sample (${formatCount(runsPerVersion, "run")} per version)`;
   clearStaleSampleReport();
 }
 
@@ -1088,7 +1090,7 @@ function populateConsistencyOptions() {
   for (const [level, runsPerVersion] of Object.entries(CONSISTENCY_RUN_COUNTS)) {
     const option = document.createElement("option");
     option.value = level;
-    option.textContent = `${level} — ${runsPerVersion} ${runsPerVersion === 1 ? "assessment" : "assessments"} per version`;
+    option.textContent = `${level} — ${formatCount(runsPerVersion, "assessment")} per version`;
     option.selected = level === "Low";
     fragment.append(option);
   }

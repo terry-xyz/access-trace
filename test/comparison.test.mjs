@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import {
   CONSISTENCY_RUN_COUNTS,
   buildSiteComparison,
+  formatCount,
+  formatTerminalStatus,
 } from "../src/comparison.mjs";
 import { calculateWebsiteScore } from "../src/assessment.mjs";
 import {
@@ -50,6 +52,45 @@ function reportWithMetrics(sample, settings, metrics, overrides = {}) {
     score: calculateWebsiteScore(totals.passed, totals.attempted),
   }, settings);
 }
+
+/** terminalStateAndRunCountCopyUseReadableSharedLabels. */
+function terminalStateAndRunCountCopyUseReadableSharedLabels() {
+  assert.equal(formatTerminalStatus("AGENT_FAILED"), "Agent failed");
+  assert.equal(formatTerminalStatus("INCONCLUSIVE"), "Inconclusive");
+  assert.equal(formatTerminalStatus("NEW_INTERNAL_STATE"), "Unknown");
+  assert.equal(formatTerminalStatus("toString"), "Unknown");
+  assert.equal(formatCount(1, "run"), "1 run");
+  assert.equal(formatCount(2, "run"), "2 runs");
+  assert.equal(formatCount(1, "assessment"), "1 assessment");
+  assert.equal(formatCount(undefined, "run"), "an unknown number of runs");
+
+  const agentFailedSingle = buildSiteComparison(
+    withSettings(WHOLE_SITE_SAMPLE),
+    withSettings({ ...AGENT_UPDATED_WHOLE_SITE_SAMPLE, terminalStatus: "AGENT_FAILED" }),
+  );
+  assert.match(agentFailedSingle.outcome.summary, /updated report is agent failed/i);
+  assert.doesNotMatch(agentFailedSingle.outcome.summary, /agent_failed/);
+
+  const settings = { ...sharedSettings, consistencyLevel: "Medium", runsPerVersion: 2 };
+  const repeated = buildSiteComparison(
+    [withSettings(WHOLE_SITE_SAMPLE, settings), withSettings({ ...WHOLE_SITE_SAMPLE, runId: "SAMPLE-WS-02" }, settings)],
+    [
+      withSettings(AGENT_UPDATED_WHOLE_SITE_SAMPLE, settings),
+      withSettings({ ...AGENT_UPDATED_WHOLE_SITE_SAMPLE, terminalStatus: "AGENT_FAILED" }, settings),
+    ],
+  );
+  assert.match(repeated.outcome.summary, /updated run 2 is agent failed/i);
+  assert.doesNotMatch(repeated.outcome.summary, /agent_failed/);
+}
+test("terminal-state and run-count copy use readable shared labels", terminalStateAndRunCountCopyUseReadableSharedLabels);
+
+/** comparisonFormUsesTheInheritedFontForItsNativeConsistencySelector. */
+function comparisonFormUsesTheInheritedFontForItsNativeConsistencySelector() {
+  assert.match(styleSource, /button, input, select, textarea \{ font: inherit; \}/);
+  assert.match(mainSource, /formatTerminalStatus\(summary\.terminalStatus\)/);
+  assert.match(mainSource, /formatTerminalStatus\(sample\.terminalStatus\)/);
+}
+test("comparison statuses are human readable and the native selector inherits the interface font", comparisonFormUsesTheInheritedFontForItsNativeConsistencySelector);
 
 /** repeatedComparisonAveragesRunsAndRetainsEveryRunEvenWhenOneIsInconclusive. */
 function repeatedComparisonAveragesRunsAndRetainsEveryRunEvenWhenOneIsInconclusive() {
@@ -373,6 +414,12 @@ function comparisonRefusesToCallMismatchedSettingsAnImprovement() {
   );
   assert.equal(missingRepeat.outcome.label, "Mixed result");
   assert.match(missingRepeat.outcome.summary, /expects 2 runs per version/i);
+
+  const extraLowRuns = buildSiteComparison(
+    [original, withSettings({ ...WHOLE_SITE_SAMPLE, runId: "SAMPLE-WS-02" })],
+    [updated, withSettings({ ...AGENT_UPDATED_WHOLE_SITE_SAMPLE, runId: "SAMPLE-WS-UP-02" })],
+  );
+  assert.match(extraLowRuns.outcome.summary, /expects 1 run per version/i);
 }
 test("different assessment settings make the comparison unresolved and name the difference", comparisonRefusesToCallMismatchedSettingsAnImprovement);
 
