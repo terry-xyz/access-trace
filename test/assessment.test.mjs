@@ -9,15 +9,18 @@ import {
 } from "../src/assessment.mjs";
 import { WHOLE_SITE_SAMPLE } from "../src/sample-report.mjs";
 
-test("the recognized local target is accepted", () => {
+/** recognizedTargetIsAccepted verifies the one canonical endpoint kept inside the local demo boundary. */
+function recognizedTargetIsAccepted() {
   assert.deepEqual(validateTargetUrl(CONTROLLED_TARGET_URL), {
     valid: true,
     normalizedUrl: CONTROLLED_TARGET_URL,
     message: "",
   });
-});
+}
+test("the recognized local target is accepted", recognizedTargetIsAccepted);
 
-test("empty, malformed, remote, off-loopback, and unrecognized targets are rejected", () => {
+/** invalidTargetsAreRejected prevents loopback lookalikes and remote URLs from entering setup. */
+function invalidTargetsAreRejected() {
   const invalidTargets = [
     "",
     "not a URL",
@@ -31,52 +34,80 @@ test("empty, malformed, remote, off-loopback, and unrecognized targets are rejec
   for (const target of invalidTargets) {
     assert.equal(validateTargetUrl(target).valid, false, `expected ${target} to be rejected`);
   }
-});
+}
+test("empty, malformed, remote, off-loopback, and unrecognized targets are rejected", invalidTargetsAreRejected);
 
-test("a blank or whitespace-only goal selects a whole-site assessment", () => {
+/** blankGoalSelectsWholeSite keeps whitespace from silently selecting goal-focused mode. */
+function blankGoalSelectsWholeSite() {
   assert.equal(getAssessmentScope(""), "whole-site");
   assert.equal(getAssessmentScope("   "), "whole-site");
-});
+}
+test("a blank or whitespace-only goal selects a whole-site assessment", blankGoalSelectsWholeSite);
 
-test("a supplied goal selects a goal-focused assessment", () => {
+/** suppliedGoalSelectsGoalFocused confirms scope follows the user's non-empty goal. */
+function suppliedGoalSelectsGoalFocused() {
   assert.equal(getAssessmentScope("Check the account navigation"), "goal-focused");
-});
+}
+test("a supplied goal selects a goal-focused assessment", suppliedGoalSelectsGoalFocused);
 
-test("the score is passed website checks divided by attempted website checks", () => {
+/** scoreUsesWebsiteCheckCounts compares the formula to a fixed worked example from the ticket. */
+function scoreUsesWebsiteCheckCounts() {
   assert.deepEqual(calculateWebsiteScore(18, 22), {
     passed: 18,
     attempted: 22,
     percentage: 82,
     label: "18 of 22 website checks passed",
   });
-});
+}
+test("the score is passed website checks divided by attempted website checks", scoreUsesWebsiteCheckCounts);
 
-test("a report with no attempted website checks has no percentage score", () => {
+/** emptyScoreHasNoPercentage avoids implying a score when no website check ran. */
+function emptyScoreHasNoPercentage() {
   assert.deepEqual(calculateWebsiteScore(0, 0), {
     passed: 0,
     attempted: 0,
     percentage: null,
     label: "No website checks attempted",
   });
-});
+}
+test("a report with no attempted website checks has no percentage score", emptyScoreHasNoPercentage);
 
-test("invalid check counts cannot produce a misleading score", () => {
-  assert.throws(() => calculateWebsiteScore(-1, 4), RangeError);
-  assert.throws(() => calculateWebsiteScore(5, 4), RangeError);
-  assert.throws(() => calculateWebsiteScore(1.5, 4), RangeError);
-});
+/** invalidCountsCannotProduceScore rejects impossible totals before they reach a report. */
+function invalidCountsCannotProduceScore() {
+  const invalidCounts = [
+    calculateWebsiteScore.bind(null, -1, 4),
+    calculateWebsiteScore.bind(null, 5, 4),
+    calculateWebsiteScore.bind(null, 1.5, 4),
+  ];
+  for (const check of invalidCounts) assert.throws(check, RangeError);
+}
+test("invalid check counts cannot produce a misleading score", invalidCountsCannotProduceScore);
 
-test("the representative whole-site score matches the total of its named metrics", () => {
-  const totals = WHOLE_SITE_SAMPLE.metrics.reduce(
-    (sum, metric) => ({
-      passed: sum.passed + metric.passed,
-      attempted: sum.attempted + metric.attempted,
-    }),
-    { passed: 0, attempted: 0 },
-  );
+/** sampleScoreMatchesMetricTotals catches drift between the headline score and named metrics. */
+function sampleScoreMatchesMetricTotals() {
+  const totals = { passed: 0, attempted: 0 };
+  for (const metric of WHOLE_SITE_SAMPLE.metrics) {
+    totals.passed += metric.passed;
+    totals.attempted += metric.attempted;
+  }
 
   assert.deepEqual(
     calculateWebsiteScore(totals.passed, totals.attempted),
     WHOLE_SITE_SAMPLE.score,
   );
-});
+}
+test("the representative whole-site score matches the total of its named metrics", sampleScoreMatchesMetricTotals);
+
+/** evidenceReferencesResolve guards the sample's in-report links against orphaned citations. */
+function evidenceReferencesResolve() {
+  const evidenceIds = new Set();
+  for (const action of WHOLE_SITE_SAMPLE.orderedActions) evidenceIds.add(action.id);
+  for (const observation of WHOLE_SITE_SAMPLE.focusObservations) evidenceIds.add(observation.id);
+  for (const evidence of WHOLE_SITE_SAMPLE.recoveryEvidence) evidenceIds.add(evidence.id);
+  evidenceIds.add(WHOLE_SITE_SAMPLE.screenshot.id);
+
+  for (const reference of WHOLE_SITE_SAMPLE.evidenceReferences) {
+    assert.ok(evidenceIds.has(reference.id), `${reference.id} should resolve to sample evidence`);
+  }
+}
+test("every representative evidence reference points to its matching evidence record", evidenceReferencesResolve);

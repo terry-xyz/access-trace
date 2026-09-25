@@ -16,12 +16,14 @@ const report = document.querySelector("#sample-report");
 const reportHeading = document.querySelector("#report-heading");
 let recordUrl;
 
+/** setError keeps the visible message and the field's programmatic invalid state aligned. */
 function setError(input, container, message) {
   container.textContent = message;
   container.hidden = message === "";
   input.setAttribute("aria-invalid", String(message !== ""));
 }
 
+/** updateScopePreview reflects the optional goal as an explicit whole-site or goal-focused choice. */
 function updateScopePreview() {
   const scope = getAssessmentScope(goalInput.value);
   const isWholeSite = scope === "whole-site";
@@ -32,6 +34,7 @@ function updateScopePreview() {
   setError(goalInput, goalError, "");
 }
 
+/** renderOrderedActions shows the bounded keyboard action sequence from the representative sample. */
 function renderOrderedActions() {
   const list = document.querySelector("#action-list");
   const fragment = document.createDocumentFragment();
@@ -62,12 +65,14 @@ function renderOrderedActions() {
   list.replaceChildren(fragment);
 }
 
+/** renderFocusObservations gives each sample row the ID used by its evidence links. */
 function renderFocusObservations() {
   const body = document.querySelector("#focus-table-body");
   const fragment = document.createDocumentFragment();
 
   for (const observation of WHOLE_SITE_SAMPLE.focusObservations) {
     const row = document.createElement("tr");
+    row.id = observation.id;
     const referenceCell = document.createElement("td");
     const reference = document.createElement("a");
     reference.href = `#${observation.id}`;
@@ -85,20 +90,53 @@ function renderFocusObservations() {
   body.replaceChildren(fragment);
 }
 
+/** renderRecoveryEvidence attaches stable sample IDs so a reference lands on the cited recovery item. */
 function renderRecoveryEvidence() {
   const list = document.querySelector("#recovery-list");
   const fragment = document.createDocumentFragment();
 
-  WHOLE_SITE_SAMPLE.recoveryEvidence.forEach((evidence, index) => {
+  for (const evidence of WHOLE_SITE_SAMPLE.recoveryEvidence) {
     const item = document.createElement("li");
-    if (index === 0) item.id = "REC-01";
-    item.textContent = evidence;
+    item.id = evidence.id;
+    item.textContent = evidence.text;
     fragment.append(item);
-  });
+  }
 
   list.replaceChildren(fragment);
 }
 
+/** createEvidenceLink connects a human-readable evidence label to its in-report record. */
+function createEvidenceLink(reference) {
+  const link = document.createElement("a");
+  link.href = `#${reference.id}`;
+  link.textContent = reference.id;
+  link.setAttribute("aria-label", `${reference.id}: ${reference.label}`);
+  return link;
+}
+
+/** renderEvidenceReferences attaches the same sample citations to both the explanation and proposed fix. */
+function renderEvidenceReferences() {
+  const explanationList = document.querySelector("#explanation-evidence");
+  const fixReferences = document.querySelector("#fix-evidence-references");
+  const listFragment = document.createDocumentFragment();
+  const fixFragment = document.createDocumentFragment();
+
+  for (const [index, reference] of WHOLE_SITE_SAMPLE.evidenceReferences.entries()) {
+    const item = document.createElement("li");
+    item.append(createEvidenceLink(reference), document.createTextNode(` ${reference.label}`));
+    listFragment.append(item);
+
+    if (index > 0) {
+      fixFragment.append(document.createTextNode(index === WHOLE_SITE_SAMPLE.evidenceReferences.length - 1 ? ", and " : ", "));
+    }
+    fixFragment.append(createEvidenceLink(reference));
+  }
+
+  explanationList.replaceChildren(listFragment);
+  fixReferences.replaceChildren(fixFragment);
+}
+
+/** renderScoreAndMetrics uses one sample record for the score formula and all named metric values. */
 function renderScoreAndMetrics() {
   const score = WHOLE_SITE_SAMPLE.score;
   document.querySelector("#score-percent").textContent = score.percentage ?? "—";
@@ -128,24 +166,23 @@ function renderScoreAndMetrics() {
     const name = document.createElement("dt");
     name.textContent = metric.name;
     const value = document.createElement("dd");
-    value.append(
-      document.createTextNode(String(metric.passed)),
-      Object.assign(document.createElement("span"), {
-        textContent: ` / ${metric.attempted}`,
-      }),
-    );
+    const fraction = document.createElement("span");
+    fraction.textContent = ` / ${metric.attempted}`;
+    value.append(document.createTextNode(String(metric.passed)), fraction);
     const track = document.createElement("div");
     track.className = "metric-track";
     track.setAttribute("aria-hidden", "true");
     const fill = document.createElement("span");
     fill.style.width = `${metric.attempted === 0 ? 0 : (metric.passed / metric.attempted) * 100}%`;
     track.append(fill);
-    card.append(name, value, track);
+    value.append(track);
+    card.append(name, value);
     fragment.append(card);
   }
   grid.replaceChildren(fragment);
 }
 
+/** prepareSampleRecord packages the sample evidence with the current configuration without implying a live run. */
 function prepareSampleRecord(context) {
   const record = {
     ...WHOLE_SITE_SAMPLE,
@@ -164,6 +201,15 @@ function prepareSampleRecord(context) {
   downloadLink.download = `${WHOLE_SITE_SAMPLE.runId.toLowerCase()}.json`;
 }
 
+/** updateReportContext copies validated settings into every report field that presents them. */
+function updateReportContext(context) {
+  for (const [field, value] of Object.entries(context)) {
+    const elements = report.querySelectorAll(`[data-report-context="${field}"]`);
+    for (const element of elements) element.textContent = value;
+  }
+}
+
+/** showSampleReport reveals the labeled sample after validation and never starts a browser run. */
 function showSampleReport() {
   const normalizedUrl = validateTargetUrl(targetInput.value).normalizedUrl;
   const simulationMode = simulationInput.checked;
@@ -174,15 +220,11 @@ function showSampleReport() {
     simulationMode,
   };
 
-  for (const selector of ["#report-target", "#details-target"]) {
-    document.querySelector(selector).textContent = normalizedUrl;
-  }
-  for (const selector of ["#report-scope", "#details-scope"]) {
-    document.querySelector(selector).textContent = "Whole site";
-  }
-  for (const selector of ["#report-simulation", "#details-simulation"]) {
-    document.querySelector(selector).textContent = simulationMode ? "On" : "Off";
-  }
+  updateReportContext({
+    target: normalizedUrl,
+    scope: "Whole site",
+    simulationMode: simulationMode ? "On" : "Off",
+  });
 
   prepareSampleRecord(context);
   report.hidden = false;
@@ -190,7 +232,8 @@ function showSampleReport() {
   reportHeading.scrollIntoView({ behavior: "auto", block: "start" });
 }
 
-form.addEventListener("submit", (event) => {
+/** handleAssessmentSubmit validates the local target before allowing the whole-site sample preview. */
+function handleAssessmentSubmit(event) {
   event.preventDefault();
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
@@ -213,13 +256,20 @@ form.addEventListener("submit", (event) => {
   }
 
   showSampleReport();
-});
+}
 
-targetInput.addEventListener("input", () => setError(targetInput, targetError, ""));
+/** clearTargetValidationError removes stale feedback once the target input changes. */
+function clearTargetValidationError() {
+  setError(targetInput, targetError, "");
+}
+
+form.addEventListener("submit", handleAssessmentSubmit);
+targetInput.addEventListener("input", clearTargetValidationError);
 goalInput.addEventListener("input", updateScopePreview);
 
 renderOrderedActions();
 renderFocusObservations();
 renderRecoveryEvidence();
+renderEvidenceReferences();
 renderScoreAndMetrics();
 updateScopePreview();

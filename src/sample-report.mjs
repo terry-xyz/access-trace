@@ -7,8 +7,12 @@ const metrics = [
   { name: "Focus order", passed: 3, attempted: 4 },
 ];
 
-const passed = metrics.reduce((total, metric) => total + metric.passed, 0);
-const attempted = metrics.reduce((total, metric) => total + metric.attempted, 0);
+let passed = 0;
+let attempted = 0;
+for (const metric of metrics) {
+  passed += metric.passed;
+  attempted += metric.attempted;
+}
 
 export const WHOLE_SITE_SAMPLE = Object.freeze({
   runId: "SAMPLE-WS-01",
@@ -56,9 +60,9 @@ export const WHOLE_SITE_SAMPLE = Object.freeze({
       "Illustrative sample screenshot showing the Products link in keyboard focus. It is a report mockup, not a captured browser image.",
   },
   recoveryEvidence: [
-    "Tab advanced focus from Products to Search.",
-    "Shift+Tab returned to Products and reproduced the missing focus indicator.",
-    "Escape was checked; no dialog was open and no recovery action was needed.",
+    { id: "REC-TAB", text: "Tab advanced focus from Products to Search." },
+    { id: "REC-01", text: "Shift+Tab returned to Products and reproduced the missing focus indicator." },
+    { id: "REC-ESC", text: "Escape was checked; no dialog was open and no recovery action was needed." },
   ],
   warnings: ["No browser lifecycle warnings are included in this representative sample."],
 });

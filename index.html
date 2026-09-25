@@ -151,9 +151,9 @@
         </section>
 
         <div class="report-context" aria-label="Configured assessment context">
-          <div><span>Target</span><strong id="report-target">http://127.0.0.1:4173/</strong></div>
-          <div><span>Assessment scope</span><strong id="report-scope">Whole site</strong></div>
-          <div><span>Simulation mode</span><strong id="report-simulation">On</strong></div>
+            <div><span>Target</span><strong id="report-target" data-report-context="target">http://127.0.0.1:4173/</strong></div>
+            <div><span>Assessment scope</span><strong id="report-scope" data-report-context="scope">Whole site</strong></div>
+            <div><span>Simulation mode</span><strong id="report-simulation" data-report-context="simulationMode">On</strong></div>
         </div>
 
         <section class="explanation-card" aria-labelledby="explanation-heading">
@@ -163,6 +163,7 @@
             <p>
               The declared keyboard pass completed across all 7 sample page regions. Eighteen of 22 website checks passed. The repeated focus observation on the Products link supports a specific focus-indicator fix; this result describes the configured keyboard assessment only.
             </p>
+            <ul id="explanation-evidence" class="evidence-reference-list" aria-label="Evidence supporting the explanation"></ul>
           </div>
           <div class="confidence-card">
             <span class="confidence-label">CONFIDENCE</span>
@@ -177,7 +178,7 @@
             <p class="card-kicker">EVIDENCE-SUPPORTED PROPOSED FIX</p>
             <h3 id="fix-heading">Restore a visible focus indicator</h3>
             <p>Give the Products navigation link a clear <code>:focus-visible</code> indicator that remains visible against its background.</p>
-            <p class="fix-evidence">Supported by <a href="#ACT-03">ACT-03</a>, <a href="#FOC-03">FOC-03</a>, <a href="#REC-01">REC-01</a>, and <a href="#SHOT-02">SHOT-02</a>.</p>
+            <p class="fix-evidence">Supported by <span id="fix-evidence-references"></span>.</p>
           </div>
         </section>
 
@@ -192,10 +193,10 @@
             <p class="card-kicker">RUN DETAILS</p>
             <h3 id="run-details-heading">Assessment context</h3>
             <dl class="run-details-grid">
-              <div><dt>Target</dt><dd id="details-target">http://127.0.0.1:4173/</dd></div>
-              <div><dt>Scope</dt><dd id="details-scope">Whole-site</dd></div>
+              <div><dt>Target</dt><dd id="details-target" data-report-context="target">http://127.0.0.1:4173/</dd></div>
+              <div><dt>Scope</dt><dd id="details-scope" data-report-context="scope">Whole-site</dd></div>
               <div><dt>Goal</dt><dd>None supplied</dd></div>
-              <div><dt>Simulation mode</dt><dd id="details-simulation">On</dd></div>
+              <div><dt>Simulation mode</dt><dd id="details-simulation" data-report-context="simulationMode">On</dd></div>
               <div><dt>Duration</dt><dd>1 min 18 sec <span class="sample-value">Sample value</span></dd></div>
               <div><dt>Keyboard interactions</dt><dd>6 <span class="sample-value">Sample value</span></dd></div>
               <div><dt>Coverage</dt><dd>7 of 7 declared regions</dd></div>
@@ -237,7 +238,7 @@
             <section class="report-panel" aria-labelledby="screenshot-heading">
               <p class="card-kicker">STOPPING SCREENSHOT REFERENCE</p>
               <h4 id="screenshot-heading">SHOT-02 · Focus visibility</h4>
-              <figure class="sample-capture" role="img" aria-label="Illustrative sample screenshot, not a captured browser image. It shows the Products link in keyboard focus without a visible focus indicator.">
+              <figure id="SHOT-02" class="sample-capture" role="img" aria-label="Illustrative sample screenshot, not a captured browser image. It shows the Products link in keyboard focus without a visible focus indicator.">
                 <div class="capture-chrome" aria-hidden="true"><span></span><span></span><span></span><i>sample.local</i></div>
                 <div class="capture-content" aria-hidden="true">
                   <div class="capture-brand">Northstar <span>▰</span></div>

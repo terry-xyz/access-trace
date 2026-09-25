@@ -2,6 +2,7 @@ export const CONTROLLED_TARGET_URL = "http://127.0.0.1:4173/";
 
 const TARGET_ERROR = `Use the controlled local demo at ${CONTROLLED_TARGET_URL}`;
 
+/** validateTargetUrl accepts only the normalized controlled endpoint so other loopback services remain out of scope. */
 export function validateTargetUrl(value) {
   const candidate = typeof value === "string" ? value.trim() : "";
 
@@ -29,12 +30,14 @@ export function validateTargetUrl(value) {
   return { valid: false, normalizedUrl: "", message: TARGET_ERROR };
 }
 
+/** getAssessmentScope treats an empty goal as a whole-site assessment and any supplied text as goal-focused. */
 export function getAssessmentScope(goal) {
   return typeof goal === "string" && goal.trim() !== ""
     ? "goal-focused"
     : "whole-site";
 }
 
+/** calculateWebsiteScore reports the passed-to-attempted website-check ratio without grading agent failures. */
 export function calculateWebsiteScore(passed, attempted) {
   if (
     !Number.isSafeInteger(passed) ||
