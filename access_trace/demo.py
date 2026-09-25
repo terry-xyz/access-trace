@@ -2,6 +2,8 @@
 
 from html import escape
 
+from .domain import DEMO_TITLE
+
 
 def _page_shell(title: str, body: str, script: str = "") -> str:
     return """<!doctype html>
@@ -31,7 +33,7 @@ def _page_shell(title: str, body: str, script: str = "") -> str:
 
 
 def demo_page(version: str) -> str:
-    title = "AccessTrace Contact form"
+    title = DEMO_TITLE
     body = """<main data-version="{version}">
   <h1>Fictional contact form</h1>
   <p>This local simulation uses fictional data only.</p>

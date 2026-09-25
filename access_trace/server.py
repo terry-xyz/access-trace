@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlsplit
 
 from .demo import demo_page, landing_page
-from .domain import ValidationError, create_run
+from .domain import CONTROLLED_SCHEME, ValidationError, create_run
 from .store import RunStore
 
 
@@ -20,7 +20,25 @@ RUN_ID_PATTERN = re.compile(r"^[0-9a-f-]+$")
 class AccessTraceServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler_class, run_directory: Path):
         self.run_store = RunStore(run_directory)
+        self.controlled_scheme = CONTROLLED_SCHEME
+        self.controlled_host = self._public_host(server_address[0])
         super().__init__(server_address, handler_class)
+        self.controlled_port = self.server_port
+        self.controlled_origin = self._origin()
+
+    def _public_host(self, bound_host: str) -> str:
+        normalized = bound_host.strip("[]").lower()
+        if normalized in {"", "0.0.0.0"}:
+            return "127.0.0.1"
+        if normalized == "::":
+            return "::1"
+        return normalized
+
+    def _origin(self) -> str:
+        host = self.controlled_host
+        if ":" in host:
+            host = "[" + host + "]"
+        return "{0}://{1}:{2}".format(self.controlled_scheme, host, self.controlled_port)
 
 
 class AccessTraceHandler(BaseHTTPRequestHandler):
@@ -53,7 +71,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
 
         try:
             payload = self.read_json()
-            run = create_run(payload)
+            run = create_run(
+                payload, self.server.controlled_port, self.server.controlled_scheme
+            )
             self.server.run_store.save(run)
         except ValidationError as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
@@ -94,8 +114,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         return json.loads(raw_body.decode("utf-8"))
 
     def base_url(self) -> str:
-        host = self.headers.get("Host") or "127.0.0.1:{0}".format(self.server.server_port)
-        return "http://" + host
+        return self.server.controlled_origin
 
     def send_html(self, body: str):
         encoded = body.encode("utf-8")

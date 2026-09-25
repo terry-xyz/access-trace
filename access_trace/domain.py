@@ -9,6 +9,9 @@ from urllib.parse import urlsplit
 SUPPORTED_GOAL = "Submit the contact form"
 INTERACTION_PROFILE = "keyboard-only"
 DEFAULT_SIMULATION_MODE = True
+CONTROLLED_SCHEME = "http"
+DEMO_TITLE = "AccessTrace Contact form"
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 SUPPORTED_TARGET_PATHS = {
     "/demo/fixed": "fixed",
     "/demo/broken": "broken",
@@ -23,7 +26,9 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def validate_target_url(target_url: Any) -> Tuple[str, str]:
+def validate_target_url(
+    target_url: Any, controlled_port: int, controlled_scheme: str = CONTROLLED_SCHEME
+) -> Tuple[str, str]:
     if not isinstance(target_url, str) or not target_url.strip():
         raise ValidationError("targetUrl must be a non-empty absolute URL")
 
@@ -36,12 +41,13 @@ def validate_target_url(target_url: Any) -> Tuple[str, str]:
     except ValueError:
         raise ValidationError("targetUrl must use a valid local port")
 
-    if parsed.scheme not in {"http", "https"}:
-        raise ValidationError("targetUrl must use HTTP or HTTPS")
-    if host not in {"localhost", "127.0.0.1", "::1"}:
+    if parsed.scheme != controlled_scheme:
+        raise ValidationError("targetUrl must use the controlled server scheme")
+    if host not in LOOPBACK_HOSTS:
         raise ValidationError("targetUrl must point to the controlled local site")
-    if port is not None and not 1 <= port <= 65535:
-        raise ValidationError("targetUrl must use a valid local port")
+    effective_port = port if port is not None else 80
+    if effective_port != controlled_port:
+        raise ValidationError("targetUrl must use the controlled server port")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValidationError("targetUrl must not contain credentials, a query, or a fragment")
     if path not in SUPPORTED_TARGET_PATHS:
@@ -64,11 +70,15 @@ def normalize_goal(goal: Any) -> Optional[str]:
     return normalized
 
 
-def build_run_request(payload: Dict[str, Any]) -> Dict[str, Any]:
+def build_run_request(
+    payload: Dict[str, Any], controlled_port: int, controlled_scheme: str = CONTROLLED_SCHEME
+) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValidationError("request body must be a JSON object")
 
-    target_url, target_version = validate_target_url(payload.get("targetUrl"))
+    target_url, target_version = validate_target_url(
+        payload.get("targetUrl"), controlled_port, controlled_scheme
+    )
     goal = normalize_goal(payload.get("goal"))
     derived_scope = "goal-focused" if goal is not None else "whole-site"
     requested_scope = payload.get("assessmentScope")
@@ -133,13 +143,12 @@ def _controls() -> list:
 
 
 def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
-    version = run_request["targetVersion"]
     goal = run_request["goal"]
     observation = {
         "kind": "settled-observation",
         "observedAt": utc_now(),
         "url": run_request["targetUrl"],
-        "title": "AccessTrace Contact form ({0})".format(version),
+        "title": DEMO_TITLE,
         "focus": {
             "role": "document",
             "accessibleName": "Fictional contact form",
@@ -182,8 +191,10 @@ def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
     return observation
 
 
-def create_run(payload: Dict[str, Any]) -> Dict[str, Any]:
-    run_request = build_run_request(payload)
+def create_run(
+    payload: Dict[str, Any], controlled_port: int, controlled_scheme: str = CONTROLLED_SCHEME
+) -> Dict[str, Any]:
+    run_request = build_run_request(payload, controlled_port, controlled_scheme)
     now = utc_now()
     run_id = str(uuid.uuid4())
     observation = first_observation(run_request)

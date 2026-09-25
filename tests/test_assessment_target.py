@@ -86,7 +86,9 @@ class AssessmentTargetTests(unittest.TestCase):
 
         observation = run["observations"][0]
         self.assertEqual(self.base_url + "/demo/fixed", observation["url"])
-        self.assertIn("Contact form", observation["title"])
+        _, fixed_page = self.raw_request("/demo/fixed")
+        served_title = fixed_page.split("<title>", 1)[1].split("</title>", 1)[0]
+        self.assertEqual(served_title, observation["title"])
         self.assertEqual("body", observation["focus"]["tag"])
         self.assertEqual("Submit", observation["controls"][-1]["accessibleName"])
         self.assertFalse(observation["success"]["matched"])
@@ -155,11 +157,49 @@ class AssessmentTargetTests(unittest.TestCase):
     def test_non_local_or_unrecognized_targets_are_rejected(self):
         for target_url in (
             "https://example.com/demo/fixed",
+            "https://127.0.0.1:1/demo/fixed",
+            "http://127.0.0.1:1/demo/fixed",
             self.base_url + "/demo/other",
         ):
             with self.assertRaises(HTTPError) as error:
                 self.request("POST", "/api/runs", {"targetUrl": target_url})
             self.assertEqual(400, error.exception.code)
+
+    def test_supported_loopback_aliases_use_the_controlled_server_port(self):
+        for host in ("localhost", "127.0.0.1", "[::1]"):
+            status, run = self.request(
+                "POST",
+                "/api/runs",
+                {"targetUrl": "http://{0}:{1}/demo/fixed".format(host, self.server.server_port)},
+            )
+            self.assertEqual(201, status)
+            self.assertEqual("fixed", run["targetVersion"])
+
+    def test_an_arbitrary_host_header_does_not_define_the_controlled_origin(self):
+        body = json.dumps({"targetUrl": self.base_url + "/demo/fixed"}).encode("utf-8")
+        request = Request(
+            self.base_url + "/api/runs",
+            data=body,
+            headers={"Content-Type": "application/json", "Host": "attacker.example"},
+            method="POST",
+        )
+
+        with urlopen(request, timeout=2) as response:
+            run = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(201, response.status)
+        self.assertEqual(self.base_url + "/demo/fixed", run["targetUrl"])
+
+        landing_request = Request(
+            self.base_url + "/",
+            headers={"Host": "attacker.example"},
+            method="GET",
+        )
+        with urlopen(landing_request, timeout=2) as landing_response:
+            landing_page = landing_response.read().decode("utf-8")
+
+        self.assertIn(self.base_url + "/demo/fixed", landing_page)
+        self.assertNotIn("attacker.example", landing_page)
 
     def raw_request(self, path):
         with urlopen(self.base_url + path, timeout=2) as response:
