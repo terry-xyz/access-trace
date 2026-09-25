@@ -118,10 +118,6 @@ form.addEventListener("submit", async function (event) {
     status.textContent = result.error.message;
     return;
   }
-  if (!["fixed", "broken"].includes(result.targetVersion) || result.goal !== "Submit the contact form") {
-    status.textContent = "Run " + result.id + " started.";
-    return;
-  }
   status.textContent = "Running keyboard journey…";
   const execution = await fetch("/api/runs/" + result.id + "/execute", {method: "POST"});
   const executed = await execution.json();

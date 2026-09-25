@@ -14,6 +14,7 @@ from access_trace.journey import (
     CodexPlanner,
     PlannerError,
     _complete_if_verified,
+    execute_assessment,
     execute_contact_goal,
     execute_fixed_goal,
     redacted_observation,
@@ -181,6 +182,122 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertIsNone(run["successCondition"])
         self.assertEqual("not-started", run["observations"][0]["coverage"]["status"])
         self.assertNotIn("Message sent", json.dumps(run["observations"][0]["coverage"]))
+
+    def test_whole_site_execution_completes_only_after_declared_focus_coverage(self):
+        planner_contexts = []
+
+        class WholeSitePlanner:
+            def next_action(self, context):
+                planner_contexts.append(context)
+                if context["coverage"]["status"] == "completed":
+                    return {"kind": "complete"}
+                return {"kind": "key", "key": "Tab"}
+
+        self.server.planner_factory = WholeSitePlanner
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {"targetUrl": self.base_url + "/demo/fixed"},
+        )
+
+        status, completed = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual("COMPLETED", completed["status"])
+        self.assertIsNone(completed["successCondition"])
+        self.assertIsNone(completed["stoppingPoint"]["successCondition"])
+        self.assertIsNone(completed["stoppingPoint"]["successMatched"])
+        self.assertEqual("completed", completed["observations"][-1]["coverage"]["status"])
+        self.assertTrue(completed["observations"][-1]["coverage"]["completed"])
+        self.assertFalse(completed["observations"][-1]["coverage"]["controlsTruncated"])
+        self.assertTrue(any("coverage" in context for context in planner_contexts))
+        self.assertTrue(all(context["assessmentScope"] == "whole-site" for context in planner_contexts))
+        self.assertTrue(all(context["goal"] is None for context in planner_contexts))
+        self.assertNotIn("Message sent", json.dumps(completed["observations"][-1]["coverage"]))
+
+    def test_whole_site_continues_after_a_website_action_makes_no_progress(self):
+        class WholeSitePlanner:
+            attempted_noop = False
+
+            def next_action(self, context):
+                if not self.attempted_noop:
+                    self.attempted_noop = True
+                    return {"kind": "key", "key": "ArrowLeft"}
+                if context["coverage"]["status"] == "completed":
+                    return {"kind": "complete"}
+                return {"kind": "key", "key": "Tab"}
+
+        self.server.planner_factory = WholeSitePlanner
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {"targetUrl": self.base_url + "/demo/fixed"},
+        )
+
+        status, completed = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual("COMPLETED", completed["status"])
+        self.assertIn(
+            {"kind": "website-action-failure", "sequence": 1, "action": "key", "key": "ArrowLeft"},
+            completed["warnings"],
+        )
+        self.assertIn(
+            {"kind": "website-action-failure", "sequence": 1, "action": "key", "key": "ArrowLeft"},
+            completed["observations"][1]["warnings"],
+        )
+
+    def test_unsupported_goal_runs_with_goal_context_and_finishes_inconclusively(self):
+        planner_contexts = []
+
+        class UnsupportedGoalPlanner:
+            def next_action(self, context):
+                planner_contexts.append(context)
+                return {"kind": "complete"}
+
+        self.server.planner_factory = UnsupportedGoalPlanner
+        goal = "Export the private customer list"
+        _, created = self.request(
+            "POST",
+            "/api/runs",
+            {"targetUrl": self.base_url + "/demo/fixed", "goal": goal},
+        )
+
+        status, result = self.request(
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertEqual(goal, result["goal"])
+        self.assertIsNone(result["successCondition"])
+        self.assertEqual(goal, result["observations"][-1]["goalProgress"]["goal"])
+        self.assertEqual("unsupported", result["observations"][-1]["goalProgress"]["status"])
+        self.assertIn({"kind": "unsupported-goal"}, result["warnings"])
+        self.assertEqual(goal, planner_contexts[0]["goal"])
+        self.assertEqual("goal-focused", planner_contexts[0]["assessmentScope"])
+        self.assertIsNone(planner_contexts[0]["successCondition"])
+
+    def test_unsupported_goal_keeps_its_terminal_context_after_browser_failure(self):
+        goal = "Export the private customer list"
+        run = create_run(
+            {"targetUrl": self.base_url + "/demo/fixed", "goal": goal},
+            self.server.server_port,
+        )
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser",
+            side_effect=BrowserError("browser unavailable"),
+        ):
+            result = execute_assessment(run, self.run_directory, planner=mock.Mock())
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertIsNone(result["stoppingPoint"]["successCondition"])
+        self.assertEqual(goal, result["stoppingPoint"]["goalProgress"]["goal"])
+        self.assertEqual("unsupported", result["stoppingPoint"]["goalProgress"]["status"])
 
     def test_an_unknown_goal_is_carried_without_being_reinterpreted(self):
         status, run = self.request(

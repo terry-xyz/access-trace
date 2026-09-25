@@ -94,6 +94,7 @@ OBSERVATION_SCRIPT = r"""
       tag: node.tagName.toLowerCase(),
       stableId: compact(node.id) || "anonymous-control",
       isStable: Boolean(node.id),
+      focusable: true,
     };
     if (editable) {
       item.characterCount = String(node.value || "").length;
@@ -104,9 +105,16 @@ OBSERVATION_SCRIPT = r"""
     }
     return item;
   };
-  const controls = Array.from(document.querySelectorAll("input, textarea, button"))
-    .slice(0, 8)
-    .map(control);
+  const keyboardFocusable = (node) => {
+    if (!visible(node) || node.disabled || node.type === "hidden") return false;
+    if (node.tagName === "A" && !node.hasAttribute("href")) return false;
+    return node.tabIndex >= 0;
+  };
+  const allControls = Array.from(document.querySelectorAll(
+    'a[href], button, input, textarea, select, '
+    + '[tabindex]:not([tabindex="-1"])'
+  )).filter(keyboardFocusable);
+  const controls = allControls.slice(0, 8).map(control);
   const active = document.activeElement || document.body;
   const statuses = Array.from(document.querySelectorAll('[role="status"]'));
   const dialogOpen = Array.from(document.querySelectorAll(
@@ -121,6 +129,7 @@ OBSERVATION_SCRIPT = r"""
     title: compact(document.title),
     focus: control(active),
     controls,
+    controlsTruncated: allControls.length > controls.length,
     successMatched,
     lifecycle: {
       pageOpen: true,

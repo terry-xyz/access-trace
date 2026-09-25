@@ -175,6 +175,11 @@ def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
             "completed": False,
             "areasObserved": 0,
             "areasExpected": 1,
+            "controlsObserved": 0,
+            "controlsExpected": 0,
+            "visitedControls": [],
+            "expectedControls": [],
+            "controlsTruncated": False,
         }
     else:
         observation["success"] = {
@@ -183,8 +188,9 @@ def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
         }
         observation["goalProgress"] = {
             "goal": goal,
-            "status": "not-started",
+            "status": "not-started" if goal == SUPPORTED_GOAL else "unsupported",
             "completed": False,
+            "support": "supported" if goal == SUPPORTED_GOAL else "unsupported",
         }
         observation["coverage"] = None
 
