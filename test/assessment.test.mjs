@@ -101,10 +101,13 @@ test("the representative whole-site score matches the total of its named metrics
 /** evidenceReferencesResolve guards the sample's in-report links against orphaned citations. */
 function evidenceReferencesResolve() {
   const evidenceIds = new Set();
-  for (const action of WHOLE_SITE_SAMPLE.orderedActions) evidenceIds.add(action.id);
-  for (const observation of WHOLE_SITE_SAMPLE.focusObservations) evidenceIds.add(observation.id);
-  for (const evidence of WHOLE_SITE_SAMPLE.recoveryEvidence) evidenceIds.add(evidence.id);
-  evidenceIds.add(WHOLE_SITE_SAMPLE.screenshot.id);
+  const evidenceRecords = [
+    ...WHOLE_SITE_SAMPLE.orderedActions,
+    ...WHOLE_SITE_SAMPLE.focusObservations,
+    ...WHOLE_SITE_SAMPLE.recoveryEvidence,
+    WHOLE_SITE_SAMPLE.screenshot,
+  ];
+  for (const record of evidenceRecords) evidenceIds.add(record.id);
 
   for (const reference of WHOLE_SITE_SAMPLE.evidenceReferences) {
     assert.ok(evidenceIds.has(reference.id), `${reference.id} should resolve to sample evidence`);
