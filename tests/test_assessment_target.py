@@ -8,7 +8,12 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest import mock
 
-from access_trace.browser import BrowserCleanupError, BrowserError, IsolatedKeyboardBrowser
+from access_trace.browser import (
+    BrowserActionError,
+    BrowserCleanupError,
+    BrowserError,
+    IsolatedKeyboardBrowser,
+)
 from access_trace.domain import create_run
 from access_trace.journey import (
     CodexPlanner,
@@ -733,9 +738,13 @@ class AssessmentTargetTests(unittest.TestCase):
                 return None
 
         class TimeoutPlanner:
+            calls = 0
+
             def next_action(self, context):
+                self.calls += 1
                 raise PlannerError("planner timed out")
 
+        planner = TimeoutPlanner()
         run = create_run(
             {
                 "targetUrl": self.base_url + "/demo/broken",
@@ -747,12 +756,228 @@ class AssessmentTargetTests(unittest.TestCase):
             result = execute_contact_goal(
                 run,
                 self.run_directory,
-                planner=TimeoutPlanner(),
+                planner=planner,
             )
 
         self.assertEqual("INCONCLUSIVE", result["status"])
         self.assertNotEqual("BLOCKED", result["status"])
         self.assertEqual("planner-failure", result["agentFailure"]["kind"])
+        self.assertEqual(2, planner.calls)
+        self.assertEqual(2, result["agentFailure"]["attempts"])
+
+    def test_invalid_planner_decision_is_retried_against_the_same_observation(self):
+        class StableBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+
+            def observe(self):
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    },
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {"pageOpen": True},
+                }
+
+            def close(self):
+                return None
+
+        class InvalidPlanner:
+            def __init__(self):
+                self.contexts = []
+
+            def next_action(self, context):
+                self.contexts.append(context)
+                return {"kind": "click", "selector": "#submit"}
+
+        planner = InvalidPlanner()
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", StableBrowser):
+            result = execute_contact_goal(run, self.run_directory, planner=planner)
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertEqual(2, len(planner.contexts))
+        self.assertEqual(planner.contexts[0], planner.contexts[1])
+        self.assertEqual(2, result["agentFailure"]["attempts"])
+        self.assertIsNone(result["browserFailure"])
+
+    def test_one_action_delivery_failure_reobserves_and_allows_the_journey_to_continue(self):
+        class FlakyBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.focus = "document"
+                self.failed_once = False
+
+            def observe(self):
+                focus = (
+                    {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    }
+                    if self.focus == "submit"
+                    else {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    }
+                )
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": focus,
+                    "controls": [
+                        {
+                            "role": "button",
+                            "accessibleName": "Submit",
+                            "tag": "button",
+                            "stableId": "submit",
+                            "focusable": True,
+                            "isStable": True,
+                        }
+                    ],
+                    "successMatched": False,
+                    "lifecycle": {"pageOpen": True},
+                }
+
+            def press_key(self, key):
+                if key == "Tab" and not self.failed_once:
+                    self.failed_once = True
+                    raise BrowserActionError("temporary input failure")
+                if key == "Tab":
+                    self.focus = "submit"
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        class WholeSitePlanner:
+            def next_action(self, context):
+                if context["coverage"]["completed"]:
+                    return {"kind": "complete"}
+                return {"kind": "key", "key": "Tab"}
+
+        run = create_run(
+            {"targetUrl": self.base_url + "/demo/fixed"}, self.server.server_port
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", FlakyBrowser):
+            result = execute_assessment(
+                run, self.run_directory, planner=WholeSitePlanner()
+            )
+
+        self.assertEqual("COMPLETED", result["status"])
+        self.assertEqual(["failed", "delivered"], [action["status"] for action in result["actions"]])
+        self.assertIn(
+            {"kind": "action-delivery-failure", "sequence": 1, "action": "key", "key": "Tab"},
+            result["warnings"],
+        )
+        self.assertIsNone(result["browserFailure"])
+        self.assertIsNone(result["agentFailure"])
+
+    def test_repeated_action_delivery_failure_is_inconclusive_and_not_an_agent_failure(self):
+        class FailingBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+
+            def observe(self):
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    },
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {"pageOpen": True},
+                }
+
+            def press_key(self, key):
+                raise BrowserActionError("input is unavailable")
+
+            def close(self):
+                return None
+
+        class TabPlanner:
+            def next_action(self, context):
+                return {"kind": "key", "key": "Tab"}
+
+        run = create_run(
+            {"targetUrl": self.base_url + "/demo/fixed"}, self.server.server_port
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", FailingBrowser):
+            result = execute_assessment(run, self.run_directory, planner=TabPlanner())
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertEqual(
+            {"kind": "action-delivery-failure", "attempts": 2},
+            result["browserFailure"],
+        )
+        self.assertIsNone(result["agentFailure"])
+        self.assertEqual(2, len(result["actions"]))
+
+    def test_lifecycle_warnings_are_retained_and_closed_pages_are_inconclusive(self):
+        class ClosedBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+
+            def observe(self):
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": {},
+                    "controls": [],
+                    "successMatched": False,
+                    "lifecycle": {
+                        "pageOpen": False,
+                        "dialogOpen": True,
+                        "popupObserved": True,
+                        "crashed": False,
+                    },
+                }
+
+            def close(self):
+                return None
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", ClosedBrowser):
+            result = execute_contact_goal(run, self.run_directory, planner=mock.Mock())
+
+        self.assertEqual("INCONCLUSIVE", result["status"])
+        self.assertIn({"kind": "dialog-open"}, result["warnings"])
+        self.assertIn({"kind": "popup-observed"}, result["warnings"])
+        self.assertIn({"kind": "page-closed"}, result["warnings"])
+        self.assertEqual({"kind": "browser-failure"}, result["browserFailure"])
+        self.assertIsNone(result["agentFailure"])
 
     def test_fixed_goal_without_evidence_directory_cannot_complete(self):
         run = create_run(

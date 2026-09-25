@@ -1,5 +1,6 @@
 """The contact-form keyboard journeys and redacted evidence lifecycle."""
 
+import copy
 import threading
 import time
 from pathlib import Path
@@ -24,6 +25,42 @@ MAX_PAGE_URL_LENGTH = 256
 MAX_PAGE_STRING_LENGTH = 80
 MAX_CHARACTER_COUNT = 100_000
 MAX_CONTROLS = 8
+
+
+class ActionDeliveryFailure(BrowserActionError):
+    """A permitted action was not delivered, with a fresh observation attached."""
+
+    def __init__(self, message: str, observation: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.observation = observation
+
+
+def _append_warning(target: list, warning: Dict[str, Any]) -> None:
+    if warning not in target:
+        target.append(warning)
+
+
+def _lifecycle_warnings(raw_lifecycle: Dict[str, Any]) -> list:
+    warnings = []
+    if raw_lifecycle.get("dialogOpen"):
+        warnings.append({"kind": "dialog-open"})
+    if raw_lifecycle.get("popupObserved"):
+        warnings.append({"kind": "popup-observed"})
+    if raw_lifecycle.get("crashed"):
+        warnings.append({"kind": "browser-crashed"})
+    if raw_lifecycle.get("pageOpen") is False:
+        warnings.append({"kind": "page-closed"})
+    if raw_lifecycle.get("offLoopbackRedirect"):
+        warnings.append({"kind": "off-loopback-redirect"})
+    if raw_lifecycle.get("navigationRedirect"):
+        warnings.append({"kind": "navigation-redirect"})
+    return warnings
+
+
+def _record_observation_warnings(run: Dict[str, Any], observation: Dict[str, Any]) -> None:
+    for warning in observation.get("warnings", []):
+        if isinstance(warning, dict):
+            _append_warning(run["warnings"], warning)
 
 
 def _bounded_page_string(value: Any, limit: int = MAX_PAGE_STRING_LENGTH) -> Optional[str]:
@@ -295,11 +332,13 @@ def redacted_observation(
         observation["controls"].append(safe_control)
     if is_whole_site:
         observation["coverage"] = _coverage_progress(raw, covered_focus_ids)
+    for warning in _lifecycle_warnings(raw_lifecycle):
+        _append_warning(observation["warnings"], warning)
     if bounded_url is None:
-        observation["warnings"].append({"kind": "off-loopback-redirect"})
+        _append_warning(observation["warnings"], {"kind": "off-loopback-redirect"})
         observation["lifecycle"]["offLoopbackRedirect"] = True
     elif navigation_warning is not None:
-        observation["warnings"].append({"kind": navigation_warning})
+        _append_warning(observation["warnings"], {"kind": navigation_warning})
         observation["lifecycle"]["navigationRedirect"] = True
     return observation
 
@@ -397,6 +436,50 @@ def _observation_progress_signature(
     )
 
 
+def _lifecycle_failure(observation: Dict[str, Any]) -> Optional[str]:
+    lifecycle = observation.get("lifecycle", {})
+    if not isinstance(lifecycle, dict):
+        return "browser lifecycle evidence was invalid"
+    if lifecycle.get("crashed"):
+        return "browser page crashed"
+    if {"kind": "page-closed"} in observation.get("warnings", []):
+        return "browser page closed"
+    if lifecycle.get("offLoopbackRedirect"):
+        return "browser navigated off the controlled target"
+    if lifecycle.get("navigationRedirect"):
+        return "browser navigated away from the controlled target"
+    return None
+
+
+def _planner_action(planner: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Make at most two decisions for one unchanged observation."""
+    errors = []
+    for _ in range(2):
+        try:
+            # Give each attempt an isolated copy so a planner cannot mutate the
+            # retry context and turn it into a different observation.
+            decision = planner.next_action(copy.deepcopy(context))
+            return validate_action(decision, context)
+        except (PlannerError, TimeoutError) as error:
+            errors.append(error)
+    last_error = errors[-1] if errors else PlannerError("planner did not return an action")
+    message = str(last_error).strip()[:160] or "planner did not return an action"
+    failure = PlannerError(message)
+    failure.attempts = 2
+    raise failure from last_error
+
+
+def _planner_failure_evidence(error: PlannerError) -> Dict[str, Any]:
+    evidence = {
+        "kind": "planner-failure",
+        "attempts": int(getattr(error, "attempts", 1)),
+    }
+    message = str(error).strip()
+    if message:
+        evidence["message"] = message[:160]
+    return evidence
+
+
 def _persist_stopping_screenshot(
     run: Dict[str, Any], browser: IsolatedKeyboardBrowser, evidence_directory: Optional[Path]
 ) -> None:
@@ -446,9 +529,26 @@ def _settle_action(
                 covered_focus_ids,
             )
             run["observations"].append(current)
-        except BrowserError:
-            pass
-        raise
+            _record_observation_warnings(run, current)
+            failure = {
+                "kind": "action-delivery-failure",
+                "sequence": len(run["actions"]),
+                "action": action["kind"],
+            }
+            if action["kind"] == "key":
+                failure["key"] = action["key"]
+            else:
+                failure["field"] = action["field"]
+                failure["characterCount"] = len(action["text"])
+            _append_warning(current["warnings"], failure)
+            _append_warning(run["warnings"], failure)
+        except BrowserError as error:
+            raise BrowserError(
+                "browser action failed and could not be re-observed"
+            ) from error
+        raise ActionDeliveryFailure(
+            "permitted keyboard action could not be delivered", current
+        )
     _append_action(run, action, before, "delivered")
     current = _redacted_observation(
         browser.observe(),
@@ -459,6 +559,7 @@ def _settle_action(
         covered_focus_ids,
     )
     run["observations"].append(current)
+    _record_observation_warnings(run, current)
     if _observation_progress_signature(before) == _observation_progress_signature(current):
         failure = {
             "kind": "website-action-failure",
@@ -474,10 +575,9 @@ def _settle_action(
             current["warnings"].append(failure)
         if failure not in run["warnings"]:
             run["warnings"].append(failure)
-    if current["lifecycle"].get("offLoopbackRedirect") or current["lifecycle"].get(
-        "navigationRedirect"
-    ):
-        raise BrowserError("browser navigated away from the controlled target")
+    lifecycle_failure = _lifecycle_failure(current)
+    if lifecycle_failure is not None:
+        raise BrowserError(lifecycle_failure)
     return current
 
 
@@ -785,11 +885,12 @@ def _execute_assessment(
             covered_focus_ids,
         )
         run["observations"] = [current]
-        if current["lifecycle"].get("offLoopbackRedirect") or current["lifecycle"].get(
-            "navigationRedirect"
-        ):
-            raise BrowserError("browser navigated away from the controlled target")
+        _record_observation_warnings(run, current)
+        lifecycle_failure = _lifecycle_failure(current)
+        if lifecycle_failure is not None:
+            raise BrowserError(lifecycle_failure)
 
+        consecutive_action_failures = 0
         for _ in range(MAX_INTERACTIONS):
             if (
                 run.get("assessmentScope") == "goal-focused"
@@ -840,9 +941,7 @@ def _execute_assessment(
                     for action in run["actions"][-4:]
                 ],
             }
-            action = validate_action(
-                planner.next_action(bounded_for_planner), bounded_for_planner
-            )
+            action = _planner_action(planner, bounded_for_planner)
             if action["kind"] == "complete":
                 if run.get("assessmentScope") == "whole-site":
                     if _complete_whole_site_if_verified(
@@ -859,21 +958,43 @@ def _execute_assessment(
                     run, current, started, browser, evidence_directory
                 ):
                     return run
-                raise BrowserError("planner stopped without locally verified success")
+                raise PlannerError("planner stopped without locally verified success")
             if (
                 run.get("assessmentScope") == "goal-focused"
                 and run.get("goal") != SUPPORTED_GOAL
             ):
                 _set_terminal_state(run, "INCONCLUSIVE", current, started)
                 return run
-            current = _settle_action(
-                run,
-                browser,
-                action,
-                current,
-                typed_values,
-                covered_focus_ids,
-            )
+            try:
+                current = _settle_action(
+                    run,
+                    browser,
+                    action,
+                    current,
+                    typed_values,
+                    covered_focus_ids,
+                )
+            except ActionDeliveryFailure as error:
+                consecutive_action_failures += 1
+                current = error.observation or current
+                lifecycle_failure = _lifecycle_failure(current)
+                if lifecycle_failure is not None:
+                    failure = {"kind": "browser-failure"}
+                    _append_warning(run["warnings"], failure)
+                    run["browserFailure"] = failure
+                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                    return run
+                if consecutive_action_failures >= 2:
+                    failure = {
+                        "kind": "action-delivery-failure",
+                        "attempts": consecutive_action_failures,
+                    }
+                    _append_warning(run["warnings"], failure)
+                    run["browserFailure"] = failure
+                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                    return run
+                continue
+            consecutive_action_failures = 0
             if run.get("assessmentScope") == "whole-site":
                 if _complete_whole_site_if_verified(
                     run, current, started, browser, evidence_directory
@@ -887,14 +1008,29 @@ def _execute_assessment(
 
         raise BrowserError("keyboard journey exceeded its bounded interaction limit")
     except PlannerError as error:
-        run["warnings"].append({"kind": "planner-failure", "message": str(error)})
-        run["agentFailure"] = {"kind": "planner-failure"}
+        planner_failure = _planner_failure_evidence(error)
+        _append_warning(run["warnings"], planner_failure)
+        run["agentFailure"] = planner_failure
         fallback = run["observations"][-1]
         _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
         return run
+    except ActionDeliveryFailure as error:
+        failure = {
+            "kind": "action-delivery-failure",
+            "attempts": 1,
+        }
+        _append_warning(run["warnings"], failure)
+        run["browserFailure"] = failure
+        fallback = error.observation or run["observations"][-1]
+        _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
+        return run
     except (BrowserError, BrowserActionError) as error:
-        run["warnings"].append({"kind": "browser-failure", "message": str(error)})
-        run["agentFailure"] = {"kind": "browser-failure"}
+        failure = {"kind": "browser-failure"}
+        message = str(error).strip()
+        if message:
+            failure["message"] = message[:160]
+        _append_warning(run["warnings"], failure)
+        run["browserFailure"] = {"kind": "browser-failure"}
         if isinstance(error, BrowserCleanupError):
             run["browserFailure"] = {"kind": "cleanup-failure"}
             run["browserSession"]["cleanup"] = {
@@ -935,7 +1071,7 @@ def _execute_assessment(
             try:
                 browser.close()
             except BrowserError:
-                run["warnings"].append({"kind": "browser-cleanup-failure"})
+                _append_warning(run["warnings"], {"kind": "browser-cleanup-failure"})
                 run["browserFailure"] = {"kind": "cleanup-failure"}
                 run["browserSession"]["cleanup"] = {
                     "status": "failed",
