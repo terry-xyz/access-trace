@@ -20,7 +20,8 @@ optional `goal`, and optional boolean `simulationMode` (default `true`). The
 record is written as redacted JSON under `.access-trace/runs/` and can be read
 back with `GET /api/runs/<id>`. For the supported fixed contact-form goal,
 `POST /api/runs/<id>/execute` starts a fresh isolated Chrome session, performs
-the bounded keyboard journey, and persists the terminal result. The durable
+the bounded keyboard journey using the Codex planner, and persists the terminal
+result. The durable
 record keeps field character counts, validation metadata, and a redacted
 stopping screenshot reference, never typed field values or clipboard contents.
 

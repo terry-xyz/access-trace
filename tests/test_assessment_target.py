@@ -5,14 +5,54 @@ import unittest
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from unittest import mock
 
+from access_trace.browser import BrowserCleanupError, BrowserError, IsolatedKeyboardBrowser
+from access_trace.domain import create_run
+from access_trace.journey import (
+    CodexPlanner,
+    PlannerError,
+    _complete_if_verified,
+    execute_fixed_goal,
+    redacted_observation,
+)
 from access_trace.server import create_server
+
+
+class DeterministicTestPlanner:
+    values = {
+        "name": "Avery Example",
+        "email": "avery@example.test",
+        "message": "A fictional message",
+    }
+
+    def next_action(self, context):
+        page = context["pageEvidence"]
+        focus = page["focus"]
+        if page["successMatched"]:
+            return {"kind": "complete"}
+        if focus["role"] == "document":
+            return {"kind": "key", "key": "Tab"}
+        if focus["stableId"] in self.values and not focus["acceptedInput"]:
+            return {
+                "kind": "type",
+                "field": focus["stableId"],
+                "text": self.values[focus["stableId"]],
+            }
+        if focus["role"] == "button" and focus["accessibleName"] == "Submit":
+            return {"kind": "key", "key": "Enter"}
+        return {"kind": "key", "key": "Tab"}
 
 
 class AssessmentTargetTests(unittest.TestCase):
     def setUp(self):
         self.run_directory = Path(tempfile.mkdtemp())
-        self.server = create_server("127.0.0.1", 0, self.run_directory)
+        self.server = create_server(
+            "127.0.0.1",
+            0,
+            self.run_directory,
+            planner_factory=DeterministicTestPlanner,
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base_url = "http://127.0.0.1:{0}".format(self.server.server_port)
@@ -171,6 +211,9 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertEqual("COMPLETED", completed["status"])
         self.assertTrue(completed["simulationMode"])
+        self.assertEqual("verified", completed["browserSession"]["cleanup"]["status"])
+        self.assertTrue(completed["browserSession"]["cleanup"]["profileRemoved"])
+        self.assertIsNone(completed["browserFailure"])
         self.assertGreater(completed["durationMs"], 0)
         self.assertEqual(completed["interactionCount"], len(completed["actions"]))
         self.assertGreaterEqual(len(completed["observations"]), 7)
@@ -195,6 +238,290 @@ class AssessmentTargetTests(unittest.TestCase):
 
         stored = self.run_directory / (created["id"] + ".json")
         self.assertEqual(completed, json.loads(stored.read_text()))
+
+    def test_fixed_goal_without_evidence_directory_cannot_complete(self):
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+
+        completed = execute_fixed_goal(run, planner=DeterministicTestPlanner())
+
+        self.assertEqual("INCONCLUSIVE", completed["status"])
+        self.assertIsNone(completed["stoppingScreenshotRef"])
+        self.assertEqual("missing-evidence-directory", completed["warnings"][0]["kind"])
+
+    def test_page_derived_strings_are_bounded_before_evidence(self):
+        oversized = "x" * 10000
+        observation = redacted_observation(
+            {
+                "url": "http://127.0.0.1:1234/demo/fixed/" + oversized,
+                "title": oversized,
+                "focus": {
+                    "role": oversized,
+                    "accessibleName": oversized,
+                    "tag": oversized,
+                    "stableId": oversized,
+                    "isStable": True,
+                    "characterCount": oversized,
+                    "acceptedInput": oversized,
+                    "validationState": oversized,
+                },
+                "controls": [
+                    {
+                        "role": oversized,
+                        "accessibleName": oversized,
+                        "tag": oversized,
+                        "stableId": oversized,
+                        "focusable": True,
+                        "isStable": True,
+                        "characterCount": oversized,
+                        "acceptedInput": oversized,
+                        "validationState": oversized,
+                    }
+                ],
+                "successMatched": False,
+                "lifecycle": {},
+            },
+            self.base_url + "/demo/fixed",
+        )
+
+        serialized = json.dumps(observation)
+        self.assertLessEqual(len(observation["url"]), 256)
+        self.assertLessEqual(len(observation["title"]), 80)
+        self.assertNotIn(oversized, serialized)
+        self.assertLessEqual(len(observation["focus"]["stableId"]), 80)
+        self.assertLessEqual(len(observation["controls"][0]["accessibleName"]), 80)
+        self.assertIsInstance(observation["controls"][0]["characterCount"], int)
+        self.assertIsInstance(observation["controls"][0]["acceptedInput"], bool)
+
+    def test_completed_requires_a_persisted_png_screenshot(self):
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        run["actions"].append(
+            {
+                "kind": "key",
+                "key": "Enter",
+                "focusBefore": {"role": "button", "accessibleName": "Submit"},
+            }
+        )
+        observation = run["observations"][0]
+        observation["success"] = {"condition": "Message sent", "matched": True}
+        browser = mock.Mock()
+        browser.capture_redacted_screenshot.return_value = (
+            run["id"] + "-stopping.png"
+        )
+
+        with self.assertRaises(BrowserError):
+            _complete_if_verified(run, observation, 0.0, browser, self.run_directory)
+
+        self.assertNotEqual("COMPLETED", run["status"])
+        self.assertIsNone(run["stoppingScreenshotRef"])
+
+    def test_default_server_uses_codex_planner_boundary(self):
+        server = create_server("127.0.0.1", 0, Path(tempfile.mkdtemp()))
+        try:
+            self.assertIsInstance(server.planner_factory(), CodexPlanner)
+        finally:
+            server.server_close()
+
+    def test_codex_planner_validates_the_action_boundary(self):
+        planner = CodexPlanner(invoke=lambda prompt: '{"kind":"key","key":"Tab"}')
+        context = {
+            "goal": "Submit the contact form",
+            "successCondition": "Message sent",
+            "simulationMode": True,
+            "interactionProfile": "keyboard-only",
+            "pageEvidence": {
+                "focus": {
+                    "role": "document",
+                    "accessibleName": "Fictional contact form",
+                    "tag": "body",
+                    "stableId": "document",
+                    "isStable": True,
+                    "characterCount": 0,
+                    "acceptedInput": False,
+                    "validationState": "not-observed",
+                },
+                "successMatched": False,
+                "url": self.base_url + "/demo/fixed",
+                "title": "AccessTrace Contact form",
+                "controls": [],
+                "untrusted": True,
+            },
+            "goalProgress": {},
+            "warnings": [],
+            "recentHistory": [],
+        }
+
+        self.assertEqual({"kind": "key", "key": "Tab"}, planner.next_action(context))
+
+        type_context = json.loads(json.dumps(context))
+        type_context["pageEvidence"]["focus"].update(
+            {
+                "role": "textbox",
+                "accessibleName": "Name",
+                "tag": "input",
+                "stableId": "name",
+                "acceptedInput": False,
+            }
+        )
+        type_planner = CodexPlanner(
+            invoke=lambda prompt: '{"kind":"type","field":"name","text":"fictional"}'
+        )
+        self.assertEqual(
+            {"kind": "type", "field": "name", "value": "fictional"},
+            type_planner.next_action(type_context),
+        )
+
+        invalid = CodexPlanner(invoke=lambda prompt: '{"kind":"click","selector":"#submit"}')
+        with self.assertRaises(PlannerError):
+            invalid.next_action(context)
+
+    def test_browser_cleanup_removes_profile_and_reports_failure(self):
+        profile = Path(tempfile.mkdtemp())
+        (profile / "profile-marker").write_text("temporary")
+        browser = object.__new__(IsolatedKeyboardBrowser)
+        browser.profile_directory = profile
+        browser.process = None
+        browser.connection = None
+
+        browser.close()
+
+        self.assertFalse(profile.exists())
+
+        failed_profile = Path(tempfile.mkdtemp())
+        failed_browser = object.__new__(IsolatedKeyboardBrowser)
+        failed_browser.profile_directory = failed_profile
+        failed_browser.process = None
+        failed_browser.connection = None
+        with mock.patch(
+            "access_trace.browser.shutil.rmtree",
+            side_effect=OSError("profile is locked"),
+        ):
+            with self.assertRaises(BrowserCleanupError):
+                failed_browser.close()
+        self.assertTrue(failed_profile.exists())
+
+    def test_cleanup_failure_downgrades_a_would_be_success(self):
+        class CleanupFailingBrowser:
+            def __init__(self, target_url):
+                self.target_url = target_url
+                self.focus_index = 0
+                self.values = {}
+                self.success = False
+                self.focus_order = ["document", "name", "email", "message", "submit"]
+
+            def observe(self):
+                stable_id = self.focus_order[self.focus_index]
+                if stable_id == "document":
+                    focus = {
+                        "role": "document",
+                        "accessibleName": "Fictional contact form",
+                        "tag": "body",
+                        "stableId": "document",
+                        "isStable": True,
+                    }
+                elif stable_id == "submit":
+                    focus = {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    }
+                else:
+                    focus = {
+                        "role": "textbox",
+                        "accessibleName": stable_id.title(),
+                        "tag": "textarea" if stable_id == "message" else "input",
+                        "stableId": stable_id,
+                        "isStable": True,
+                        "characterCount": len(self.values.get(stable_id, "")),
+                        "acceptedInput": bool(self.values.get(stable_id)),
+                        "validationState": "valid" if self.values.get(stable_id) else "not-observed",
+                    }
+                controls = [
+                    {
+                        "role": "textbox",
+                        "accessibleName": field.title(),
+                        "tag": "textarea" if field == "message" else "input",
+                        "stableId": field,
+                        "isStable": True,
+                        "characterCount": len(self.values.get(field, "")),
+                        "acceptedInput": bool(self.values.get(field)),
+                        "validationState": "valid" if self.values.get(field) else "not-observed",
+                    }
+                    for field in ("name", "email", "message")
+                ]
+                controls.append(
+                    {
+                        "role": "button",
+                        "accessibleName": "Submit",
+                        "tag": "button",
+                        "stableId": "submit",
+                        "isStable": True,
+                    }
+                )
+                return {
+                    "url": self.target_url,
+                    "title": "AccessTrace Contact form",
+                    "focus": focus,
+                    "controls": controls,
+                    "successMatched": self.success,
+                    "lifecycle": {
+                        "pageOpen": True,
+                        "dialogOpen": False,
+                        "popupObserved": False,
+                        "crashed": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if key == "Tab":
+                    self.focus_index = min(self.focus_index + 1, len(self.focus_order) - 1)
+                elif key == "Enter" and self.focus_order[self.focus_index] == "submit":
+                    self.success = True
+
+            def type_text(self, text):
+                self.values[self.focus_order[self.focus_index]] = text
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                raise BrowserCleanupError("profile is locked")
+
+        run = create_run(
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "goal": "Submit the contact form",
+            },
+            self.server.server_port,
+        )
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", CleanupFailingBrowser):
+            completed = execute_fixed_goal(
+                run,
+                self.run_directory,
+                planner=DeterministicTestPlanner(),
+            )
+
+        self.assertEqual("INCONCLUSIVE", completed["status"])
+        self.assertEqual({"kind": "cleanup-failure"}, completed["browserFailure"])
+        self.assertEqual("failed", completed["browserSession"]["cleanup"]["status"])
+        self.assertFalse(completed["browserSession"]["cleanup"]["profileRemoved"])
+        self.assertIn(
+            {"kind": "browser-cleanup-failure"}, completed["warnings"]
+        )
 
     def test_non_local_or_unrecognized_targets_are_rejected(self):
         for target_url in (

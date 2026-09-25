@@ -227,4 +227,5 @@ def create_run(
         "stoppingPoint": None,
         "stoppingScreenshotRef": None,
         "agentFailure": None,
+        "browserFailure": None,
     }

@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlsplit
 from .demo import demo_page, landing_page
 from .domain import CONTROLLED_SCHEME, ValidationError, create_run
 from .journey import execute_fixed_goal
+from .planner import CodexPlanner
 from .store import RunStore
 
 
@@ -19,8 +20,9 @@ RUN_ID_PATTERN = re.compile(r"^[0-9a-f-]+$")
 
 
 class AccessTraceServer(ThreadingHTTPServer):
-    def __init__(self, server_address, handler_class, run_directory: Path):
+    def __init__(self, server_address, handler_class, run_directory: Path, planner_factory=None):
         self.run_store = RunStore(run_directory)
+        self.planner_factory = planner_factory or CodexPlanner
         self.controlled_scheme = CONTROLLED_SCHEME
         self.controlled_host = self._public_host(server_address[0])
         super().__init__(server_address, handler_class)
@@ -108,7 +110,11 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             )
             return
         try:
-            completed = execute_fixed_goal(run, self.server.run_store.directory)
+            completed = execute_fixed_goal(
+                run,
+                self.server.run_store.directory,
+                planner=self.server.planner_factory(),
+            )
             self.server.run_store.save(completed)
         except ValueError as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
@@ -166,6 +172,13 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         return
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8080, run_directory: Optional[Path] = None):
+def create_server(
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    run_directory: Optional[Path] = None,
+    planner_factory=None,
+):
     directory = Path(run_directory or ".access-trace/runs")
-    return AccessTraceServer((host, port), AccessTraceHandler, directory)
+    return AccessTraceServer(
+        (host, port), AccessTraceHandler, directory, planner_factory=planner_factory
+    )

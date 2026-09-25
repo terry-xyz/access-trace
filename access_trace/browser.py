@@ -10,6 +10,7 @@ import binascii
 import json
 import os
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -28,6 +29,10 @@ class BrowserError(RuntimeError):
 
 class BrowserActionError(BrowserError):
     """Raised when a permitted keyboard action cannot be delivered."""
+
+
+class BrowserCleanupError(BrowserError):
+    """Raised when the isolated browser or profile cannot be fully removed."""
 
 
 PERMITTED_KEYS = {
@@ -87,7 +92,7 @@ OBSERVATION_SCRIPT = r"""
       role: roleFor(node),
       accessibleName: labelFor(node),
       tag: node.tagName.toLowerCase(),
-      stableId: node.id || "anonymous-control",
+      stableId: compact(node.id) || "anonymous-control",
       isStable: Boolean(node.id),
     };
     if (editable) {
@@ -108,7 +113,7 @@ OBSERVATION_SCRIPT = r"""
     (node) => visible(node) && compact(node.textContent) === "Message sent"
   );
   return {
-    url: String(window.location.href),
+    url: String(window.location.href).slice(0, 256),
     title: compact(document.title),
     focus: control(active),
     controls,
@@ -364,6 +369,44 @@ def _find_chrome() -> Optional[str]:
     )
 
 
+def _descendant_process_ids(root_pid: int):
+    try:
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,ppid="], text=True, stderr=subprocess.DEVNULL
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    children = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pid, parent_pid = int(fields[0]), int(fields[1])
+        except ValueError:
+            continue
+        children.setdefault(parent_pid, set()).add(pid)
+    descendants = set()
+    pending = [root_pid]
+    while pending:
+        parent_pid = pending.pop()
+        for child_pid in children.get(parent_pid, set()):
+            if child_pid not in descendants:
+                descendants.add(child_pid)
+                pending.append(child_pid)
+    return descendants
+
+
+def _is_process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 class IsolatedKeyboardBrowser:
     """A fresh, keyboard-only Chrome session with bounded observations."""
 
@@ -403,9 +446,14 @@ class IsolatedKeyboardBrowser:
             self.connection.call("Runtime.enable")
             self.connection.call("Page.navigate", {"url": target_url})
             self._wait_for_target()
-        except Exception:
-            self.close()
-            raise BrowserError("unable to start the isolated browser")
+        except Exception as error:
+            try:
+                self.close()
+            except BrowserCleanupError as cleanup_error:
+                raise BrowserCleanupError(
+                    "isolated browser startup cleanup could not be verified"
+                ) from cleanup_error
+            raise BrowserError("unable to start the isolated browser") from error
 
     @staticmethod
     def _free_port() -> int:
@@ -571,12 +619,66 @@ class IsolatedKeyboardBrowser:
         if self.connection is not None:
             self.connection.close()
             self.connection = None
-        if self.process is not None:
-            self.process.terminate()
+        cleanup_errors = []
+        process = self.process
+        if process is not None:
+            process_ids = _descendant_process_ids(process.pid) | {process.pid}
+            process_errors = []
+            for process_id in process_ids:
+                try:
+                    os.kill(process_id, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except OSError as error:
+                    process_errors.append(error)
+            deadline = time.monotonic() + 0.75
+            while time.monotonic() < deadline and any(
+                _is_process_alive(process_id) for process_id in process_ids
+            ):
+                time.sleep(0.05)
+            remaining = {
+                process_id
+                for process_id in process_ids
+                if _is_process_alive(process_id)
+            }
+            for process_id in remaining:
+                try:
+                    os.kill(process_id, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError as error:
+                    process_errors.append(error)
             try:
-                self.process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=1)
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired as error:
+                process_errors.append(error)
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and any(
+                _is_process_alive(process_id) for process_id in process_ids
+            ):
+                time.sleep(0.05)
+            remaining = {
+                process_id
+                for process_id in process_ids
+                if _is_process_alive(process_id)
+            }
+            if remaining:
+                cleanup_errors.extend(process_errors)
+                cleanup_errors.append(OSError("isolated browser processes remain"))
             self.process = None
-        shutil.rmtree(self.profile_directory, ignore_errors=True)
+
+        profile_cleanup_error = None
+        for _ in range(3):
+            if not self.profile_directory.exists():
+                break
+            try:
+                shutil.rmtree(self.profile_directory)
+            except OSError as error:
+                profile_cleanup_error = error
+                time.sleep(0.05)
+        if self.profile_directory.exists():
+            cleanup_errors.append(
+                profile_cleanup_error or OSError("isolated browser profile remains")
+            )
+        if cleanup_errors:
+            raise BrowserCleanupError("isolated browser cleanup could not be verified")
