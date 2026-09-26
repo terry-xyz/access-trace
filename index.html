@@ -58,11 +58,13 @@
             />
             <p id="target-hint" class="field-hint">Enter an HTTP or HTTPS URL, or choose page files. <code id="recognized-target"></code></p>
             <div class="page-scan-options">
-              <label class="page-limit-option" for="site-page-limit">Max site pages
+              <div class="page-limit-option">
+                <label for="site-page-limit">Max site pages</label>
+                <button class="help-icon" type="button" aria-label="About max site pages" aria-describedby="tip-site-page-limit"><span aria-hidden="true">i</span><span id="tip-site-page-limit" class="tooltip" role="tooltip">Set this to 0 to assess all discovered pages on the website.</span></button>
                 <input id="site-page-limit" name="sitePageLimit" type="number" min="0" max="500" step="1" value="25" inputmode="numeric" aria-describedby="site-page-limit-hint site-page-limit-error" />
-              </label>
+              </div>
             </div>
-            <p id="site-page-limit-hint" class="field-hint page-limit-hint">0 scans all discovered same-origin pages.</p>
+            <p id="site-page-limit-hint" class="field-hint page-limit-hint visually-hidden">Set this to 0 to assess all discovered pages on the website.</p>
             <p id="site-page-limit-error" class="field-error" hidden></p>
             <p id="target-error" class="field-error" hidden></p>
           </div>

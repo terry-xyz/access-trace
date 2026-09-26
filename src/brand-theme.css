@@ -80,7 +80,7 @@ html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: aut
 html { background: #050505; }
 body {
   min-height: 100dvh;
-  cursor: crosshair;
+  cursor: url("../assets/access-trace-default-cursor.png") 1 1, auto;
   color: #f4f4f4;
   background: #050505;
   font-family: Inter, "Segoe UI", Arial, sans-serif;
@@ -132,6 +132,10 @@ summary,
 .page-only-option,
 .page-only-option input,
 [role="button"] { cursor: url("../assets/access-trace-hand-cursor.png") 1 1, pointer; }
+.field-group input:hover,
+.field-group textarea:hover,
+.field-group select:hover,
+.page-limit-option input:hover { cursor: url("../assets/access-trace-hand-cursor.png") 1 1, pointer; }
 .site-header {
   position: fixed;
   z-index: 10;
@@ -268,7 +272,7 @@ summary,
   outline: 1px solid #d7e9ee;
   outline-offset: 2px;
 }
-.field-group textarea { height: 64px; min-height: 64px; }
+.field-group textarea { height: 64px; min-height: 64px; resize: none; }
 .field-hint,
 .scope-status:not(#target-site-status) { display: none; }
 #target-site-status { color: #bfbfbf; }

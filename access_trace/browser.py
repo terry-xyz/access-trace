@@ -9,6 +9,7 @@ import base64
 import binascii
 from collections import deque
 import json
+import logging
 import math
 import os
 import re
@@ -17,6 +18,7 @@ import signal
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -55,7 +57,9 @@ MAX_TYPED_CHARACTERS = 80
 MAX_PLANNER_SCREENSHOT_BYTES = 256 * 1024
 MAX_SITE_DISCOVERY_PAGES = 10_000
 BROWSER_STARTUP_TIMEOUT = 15.0
+HEADED_PAGE_READINESS_TIMEOUT = 30.0
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+logger = logging.getLogger(__name__)
 WEBRTC_LOCKDOWN_SCRIPT = r"""
 (() => {
   for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection"]) {
@@ -933,7 +937,9 @@ class IsolatedKeyboardBrowser:
             self.connection.call("Page.navigate", {"url": navigation_url})
             self._wait_for_target(timeout=12.0 if not headless else 8.0)
             if not headless:
-                self._wait_for_rendered_content(timeout=10.0)
+                self._wait_for_rendered_content(
+                    timeout=HEADED_PAGE_READINESS_TIMEOUT
+                )
         except Exception as error:
             try:
                 self.close()
@@ -1026,11 +1032,20 @@ class IsolatedKeyboardBrowser:
     def _wait_for_settled_input(self) -> None:
         time.sleep(0.05)
 
-    def _wait_for_rendered_content(self, timeout: float = 10.0) -> None:
-        """Give headed pages up to ten seconds to expose rendered content."""
+    def _wait_for_rendered_content(
+        self, timeout: float = HEADED_PAGE_READINESS_TIMEOUT
+    ) -> None:
+        """Give headed pages up to thirty seconds to expose rendered content."""
         if self.connection is None:
             raise BrowserError("browser is not connected")
-        deadline = time.monotonic() + max(0.1, min(timeout, 10.0))
+        wait_budget = max(0.1, min(timeout, HEADED_PAGE_READINESS_TIMEOUT))
+        deadline = time.monotonic() + wait_budget
+        logger.warning(
+            "Headed Chrome page readiness wait started (maximum %.0f seconds).",
+            wait_budget,
+        )
+        show_countdown = bool(getattr(sys.stderr, "isatty", lambda: False)())
+        next_countdown = time.monotonic()
         expression = """(() => {
           const visible = (element) => {
             if (!element || element.getClientRects().length === 0) return false;
@@ -1064,6 +1079,9 @@ class IsolatedKeyboardBrowser:
                     else None
                 )
                 if value is True:
+                    if show_countdown:
+                        sys.stderr.write("\rHeaded Chrome page is ready.                 \n")
+                        sys.stderr.flush()
                     return
             except BrowserError:
                 self._refresh_target_state()
@@ -1072,7 +1090,23 @@ class IsolatedKeyboardBrowser:
             finally:
                 self.connection.socket.settimeout(self.connection.timeout)
             self._collect_page_events()
-            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+            now = time.monotonic()
+            if show_countdown and now >= next_countdown:
+                remaining_seconds = max(0, math.ceil(deadline - now))
+                sys.stderr.write(
+                    "\rWaiting for headed Chrome page content: %d seconds remaining..."
+                    % remaining_seconds
+                )
+                sys.stderr.flush()
+                next_countdown = now + 1.0
+            time.sleep(min(0.2, max(0.0, deadline - now)))
+        if show_countdown:
+            sys.stderr.write("\rHeaded Chrome page load timed out.                 \n")
+            sys.stderr.flush()
+        logger.warning(
+            "Headed Chrome did not expose page content within %.0f seconds.",
+            wait_budget,
+        )
 
     def _wait_for_target(
         self, timeout: float = 8.0, expected_url: Optional[str] = None
@@ -1613,7 +1647,7 @@ class IsolatedKeyboardBrowser:
         result = self.connection.call(
             "Runtime.evaluate",
             {
-                "expression": """(() => {
+                "expression": r"""(() => {
                   const origin = location.origin;
                   const links = [];
                   const seen = new Set();
@@ -1882,8 +1916,10 @@ class IsolatedKeyboardBrowser:
         if not self.headless:
             # Startup waits for visible content in headed Chrome, but each
             # subsequently selected site page needs the same readiness check.
-            # This returns as soon as content appears and is capped at 10s.
-            self._wait_for_rendered_content(timeout=10.0)
+            # This returns as soon as content appears and is capped at 30s.
+            self._wait_for_rendered_content(
+                timeout=HEADED_PAGE_READINESS_TIMEOUT
+            )
 
     def observe(self) -> Dict[str, Any]:
         if self.connection is None:

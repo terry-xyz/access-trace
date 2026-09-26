@@ -1,6 +1,7 @@
 """The contact-form keyboard journeys and redacted evidence lifecycle."""
 
 import copy
+import logging
 from contextlib import nullcontext
 from contextvars import ContextVar
 import threading
@@ -14,6 +15,7 @@ from .browser import (
     BrowserCleanupError,
     BrowserError,
     IsolatedKeyboardBrowser,
+    HEADED_PAGE_READINESS_TIMEOUT,
     MAX_SITE_DISCOVERY_PAGES,
     MAX_PLANNER_SCREENSHOT_BYTES,
 )
@@ -30,6 +32,7 @@ from .url_policy import is_browser_error_url, same_web_origin
 
 
 BROWSER_RUN_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 _TERMINAL_COORDINATION = ContextVar(
     "access_trace_terminal_coordination", default=None
 )
@@ -1334,6 +1337,11 @@ def _execute_assessment(
             and current_raw.get("lifecycle", {}).get("browserLoadError") is not True
             and getattr(browser, "needs_headful_retry", lambda: False)()
         ):
+            logger.warning(
+                "Headless Chrome did not expose a usable page; retrying in headed Chrome. "
+                "The page readiness wait is capped at %.0f seconds.",
+                HEADED_PAGE_READINESS_TIMEOUT,
+            )
             headless_observation = _redacted_observation(
                 current_raw,
                 run["targetUrl"],

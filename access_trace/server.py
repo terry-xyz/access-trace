@@ -49,6 +49,7 @@ SITE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 LOCAL_SITE_PATH_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})/(.+)$")
 STATIC_ROOT = Path(__file__).resolve().parent.parent
 STATIC_ASSETS = {
+    "/assets/access-trace-default-cursor.png": (STATIC_ROOT / "assets" / "access-trace-default-cursor.png", "image/png"),
     "/assets/access-trace-hand-cursor.png": (STATIC_ROOT / "assets" / "access-trace-hand-cursor.png", "image/png"),
     "/assets/access-trace-logo-dark.svg": (STATIC_ROOT / "assets" / "access-trace-logo-dark.svg", "image/svg+xml"),
     "/src/assessment.mjs": (STATIC_ROOT / "src" / "assessment.mjs", "text/javascript; charset=utf-8"),
