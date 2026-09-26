@@ -374,6 +374,11 @@ a:hover { color: #fff; }
 .live-outcome-card, .live-evidence-card { padding: 16px; }
 .live-outcome-card h3, .live-evidence-card h3 { margin: 5px 0 0; color: #e0ebec; font-size: 16px; font-weight: 450; }
 .run-review-explanation { margin: 8px 0 0; color: var(--muted); font-size: 10px; }
+.report-condition-list { max-height: 23vh; overflow: auto; margin: 10px 0 0; padding-left: 19px; color: #d6e3e5; font-size: 9px; }
+.report-condition-list > li { padding: 7px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.report-condition-description, .report-condition-mapping { margin: 0; line-height: 1.45; }
+.report-condition-mapping { margin-top: 4px; color: var(--cyan-soft); }
+.report-wcag-limitation { margin: 8px 0 0; color: var(--dim); font-size: 8px; line-height: 1.45; }
 .live-result-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 16px; margin: 17px 0 0; border-top: 1px solid var(--line); padding-top: 12px; }
 .live-result-facts > div { min-width: 0; }
 .live-result-facts dt { color: var(--dim); font-size: 8px; letter-spacing: 0.07em; text-transform: uppercase; }

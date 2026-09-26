@@ -9,11 +9,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .browser import MAX_PLANNER_SCREENSHOT_BYTES
 from .planner import CodexPlanner
+from .wcag import WCAG22_CRITERIA
 
 
 MAX_REVIEW_EXPLANATION_LENGTH = 600
 MAX_REVIEW_FIX_LENGTH = 500
 MAX_REVIEW_REFERENCES = 16
+MAX_REVIEW_CONDITIONS = 8
+MAX_CONDITION_LENGTH = 240
 MAX_REVIEW_PROMPT = 12_000
 MAX_REVIEW_ACTIONS = 24
 MAX_REVIEW_OBSERVATIONS = 20
@@ -32,6 +35,7 @@ REVIEW_OUTPUT_SCHEMA = {
         "evidenceReferences",
         "confidence",
         "proposedFix",
+        "conditions",
     ],
     "properties": {
         "explanation": {
@@ -50,6 +54,25 @@ REVIEW_OUTPUT_SCHEMA = {
             "type": ["string", "null"],
             "maxLength": MAX_REVIEW_FIX_LENGTH,
         },
+        "conditions": {
+            "type": "array",
+            "maxItems": MAX_REVIEW_CONDITIONS,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["condition", "wcagCriterionId", "evidenceReferences"],
+                "properties": {
+                    "condition": {"type": "string", "minLength": 1, "maxLength": MAX_CONDITION_LENGTH},
+                    "wcagCriterionId": {"type": ["string", "null"], "enum": [*WCAG22_CRITERIA, None]},
+                    "evidenceReferences": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_REVIEW_REFERENCES,
+                        "items": {"type": "string", "maxLength": 80},
+                    },
+                },
+            },
+        },
     },
 }
 
@@ -59,7 +82,16 @@ REVIEW_PROMPT_INSTRUCTIONS = (
     "Describe only outcomes directly supported by these recorded facts. Cite only "
     "IDs listed in availableEvidenceReferences. Give a specific, actionable fix "
     "only when the recorded evidence supports it; otherwise set proposedFix to "
-    "null. Do not infer unobserved page behavior, claim general accessibility or "
+    "null. List each distinct accessibility condition supported by the recorded "
+    "evidence in conditions; use an empty list if none is supported. For each "
+    "condition, cite its own evidence IDs and select wcagCriterionId only when "
+    "that success criterion directly relates to the observed condition. Use null "
+    "if the evidence does not justify a direct mapping. Examples: inability to "
+    "operate a control by keyboard relates to 2.1.1; trapped keyboard focus "
+    "to 2.1.2; unexpected focus order to 2.4.3; invisible focus to 2.4.7; "
+    "missing control name or role to 4.1.2. These are correlations, not "
+    "determinations of WCAG failure. Valid WCAG 2.2 IDs: "
+    + ", ".join(WCAG22_CRITERIA) + ". Do not infer unobserved page behavior, claim general accessibility or "
     "WCAG conformance, or call tools, run commands, read files, or use the network. "
     "Return one JSON object with exactly the required schema fields."
 )
@@ -73,7 +105,7 @@ def _review_candidate_shape(value: Any) -> Optional[Dict[str, Any]]:
     """Keep review-shaped payloads for validation, including malformed ones."""
     if not isinstance(value, dict):
         return None
-    fields = {"explanation", "evidenceReferences", "confidence", "proposedFix"}
+    fields = {"explanation", "evidenceReferences", "confidence", "proposedFix", "conditions"}
     return value if fields.intersection(value) else None
 
 
@@ -305,7 +337,7 @@ def validate_review(
     review: Any, allowed_references: Dict[str, Dict[str, Any]]
 ) -> Dict[str, Any]:
     """Validate the structured review and resolve every cited source locator."""
-    required = {"explanation", "evidenceReferences", "confidence", "proposedFix"}
+    required = {"explanation", "evidenceReferences", "confidence", "proposedFix", "conditions"}
     if not isinstance(review, dict) or set(review) != required:
         raise ReviewError("Evidence review returned an invalid result")
 
@@ -340,11 +372,52 @@ def validate_review(
     ):
         raise ReviewError("Evidence review returned an invalid result")
 
+    raw_conditions = review.get("conditions")
+    if not isinstance(raw_conditions, list) or len(raw_conditions) > MAX_REVIEW_CONDITIONS:
+        raise ReviewError("Evidence review returned an invalid result")
+    conditions = []
+    for item in raw_conditions:
+        if not isinstance(item, dict) or set(item) != {"condition", "wcagCriterionId", "evidenceReferences"}:
+            raise ReviewError("Evidence review returned an invalid result")
+        condition = item["condition"]
+        criterion_id = item["wcagCriterionId"]
+        condition_references = item["evidenceReferences"]
+        if (
+            not isinstance(condition, str) or not condition.strip()
+            or len(condition) > MAX_CONDITION_LENGTH
+            or (criterion_id is not None and (
+                not isinstance(criterion_id, str) or criterion_id not in WCAG22_CRITERIA
+            ))
+            or not isinstance(condition_references, list)
+            or not condition_references
+            or len(condition_references) > MAX_REVIEW_REFERENCES
+            or any(not isinstance(reference_id, str) for reference_id in condition_references)
+            or len(set(condition_references)) != len(condition_references)
+        ):
+            raise ReviewError("Evidence review returned an invalid result")
+        if any(reference_id not in allowed_references for reference_id in condition_references):
+            raise ReviewError("Evidence review cited unknown evidence")
+        criterion = None
+        if criterion_id is not None:
+            name, slug = WCAG22_CRITERIA[criterion_id]
+            criterion = {
+                "id": criterion_id,
+                "name": name,
+                "url": "https://www.w3.org/TR/WCAG22/#" + slug,
+            }
+        conditions.append({
+            "condition": condition,
+            "wcagCriterion": criterion,
+            "mappingStatus": "mapped" if criterion else "unmapped",
+            "evidenceReferences": [allowed_references[reference_id] for reference_id in condition_references],
+        })
+
     return {
         "explanation": explanation,
         "evidenceReferences": [allowed_references[reference_id] for reference_id in references],
         "confidence": confidence,
         "proposedFix": proposed_fix,
+        "conditions": conditions,
     }
 
 
