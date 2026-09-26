@@ -348,6 +348,17 @@ class AssessmentTargetTests(unittest.TestCase):
             "/api/runs",
             {
                 "targetUrl": self.base_url + "/demo/fixed",
+                "sitePageLimit": 3,
+            },
+        )
+        self.assertEqual(201, status)
+        self.assertEqual(3, run["sitePageLimit"])
+
+        status, run = self.request(
+            "POST",
+            "/api/runs",
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
                 "sitePageLimit": 0,
             },
         )

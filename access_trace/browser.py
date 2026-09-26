@@ -1545,7 +1545,26 @@ class IsolatedKeyboardBrowser:
                   const origin = location.origin;
                   const links = [];
                   const seen = new Set();
-                  for (const anchor of document.querySelectorAll('a[href]')) {
+                  const nodes = [];
+                  const visited = new Set();
+                  const pending = Array.from(document.childNodes).reverse();
+                  while (pending.length && visited.size < 50000) {
+                    const node = pending.pop();
+                    if (!node || node.nodeType !== Node.ELEMENT_NODE || visited.has(node)) continue;
+                    visited.add(node);
+                    nodes.push(node);
+                    let children;
+                    if (node.tagName === 'SLOT') {
+                      const assigned = node.assignedElements({flatten: true});
+                      children = assigned.length ? assigned : Array.from(node.children);
+                    } else if (node.shadowRoot) {
+                      children = Array.from(node.shadowRoot.children);
+                    } else {
+                      children = Array.from(node.children);
+                    }
+                    for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]);
+                  }
+                  for (const anchor of nodes.filter(node => node.tagName === 'A' && node.hasAttribute('href'))) {
                     try {
                       const url = new URL(anchor.href, location.href);
                       if (url.origin !== origin || !['http:', 'https:'].includes(url.protocol)) continue;
