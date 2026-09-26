@@ -81,6 +81,8 @@ def _reference_id(reference: Any) -> Optional[str]:
     if not isinstance(reference, dict):
         return None
     kind = reference.get("kind")
+    if not isinstance(kind, str):
+        return None
     if kind in {"action", "observation"}:
         sequence = reference.get("sequence")
         if (

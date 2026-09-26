@@ -151,25 +151,34 @@ class PlannerError(RuntimeError):
     """Raised when the local Codex CLI cannot provide one safe action."""
 
 
-def _planner_screenshot(context: Dict[str, Any]) -> Optional[str]:
-    page_evidence = context.get("pageEvidence")
-    if not isinstance(page_evidence, dict):
-        return None
-    data_url = page_evidence.get("screenshotDataUrl")
+def _planner_screenshot_bytes(data_url: Any) -> bytes:
+    """Decode one bounded PNG data URL or reject it before CLI attachment."""
     prefix = "data:image/png;base64,"
     if (
         not isinstance(data_url, str)
         or not data_url.startswith(prefix)
         or len(data_url) > (MAX_PLANNER_SCREENSHOT_BYTES * 4 // 3) + 64
     ):
-        return None
+        raise PlannerError("Codex screenshot input was invalid")
     try:
         image = base64.b64decode(data_url[len(prefix) :], validate=True)
-    except (ValueError, binascii.Error):
-        return None
+    except (ValueError, binascii.Error) as error:
+        raise PlannerError("Codex screenshot input was invalid") from error
     if len(image) > MAX_PLANNER_SCREENSHOT_BYTES or not image.startswith(
         b"\x89PNG\r\n\x1a\n"
     ):
+        raise PlannerError("Codex screenshot input was invalid")
+    return image
+
+
+def _planner_screenshot(context: Dict[str, Any]) -> Optional[str]:
+    page_evidence = context.get("pageEvidence")
+    if not isinstance(page_evidence, dict):
+        return None
+    data_url = page_evidence.get("screenshotDataUrl")
+    try:
+        _planner_screenshot_bytes(data_url)
+    except PlannerError:
         return None
     return data_url
 
@@ -454,12 +463,7 @@ class CodexPlanner:
                 args.extend(["--disable", feature])
             args.extend(["--config", 'web_search="disabled"'])
             if screenshot_data_url is not None:
-                try:
-                    screenshot = base64.b64decode(
-                        screenshot_data_url.split(",", 1)[1], validate=True
-                    )
-                except (IndexError, ValueError, binascii.Error) as error:
-                    raise PlannerError("Codex screenshot input was invalid") from error
+                screenshot = _planner_screenshot_bytes(screenshot_data_url)
                 screenshot_path = directory / "planner-screenshot.png"
                 screenshot_path.write_bytes(screenshot)
                 # Codex's --image option accepts one or more files. Keep the
