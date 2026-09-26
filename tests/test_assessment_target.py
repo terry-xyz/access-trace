@@ -549,6 +549,64 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual(2, completed["stoppingPoint"]["coverage"]["areasObserved"])
         self.assertEqual("partial", completed["stoppingPoint"]["coverage"]["status"])
 
+    def test_whole_site_continues_when_tab_observation_temporarily_loses_page_content(self):
+        target = self.base_url + "/docs/demos/fixed/index.html"
+        linked = self.base_url + "/docs/demos/fixed/linked.html"
+        run = create_run({"targetUrl": target, "sitePageLimit": 2}, self.server.server_port)
+        visited = []
+
+        class TransientlyEmptyBrowser:
+            def __init__(self, target_url):
+                self.url = target_url
+                self.observations = 0
+                self.failed_tab = False
+
+            def observe(self):
+                self.observations += 1
+                visible = self.observations != 2
+                return {
+                    "url": self.url,
+                    "title": "Site page",
+                    "focus": {"role": "document", "stableId": "document", "isStable": True},
+                    "controls": [{"role": "link", "stableId": "link-one", "focusable": True}],
+                    "controlCount": 1,
+                    "pageContentVisible": visible,
+                    "lifecycle": {
+                        "evidence": "observed", "pageOpen": True, "dialogOpen": False,
+                        "dialogObserved": False, "popupObserved": False,
+                        "popupAttempted": False, "crashed": False,
+                        "offLoopbackRedirect": False, "navigationRedirect": False,
+                        "browserLoadError": False, "pageContentVisible": visible,
+                        "headfulFallback": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if not self.failed_tab:
+                    self.failed_tab = True
+                    raise BrowserActionError("transient focus failure")
+
+            def discover_site_links(self):
+                return [linked]
+
+            def navigate_to(self, url):
+                visited.append(url)
+                self.url = url
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", TransientlyEmptyBrowser):
+            completed = execute_assessment(run, self.run_directory)
+
+        self.assertEqual([linked], visited)
+        self.assertEqual("COMPLETED", completed["status"], completed.get("warnings"))
+        self.assertEqual(2, completed["stoppingPoint"]["coverage"]["areasObserved"])
+
     def test_local_site_traversal_allows_only_documents_inside_the_uploaded_site(self):
         target = "http://127.0.0.1:4173/sites/0123456789abcdef0123456789abcdef/index.html"
         frame_id = "main-frame"

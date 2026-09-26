@@ -1403,6 +1403,7 @@ def _execute_assessment(
                     current = run["observations"][-1]
                     continue
                 tab_scan_states.add(scan_state)
+                previous_observation = current
                 try:
                     current = _settle_action(
                         run,
@@ -1418,6 +1419,36 @@ def _execute_assessment(
                     consecutive_action_failures += 1
                     current = error.observation or current
                     lifecycle_failure = _lifecycle_failure(current)
+                    lifecycle = current.get("lifecycle", {})
+                    if (
+                        lifecycle_failure is not None
+                        and isinstance(lifecycle, dict)
+                        and lifecycle.get("pageContentVisible") is False
+                        and lifecycle.get("pageOpen") is True
+                        and not lifecycle.get("crashed")
+                        and not lifecycle.get("browserLoadError")
+                    ):
+                        # A failed focus observation can expose an empty transient
+                        # document (for example, while focus enters an iframe).
+                        # Keep the last usable page evidence and try its links.
+                        current = previous_observation
+                        if run["observations"]:
+                            run["observations"][-1] = current
+                        coverage = current.get("coverage")
+                        if isinstance(coverage, dict):
+                            coverage["status"] = "partial"
+                        _append_warning(
+                            run["warnings"],
+                            {
+                                "kind": "incomplete-coverage",
+                                "message": "Page content became unavailable during keyboard traversal; the scan continued to other pages where possible.",
+                            },
+                        )
+                        consecutive_action_failures = 0
+                        if finish_whole_site_page():
+                            return run
+                        current = run["observations"][-1]
+                        continue
                     if lifecycle_failure is not None or consecutive_action_failures >= 2:
                         reason = lifecycle_failure or "The browser could not deliver consecutive Tab actions."
                         failure = {
