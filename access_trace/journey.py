@@ -1318,7 +1318,7 @@ def _execute_assessment(
     try:
         _raise_if_run_cancelled()
         _report_run_progress("Starting the isolated browser session.")
-        if run.get("targetVersion") == "local":
+        if run.get("targetVersion") in {"local", "fixed", "broken"}:
             browser = IsolatedKeyboardBrowser(
                 run["targetUrl"],
                 restrict_network=True,

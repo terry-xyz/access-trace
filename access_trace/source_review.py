@@ -13,6 +13,7 @@ from .planner import (
     CODEX_DISABLED_FEATURES,
     _codex_child_environment,
     _codex_executable,
+    _start_codex_prompt_writer,
 )
 from .source_context import (
     MAX_REVIEW_FILE_BYTES,
@@ -25,6 +26,7 @@ from .source_context import (
 
 MAX_SOURCE_REVIEW_PATCH_CHARS = 20_000
 MAX_SOURCE_REVIEW_SUMMARY_CHARS = 2_000
+MAX_SOURCE_REVIEW_EXPLANATION_CHARS = 1_000
 MAX_SOURCE_REVIEW_EVIDENCE_BYTES = 16 * 1024
 MAX_SOURCE_REVIEW_OUTPUT_BYTES = 160 * 1024
 MAX_SOURCE_REVIEW_STDERR_BYTES = 64 * 1024
@@ -43,10 +45,12 @@ class SourceReviewError(RuntimeError):
 SOURCE_REVIEW_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["status", "summary", "relevantPaths", "patch"],
+    "required": ["status", "summary", "rootCause", "proposedFix", "relevantPaths", "patch"],
     "properties": {
         "status": {"enum": ["PATCH_READY", "NO_PATCH"]},
         "summary": {"type": "string", "maxLength": MAX_SOURCE_REVIEW_SUMMARY_CHARS},
+        "rootCause": {"type": "string", "maxLength": MAX_SOURCE_REVIEW_EXPLANATION_CHARS},
+        "proposedFix": {"type": "string", "maxLength": MAX_SOURCE_REVIEW_EXPLANATION_CHARS},
         "relevantPaths": {
             "type": "array",
             "maxItems": 200,
@@ -65,20 +69,34 @@ def _bounded_evidence(run: Dict[str, Any]) -> Dict[str, Any]:
     """Project a small, redacted terminal evidence slice for the reviewer."""
     if not isinstance(run, dict):
         raise SourceReviewError("source review requires a run record")
-    if run.get("status") != "BLOCKED":
-        raise SourceReviewError("source review is available only for blocked runs")
+    if run.get("status") not in {"BLOCKED", "COMPLETED", "INCONCLUSIVE"}:
+        raise SourceReviewError("source review is available only for terminal runs")
 
     handoff = run.get("evidenceHandoff")
     if not isinstance(handoff, dict):
-        raise SourceReviewError("blocked run has no bounded evidence handoff")
+        raise SourceReviewError("terminal run has no bounded evidence handoff")
     observations = handoff.get("observations")
     actions = handoff.get("actions")
     terminal = handoff.get("terminal")
     assessment = handoff.get("assessment")
     stopping = handoff.get("stopping")
+    reporting = handoff.get("reporting")
     evidence = {
-        "terminalStatus": "BLOCKED",
+        "terminalStatus": run.get("status"),
         "assessment": assessment if isinstance(assessment, dict) else {},
+        "reportFinding": (
+            {
+                "explanation": reporting.get("explanation", "")[:600],
+                "proposedFix": (reporting.get("proposedFix") or "")[:500],
+                "evidenceReferences": reporting.get("evidenceReferences", [])[:16],
+            }
+            if isinstance(reporting, dict)
+            and reporting.get("status") == "available"
+            and isinstance(reporting.get("explanation"), str)
+            and isinstance(reporting.get("proposedFix"), (str, type(None)))
+            and isinstance(reporting.get("evidenceReferences"), list)
+            else {}
+        ),
         "finalObservations": observations[-3:] if isinstance(observations, list) else [],
         "recentActions": actions[-12:] if isinstance(actions, list) else [],
         "recoveryEvidence": (
@@ -139,10 +157,12 @@ def _review_prompt(run: Dict[str, Any], context: PreparedSourceContext) -> str:
     files = _source_files(context)
     instruction = (
         "You are a read-only source reviewer for an accessibility run. The run is "
-        "already blocked based on its browser evidence. Determine whether the supplied "
-        "source context supports a small, evidence-based code change. Return exactly "
+        "already reached a terminal status based on its browser evidence. Determine whether the supplied "
+        "source context supports an accessibility-related code change that directly addresses "
+        "a reported accessibility issue. Return NO_PATCH if no such issue is supported. Return exactly "
         "one JSON object matching the provided schema: status is PATCH_READY or NO_PATCH, "
-        "summary is concise, relevantPaths lists only supplied paths, and patch is a "
+        "summary is concise, rootCause explains the evidence-supported cause, proposedFix "
+        "describes the minimal correction, relevantPaths lists only supplied paths, and patch is a "
         "unified diff no longer than 20000 characters. For PATCH_READY, format the patch "
         "as one standard diff --git section per changed file, with the matching --- and "
         "+++ file headers and at least one @@ hunk with accurate range counts in every "
@@ -189,7 +209,9 @@ def _json_candidates(value: Any):
     """Yield strict result objects from Codex JSONL final-message events."""
     if not isinstance(value, dict):
         return
-    if set(value) == {"status", "summary", "relevantPaths", "patch"}:
+    if set(value) == {
+        "status", "summary", "rootCause", "proposedFix", "relevantPaths", "patch"
+    }:
         yield value
         return
     event_type = value.get("type")
@@ -444,12 +466,16 @@ def _validate_result(value: Dict[str, Any], context: PreparedSourceContext) -> D
     if not isinstance(value, dict) or set(value) != {
         "status",
         "summary",
+        "rootCause",
+        "proposedFix",
         "relevantPaths",
         "patch",
     }:
         raise SourceReviewError("Codex source reviewer returned an invalid result shape")
     status = value["status"]
     summary = value["summary"]
+    root_cause = value["rootCause"]
+    proposed_fix = value["proposedFix"]
     relevant_paths = value["relevantPaths"]
     patch = value["patch"]
     if not isinstance(status, str) or status not in {"PATCH_READY", "NO_PATCH"}:
@@ -461,6 +487,13 @@ def _validate_result(value: Dict[str, Any], context: PreparedSourceContext) -> D
         or "\x00" in summary
     ):
         raise SourceReviewError("Codex source reviewer returned an invalid summary")
+    for label, explanation in (("root cause", root_cause), ("proposed fix", proposed_fix)):
+        if (
+            not isinstance(explanation, str)
+            or len(explanation) > MAX_SOURCE_REVIEW_EXPLANATION_CHARS
+            or "\x00" in explanation
+        ):
+            raise SourceReviewError("Codex source reviewer returned an invalid " + label)
     try:
         summary.encode("utf-8", errors="strict")
     except UnicodeEncodeError as error:
@@ -493,11 +526,13 @@ def _validate_result(value: Dict[str, Any], context: PreparedSourceContext) -> D
         return {
             "status": "NO_PATCH",
             "summary": summary.strip(),
+            "rootCause": root_cause.strip(),
+            "proposedFix": proposed_fix.strip(),
             "relevantPaths": normalized_relevant,
             "patch": "",
         }
 
-    if not patch.strip() or not normalized_relevant:
+    if not patch.strip() or not normalized_relevant or not root_cause.strip() or not proposed_fix.strip():
         raise SourceReviewError("PATCH_READY results must include a patch and relevant paths")
     patch_paths = _patch_paths(patch)
     if not patch_paths.issubset(allowed_paths):
@@ -507,6 +542,8 @@ def _validate_result(value: Dict[str, Any], context: PreparedSourceContext) -> D
     return {
         "status": "PATCH_READY",
         "summary": summary.strip(),
+        "rootCause": root_cause.strip(),
+        "proposedFix": proposed_fix.strip(),
         "relevantPaths": normalized_relevant,
         "patch": patch,
     }
@@ -599,11 +636,11 @@ class CodexSourceReviewer:
             environment = _codex_child_environment()
             try:
                 process = subprocess.Popen(
-                    args + [prompt],
+                    args + ["-"],
                     cwd=str(directory),
                     env=environment,
                     shell=False,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
@@ -611,6 +648,7 @@ class CodexSourceReviewer:
                 raise SourceReviewError(
                     "Codex CLI could not start; ensure it is installed and logged in"
                 ) from error
+            prompt_writer = _start_codex_prompt_writer(process, prompt)
 
             stdout_buffer = bytearray()
             stderr_buffer = bytearray()
@@ -676,6 +714,8 @@ class CodexSourceReviewer:
                 self._stop_process(process)
                 raise SourceReviewError("Codex output capture could not start") from error
             finally:
+                if prompt_writer is not None:
+                    prompt_writer.join(timeout=1.0)
                 if stdout_reader.ident is not None:
                     stdout_reader.join(timeout=1.0)
                 if stderr_reader.ident is not None:
@@ -725,12 +765,14 @@ class CodexSourceReviewer:
         if not isinstance(prepared_context, PreparedSourceContext):
             raise SourceReviewError("source review requires a prepared source context")
         try:
-            if not isinstance(run, dict) or run.get("status") != "BLOCKED":
-                raise SourceReviewError("source review is available only for blocked runs")
+            if not isinstance(run, dict) or run.get("status") not in {"BLOCKED", "COMPLETED", "INCONCLUSIVE"}:
+                raise SourceReviewError("source review is available only for terminal runs")
             if not prepared_context.files:
                 return {
                     "status": "NO_PATCH",
                     "summary": "No supported source files were available for review.",
+                    "rootCause": "",
+                    "proposedFix": "",
                     "relevantPaths": [],
                     "patch": "",
                 }
@@ -739,6 +781,8 @@ class CodexSourceReviewer:
                 return {
                     "status": "NO_PATCH",
                     "summary": "No source files fit within the reviewer input limit.",
+                    "rootCause": "",
+                    "proposedFix": "",
                     "relevantPaths": [],
                     "patch": "",
                 }

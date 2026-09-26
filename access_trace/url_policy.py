@@ -1,6 +1,32 @@
-"""Small URL-equivalence rules for browser redirects and evidence labels."""
+"""URL rules for browser navigation and evidence labels."""
 
+import ipaddress
+import socket
 from urllib.parse import urlsplit
+
+
+def is_public_web_destination(value: str) -> bool:
+    """Fail closed unless every resolved address is globally routable."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        if parsed.username is not None or parsed.password is not None:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            return ipaddress.ip_address(parsed.hostname).is_global
+        except ValueError:
+            answers = socket.getaddrinfo(
+                parsed.hostname, port, type=socket.SOCK_STREAM
+            )
+            return bool(answers) and all(
+                ipaddress.ip_address(answer[4][0]).is_global for answer in answers
+            )
+    except (ValueError, OSError, IndexError):
+        return False
 
 
 def same_web_origin(target, observed) -> bool:

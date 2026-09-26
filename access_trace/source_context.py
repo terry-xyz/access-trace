@@ -46,6 +46,23 @@ GENERATED_DIRECTORIES = frozenset(
         "vendor",
     }
 )
+SENSITIVE_DIRECTORIES = frozenset(
+    {".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker"}
+)
+SENSITIVE_FILENAMES = frozenset(
+    {".npmrc", ".pypirc", ".netrc", ".envrc", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+)
+SENSITIVE_EXTENSIONS = frozenset({".key", ".pem", ".p12", ".pfx"})
+SENSITIVE_CONFIG_EXTENSIONS = frozenset(
+    {"", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".txt", ".properties"}
+)
+SENSITIVE_STEMS = frozenset(
+    {
+        "credential", "credentials", "secret", "secrets", "token", "tokens",
+        "service-account", "service_account", "client-secret", "client_secret",
+        "access-token", "access_token",
+    }
+)
 
 
 class SourceContextError(ValueError):
@@ -342,6 +359,22 @@ def _generated_directory_reason(path: str) -> Optional[str]:
     return None
 
 
+def sensitive_source_path(path: str) -> bool:
+    """Keep common credential files out of both source review and site uploads."""
+    parts = [part.casefold() for part in path.split("/")]
+    name = parts[-1]
+    suffix = PurePosixPath(name).suffix
+    stem = name[: -len(suffix)] if suffix else name
+    return (
+        any(part in SENSITIVE_DIRECTORIES for part in parts[:-1])
+        or name in SENSITIVE_FILENAMES
+        or name == ".env"
+        or name.startswith(".env.")
+        or suffix in SENSITIVE_EXTENSIONS
+        or (suffix in SENSITIVE_CONFIG_EXTENSIONS and stem in SENSITIVE_STEMS)
+    )
+
+
 def _gitignore_reason(
     path: str, rules: List[GitIgnoreRule], budget: _GitIgnoreWorkBudget
 ) -> Optional[str]:
@@ -447,6 +480,9 @@ def prepare_source_context(payload: Any) -> PreparedSourceContext:
     prepared = PreparedSourceContext()
     review_bytes = 0
     for path, content, selection_type, size_bytes in normalized_entries:
+        if sensitive_source_path(path):
+            prepared.skipped.append({"path": path, "reason": "sensitive-file"})
+            continue
         if size_bytes is None:
             prepared.skipped.append({"path": path, "reason": "unsupported-utf8"})
             continue

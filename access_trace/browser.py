@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urlsplit, urlunsplit
 
-from .url_policy import is_browser_error_url, same_web_origin
+from .url_policy import is_browser_error_url, is_public_web_destination, same_web_origin
 
 
 class BrowserError(RuntimeError):
@@ -659,7 +659,10 @@ class _UploadedPageRequestPolicy:
     ):
         self.connection = connection
         self.target = urlsplit(target_url)
-        site_match = re.match(r"^(/sites/[0-9a-f]{32})/", self.target.path)
+        site_match = re.match(
+            r"^(/sites/[0-9a-f]{32}|/docs/demos/(?:fixed|broken))/",
+            self.target.path,
+        )
         self.site_prefix = site_match.group(1) + "/" if site_match else ""
         self.main_frame_id = main_frame_id
         self.allow_site_documents = allow_site_documents
@@ -753,6 +756,55 @@ class _UploadedPageRequestPolicy:
             "Fetch.failRequest",
             {"requestId": request_id, "errorReason": "BlockedByClient"},
         )
+
+
+class _WebPageRequestPolicy:
+    """Deny private requests and navigation away from the assessed web origin."""
+
+    def __init__(self, connection: _WebSocket, target_url: str, main_frame_id: Optional[str]):
+        self.connection = connection
+        self.target = urlsplit(target_url)
+        self.main_frame_id = main_frame_id
+
+    def handle_event(self, message: Dict[str, Any]) -> None:
+        if message.get("method") != "Fetch.requestPaused":
+            return
+        params = message.get("params")
+        if not isinstance(params, dict):
+            raise BrowserError("browser paused a request without policy details")
+        request_id = params.get("requestId")
+        request = params.get("request")
+        if not isinstance(request_id, str) or not isinstance(request, dict):
+            raise BrowserError("browser paused a request without a request identifier")
+
+        url = request.get("url")
+        allowed = False
+        if (
+            isinstance(url, str)
+            and len(url) <= 4096
+            and "responseStatusCode" not in params
+            and "responseErrorReason" not in params
+            and params.get("resourceType") in {
+                "Document", "Stylesheet", "Image", "Media", "Font", "Script",
+                "TextTrack", "XHR", "Fetch", "Prefetch", "EventSource",
+                "Manifest", "Other",
+            }
+            and is_public_web_destination(url)
+        ):
+            try:
+                destination = urlsplit(url)
+                same_origin = same_web_origin(self.target, destination)
+                allowed = (
+                    (params.get("resourceType") != "Document" or same_origin)
+                    and (request.get("method") in {"GET", "HEAD"} or same_origin)
+                )
+            except ValueError:
+                allowed = False
+        method = "Fetch.continueRequest" if allowed else "Fetch.failRequest"
+        arguments = {"requestId": request_id}
+        if not allowed:
+            arguments["errorReason"] = "BlockedByClient"
+        self.connection.send_checked_call(method, arguments)
 
 
 class IsolatedKeyboardBrowser:
@@ -863,11 +915,15 @@ class IsolatedKeyboardBrowser:
                     self._main_frame_id,
                     allow_site_documents=allow_site_navigation,
                 )
-                self.connection.event_handler = self.request_policy.handle_event
-                self.connection.call(
-                    "Fetch.enable",
-                    {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+            else:
+                self.request_policy = _WebPageRequestPolicy(
+                    self.connection, navigation_url, self._main_frame_id
                 )
+            self.connection.event_handler = self.request_policy.handle_event
+            self.connection.call(
+                "Fetch.enable",
+                {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+            )
             self._page_monitor_active = True
             self._popup_attempted = False
             self._native_dialog_open = False

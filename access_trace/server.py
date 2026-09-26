@@ -1,5 +1,6 @@
 """HTTP boundary for page inputs and first-run assessment evidence."""
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -31,8 +32,10 @@ from .source_context import (
     MAX_SOURCE_REQUEST_BYTES,
     SourceContextError,
     prepare_source_context,
+    sensitive_source_path,
 )
 from .source_review import CodexSourceReviewer, SourceReviewError
+from .source_patch import apply_unified_patch
 from .store import RunStore
 
 
@@ -52,6 +55,8 @@ STATIC_ASSETS = {
     "/src/comparison.mjs": (STATIC_ROOT / "src" / "comparison.mjs", "text/javascript; charset=utf-8"),
     "/src/live-comparison.mjs": (STATIC_ROOT / "src" / "live-comparison.mjs", "text/javascript; charset=utf-8"),
     "/src/main.mjs": (STATIC_ROOT / "src" / "main.mjs", "text/javascript; charset=utf-8"),
+    "/src/source-context.mjs": (STATIC_ROOT / "src" / "source-context.mjs", "text/javascript; charset=utf-8"),
+    "/src/source-apply.mjs": (STATIC_ROOT / "src" / "source-apply.mjs", "text/javascript; charset=utf-8"),
     "/src/styles.css": (STATIC_ROOT / "src" / "styles.css", "text/css; charset=utf-8"),
 }
 
@@ -172,6 +177,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
     server: AccessTraceServer
 
     def do_GET(self):  # noqa: N802 - required by BaseHTTPRequestHandler
+        if not self.host_is_controlled():
+            self.send_json(HTTPStatus.MISDIRECTED_REQUEST, {"error": {"message": "Unrecognized host"}})
+            return
         path = urlsplit(self.path).path
         if path in {"/", "/index.html"}:
             self.send_file(STATIC_ROOT / "index.html", "text/html; charset=utf-8")
@@ -211,7 +219,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 self.send_local_html(contents)
             else:
                 content_type = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
-                self.send_asset(contents, content_type)
+                self.send_asset(contents, content_type, uploaded=True)
             return
         if path.startswith("/api/runs/"):
             if path.endswith("/activity"):
@@ -222,6 +230,12 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Not found"}})
 
     def do_POST(self):  # noqa: N802 - required by BaseHTTPRequestHandler
+        if not self.host_is_controlled():
+            self.send_json(HTTPStatus.MISDIRECTED_REQUEST, {"error": {"message": "Unrecognized host"}})
+            return
+        if self.headers.get("Transfer-Encoding") is not None or len(self.headers.get_all("Content-Length", [])) > 1:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": "Unsupported request framing"}})
+            return
         path = urlsplit(self.path).path
         if not self.origin_is_controlled():
             self.send_json(HTTPStatus.FORBIDDEN, {"error": {"message": "Cross-origin requests are not allowed"}})
@@ -234,6 +248,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/runs/") and path.endswith("/source-review"):
             self.review_source_context(path)
+            return
+        if path.startswith("/api/runs/") and path.endswith("/source-fix-approve"):
+            self.approve_source_fix(path)
             return
         if path.startswith("/api/runs/") and path.endswith("/cancel"):
             self.cancel_run(path)
@@ -310,6 +327,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 if field_name != "files" or not part.get_filename():
                     continue
                 relative_path = _safe_site_path(part.get_filename())
+                if sensitive_source_path(relative_path):
+                    raise ValidationError("page files must not include sensitive files")
                 if relative_path in seen_paths:
                     raise ValidationError("page files contain duplicate relative paths")
                 if len(payload) > MAX_LOCAL_SITE_FILE_BYTES:
@@ -440,13 +459,13 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         if run is None:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
             return
-        if run.get("status") != "BLOCKED":
+        if run.get("status") not in {"BLOCKED", "COMPLETED", "INCONCLUSIVE"}:
             self.send_json(
                 HTTPStatus.CONFLICT,
-                {"error": {"message": "Source review is available only for blocked runs"}},
+                {"error": {"message": "Source review is available only for terminal runs"}},
             )
             return
-        if "sourceReview" in run:
+        if isinstance(run.get("sourceReview"), dict) and run["sourceReview"].get("status") not in {"FAILED", "CANCELLED"}:
             self.send_json(
                 HTTPStatus.CONFLICT,
                 {"error": {"message": "Source review has already been requested for this run"}},
@@ -484,14 +503,14 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     if current is None:
                         status = HTTPStatus.NOT_FOUND
                         response = {"error": {"message": "Run not found"}}
-                    elif current.get("status") != "BLOCKED":
+                    elif current.get("status") not in {"BLOCKED", "COMPLETED", "INCONCLUSIVE"}:
                         status = HTTPStatus.CONFLICT
                         response = {
                             "error": {
-                                "message": "Source review is available only for blocked runs"
+                                "message": "Source review is available only for terminal runs"
                             }
                         }
-                    elif "sourceReview" in current or run_id in self.server.active_source_reviewers:
+                    elif (isinstance(current.get("sourceReview"), dict) and current["sourceReview"].get("status") not in {"FAILED", "CANCELLED"}) or run_id in self.server.active_source_reviewers:
                         status = HTTPStatus.CONFLICT
                         response = {
                             "error": {
@@ -506,6 +525,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                                 "so no patch was generated."
                             ),
                             "relevantPaths": [],
+                            "rootCause": "",
+                            "proposedFix": "",
                             "patch": "",
                             "skipped": skipped,
                         }
@@ -523,14 +544,14 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     if current is None:
                         status = HTTPStatus.NOT_FOUND
                         response = {"error": {"message": "Run not found"}}
-                    elif current.get("status") != "BLOCKED":
+                    elif current.get("status") not in {"BLOCKED", "COMPLETED", "INCONCLUSIVE"}:
                         status = HTTPStatus.CONFLICT
                         response = {
                             "error": {
-                                "message": "Source review is available only for blocked runs"
+                                "message": "Source review is available only for terminal runs"
                             }
                         }
-                    elif "sourceReview" in current:
+                    elif isinstance(current.get("sourceReview"), dict) and current["sourceReview"].get("status") not in {"FAILED", "CANCELLED"}:
                         status = HTTPStatus.CONFLICT
                         response = {
                             "error": {
@@ -547,6 +568,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                             "status": "FAILED",
                             "summary": "The source reviewer could not be started.",
                             "relevantPaths": [],
+                            "rootCause": "",
+                            "proposedFix": "",
                             "patch": "",
                             "skipped": skipped,
                         }
@@ -561,12 +584,12 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 if current is None:
                     status = HTTPStatus.NOT_FOUND
                     payload = {"error": {"message": "Run not found"}}
-                elif current.get("status") != "BLOCKED":
+                elif current.get("status") not in {"BLOCKED", "COMPLETED", "INCONCLUSIVE"}:
                     status = HTTPStatus.CONFLICT
                     payload = {
-                        "error": {"message": "Source review is available only for blocked runs"}
+                        "error": {"message": "Source review is available only for terminal runs"}
                     }
-                elif "sourceReview" in current:
+                elif isinstance(current.get("sourceReview"), dict) and current["sourceReview"].get("status") not in {"FAILED", "CANCELLED"}:
                     status = HTTPStatus.CONFLICT
                     payload = {
                         "error": {
@@ -581,6 +604,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                         "status": "IN_PROGRESS",
                         "summary": "Reviewing uploaded files against browser evidence.",
                         "relevantPaths": [],
+                        "rootCause": "",
+                        "proposedFix": "",
                         "patch": "",
                         "skipped": skipped,
                     }
@@ -595,14 +620,26 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 self.send_json(status, payload)
                 return
 
+            source_digests = {
+                source_file.path: hashlib.sha256(source_file.content.encode("utf-8")).hexdigest()
+                for source_file in context.files
+            }
             try:
                 review_result = reviewer.review(run, context)
                 skipped = [dict(item) for item in context.skipped]
                 source_review = {
                     "status": review_result["status"],
                     "summary": review_result["summary"],
+                    "rootCause": review_result.get("rootCause", ""),
+                    "proposedFix": review_result.get("proposedFix", ""),
                     "relevantPaths": review_result["relevantPaths"],
                     "patch": review_result["patch"],
+                    "proposalDigest": hashlib.sha256(review_result["patch"].encode("utf-8")).hexdigest(),
+                    "sourceDigests": {
+                        source_path: digest
+                        for source_path, digest in source_digests.items()
+                        if source_path in review_result["relevantPaths"]
+                    },
                     "skipped": skipped,
                 }
             except SourceReviewError as error:
@@ -611,6 +648,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     "status": "FAILED",
                     "summary": str(error).strip()[:2000] or "Source review failed.",
                     "relevantPaths": [],
+                    "rootCause": "",
+                    "proposedFix": "",
                     "patch": "",
                     "skipped": skipped,
                 }
@@ -620,6 +659,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     "status": "FAILED",
                     "summary": "The source reviewer failed unexpectedly.",
                     "relevantPaths": [],
+                    "rootCause": "",
+                    "proposedFix": "",
                     "patch": "",
                     "skipped": skipped,
                 }
@@ -630,6 +671,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                         "status": "CANCELLED",
                         "summary": "Source review was cancelled.",
                         "relevantPaths": [],
+                        "rootCause": "",
+                        "proposedFix": "",
                         "patch": "",
                         "skipped": skipped,
                     }
@@ -648,6 +691,74 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     self.server.cancelled_source_review_ids.discard(run_id)
             if context is not None:
                 context.cleanup()
+
+    def approve_source_fix(self, path: str):
+        """Prepare replacement text for browser writes after strict conflict checks."""
+        raw_run_id = path[len("/api/runs/") : -len("/source-fix-approve")].rstrip("/")
+        run_id = unquote(raw_run_id)
+        if not RUN_ID_PATTERN.fullmatch(run_id):
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+            return
+        run = self.server.run_store.get(run_id)
+        if run is None:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+            return
+        if run.get("status") not in {"BLOCKED", "COMPLETED", "INCONCLUSIVE"}:
+            self.send_json(HTTPStatus.CONFLICT, {"error": {"message": "Fix approval is available only for terminal runs"}})
+            return
+        proposal = run.get("sourceReview")
+        if not isinstance(proposal, dict) or proposal.get("status") != "PATCH_READY":
+            self.send_json(HTTPStatus.CONFLICT, {"error": {"message": "No fix proposal is ready"}})
+            return
+        if proposal.get("proposalDigest") != hashlib.sha256(
+            str(proposal.get("patch", "")).encode("utf-8")
+        ).hexdigest():
+            self.send_json(HTTPStatus.CONFLICT, {"error": {"message": "The saved proposal is invalid"}})
+            return
+        try:
+            payload = self.read_json(MAX_SOURCE_REQUEST_BYTES)
+            if not isinstance(payload, dict) or set(payload) != {"sourceContext"}:
+                raise ValidationError('request body must contain only "sourceContext"')
+            context = prepare_source_context(payload["sourceContext"])
+        except (ValidationError, SourceContextError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": "invalid source context: " + str(error)}})
+            return
+
+        try:
+            context_files = {item.path: item.content for item in context.files}
+            relevant = proposal.get("relevantPaths")
+            baseline = proposal.get("sourceDigests")
+            if not isinstance(relevant, list) or not relevant or not isinstance(baseline, dict):
+                self.send_json(HTTPStatus.CONFLICT, {"error": {"message": "The saved proposal has no valid source baseline"}})
+                return
+            replacement_inputs = {}
+            for source_path in relevant:
+                if source_path not in context_files or baseline.get(source_path) != hashlib.sha256(
+                    context_files[source_path].encode("utf-8")
+                ).hexdigest():
+                    self.send_json(HTTPStatus.CONFLICT, {"error": {"message": "Source files changed since the proposal was created"}})
+                    return
+                replacement_inputs[source_path] = context_files[source_path]
+            replacements = apply_unified_patch(proposal["patch"], replacement_inputs)
+            # Recheck the saved proposal after patch validation in case a newer review replaced it.
+            with self.server.active_planners_lock:
+                current = self.server.run_store.get(run_id)
+                current_proposal = current.get("sourceReview") if current else None
+                if (
+                    not isinstance(current_proposal, dict)
+                    or current_proposal.get("status") != "PATCH_READY"
+                    or current_proposal.get("proposalDigest") != proposal["proposalDigest"]
+                ):
+                    self.send_json(HTTPStatus.CONFLICT, {"error": {"message": "The fix proposal changed while approval was being prepared"}})
+                    return
+            self.send_json(HTTPStatus.OK, {"appliableFiles": [
+                {"path": source_path, "content": content}
+                for source_path, content in sorted(replacements.items())
+            ]})
+        except SourceReviewError as error:
+            self.send_json(HTTPStatus.CONFLICT, {"error": {"message": str(error)}})
+        finally:
+            context.cleanup()
 
     def cancel_run(self, path: str):
         raw_run_id = path[len("/api/runs/") : -len("/cancel")].rstrip("/")
@@ -799,6 +910,32 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             and not parsed.fragment
         )
 
+    def host_is_controlled(self) -> bool:
+        """Prevent DNS rebinding from turning another site's origin into this API."""
+        values = self.headers.get_all("Host", [])
+        if len(values) != 1:
+            return False
+        value = values[0]
+        if not value or any(character.isspace() for character in value):
+            return False
+        try:
+            parsed = urlsplit("//" + value)
+            port = parsed.port if parsed.port is not None else 80
+        except ValueError:
+            return False
+        allowed_hosts = {self.server.controlled_host}
+        if self.server.controlled_host in {"localhost", "127.0.0.1", "::1"}:
+            allowed_hosts.update({"localhost", "127.0.0.1", "::1"})
+        return (
+            parsed.hostname in allowed_hosts
+            and port == self.server.controlled_port
+            and not parsed.username
+            and not parsed.password
+            and not parsed.path
+            and not parsed.query
+            and not parsed.fragment
+        )
+
     def base_url(self) -> str:
         return self.server.controlled_origin
 
@@ -837,13 +974,15 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(contents)
 
-    def send_asset(self, contents: bytes, content_type: str):
+    def send_asset(self, contents: bytes, content_type: str, uploaded: bool = False):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(contents)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        if uploaded:
+            self.send_header("Content-Security-Policy", "sandbox")
         self.end_headers()
         self.wfile.write(contents)
 
