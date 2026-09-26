@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlsplit
 
 from .demo import demo_page
-from .domain import CONTROLLED_SCHEME, ValidationError, create_run, utc_now
+from .domain import CONTROLLED_SCHEME, ValidationError, create_run
 from .evidence import REVIEW_UNAVAILABLE_REASON
 from .journey import execute_assessment
 from .planner import CodexPlanner
@@ -259,20 +259,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 planner=planner,
             )
             with self.server.active_planners_lock:
-                cancellation_requested = run_id in self.server.cancelled_run_ids
+                # The journey owns its terminal status, including a status
+                # produced after a cancellation request races with completion.
                 self.server.cancelled_run_ids.discard(run_id)
-                if cancellation_requested:
-                    completed["status"] = "INCONCLUSIVE"
-                    completed["updatedAt"] = utc_now()
-                    completed["completedAt"] = completed["updatedAt"]
-                    if not any(
-                        warning.get("kind") == "run-cancelled"
-                        for warning in completed.get("warnings", [])
-                        if isinstance(warning, dict)
-                    ):
-                        completed.setdefault("warnings", []).append(
-                            {"kind": "run-cancelled"}
-                        )
                 self.server.run_store.save(completed)
             try:
                 review = review_evidence(
