@@ -532,7 +532,7 @@ class AssessmentTargetTests(unittest.TestCase):
                 return {
                     "pages": [target, page_two, page_three, page_four][:max_pages],
                     "source": "sitemap",
-                    "truncated": max_pages < 4,
+                    "truncated": False,
                 }
 
             def discover_site_links(self):
@@ -560,6 +560,7 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertLess(events.index("scrape-links:3"), events.index("visit:" + page_two))
         self.assertEqual([page_two, page_three], visited)
         self.assertEqual(3, completed["siteDiscovery"]["pagesFound"])
+        self.assertFalse(completed["siteDiscovery"]["truncated"])
         self.assertEqual(3, completed["stoppingPoint"]["coverage"]["areasObserved"])
         self.assertTrue(
             any("Scraping up to 3" in event.get("message", "") for event in progress_events)
@@ -595,6 +596,7 @@ class AssessmentTargetTests(unittest.TestCase):
 
         self.assertIn("const maxPages = 3;", browser.connection.expression)
         self.assertEqual(2, len(result["pages"]))
+        self.assertFalse(result["truncated"])
 
     def test_queued_whole_site_run_can_be_cancelled_before_browser_start(self):
         run = create_run(
