@@ -14,6 +14,8 @@ const form = document.querySelector("#assessment-form");
 const intro = document.querySelector("#top");
 const targetInput = document.querySelector("#target-url");
 const pageOnlyInput = document.querySelector("#page-only");
+const sitePageLimitInput = document.querySelector("#site-page-limit");
+const sitePageLimitError = document.querySelector("#site-page-limit-error");
 const targetSiteFilesInput = document.querySelector("#target-site-files");
 const targetSiteDirectoryInput = document.querySelector("#target-site-directory");
 const targetSiteStatus = document.querySelector("#target-site-status");
@@ -147,6 +149,21 @@ async function loadLatestRunReport() {
     reportEmptyState.hidden = true;
   } catch {
     // The report's empty state remains available if no local run can be loaded.
+  }
+}
+
+/** loadSitePageLimitDefault reflects the developer's default unless the user edits the field first. */
+async function loadSitePageLimitDefault() {
+  try {
+    const response = await fetch("/api/config");
+    if (!response.ok) return;
+    const configuration = await response.json();
+    const value = configuration?.defaultSitePageLimit;
+    if (!sitePageLimitInput.dataset.userEdited && Number.isSafeInteger(value) && value >= 0 && value <= 500) {
+      sitePageLimitInput.value = String(value);
+    }
+  } catch {
+    // The HTML default remains available if local configuration cannot load.
   }
 }
 
@@ -328,11 +345,19 @@ function validateCurrentConfiguration() {
   comparisonSection.hidden = true;
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
+  setError(sitePageLimitInput, sitePageLimitError, "");
 
   const validation = validateTargetUrl(targetInput.value, window.location.origin);
   if (!validation.valid) {
     setError(targetInput, targetError, validation.message);
     targetInput.focus();
+    return null;
+  }
+
+  const sitePageLimit = sitePageLimitInput.valueAsNumber;
+  if (!Number.isSafeInteger(sitePageLimit) || sitePageLimit < 0 || sitePageLimit > 500) {
+    setError(sitePageLimitInput, sitePageLimitError, "Enter a whole number from 0 to 500.");
+    sitePageLimitInput.focus();
     return null;
   }
 
@@ -348,6 +373,7 @@ function validateCurrentConfiguration() {
     scope: goalValidation.scope,
     goal: goalValidation.goal || null,
     pageOnly: pageOnlyInput.checked,
+    sitePageLimit,
     simulationMode: simulationInput.checked,
   };
 }
@@ -1029,6 +1055,7 @@ async function handleLiveAssessment() {
         targetUrl: configuration.targetUrl,
         goal: configuration.goal,
         pageOnly: configuration.pageOnly,
+        sitePageLimit: configuration.sitePageLimit,
         simulationMode: configuration.simulationMode,
       }),
     });
@@ -1202,6 +1229,7 @@ function getComparisonSettings(configuration) {
     scope: configuration.scope,
     goal: configuration.goal,
     pageOnly: configuration.pageOnly,
+    sitePageLimit: configuration.sitePageLimit,
     simulationMode: configuration.simulationMode,
     consistencyLevel,
     runsPerVersion: CONSISTENCY_RUN_COUNTS[consistencyLevel],
@@ -1256,6 +1284,7 @@ async function handleComparisonRequest() {
               targetUrl: window.location.origin + demo.path,
               goal: configuration.goal,
               pageOnly: configuration.pageOnly,
+              sitePageLimit: configuration.sitePageLimit,
               simulationMode: configuration.simulationMode,
             }),
           });
@@ -1325,6 +1354,7 @@ function renderComparisonSettings(settings) {
   const values = [
     ["Targets", settings.targetUrl],
     ["Assessment scope", settings.scope === "whole-site" ? (settings.pageOnly ? "Selected page only" : "Whole site") : "Goal focused"],
+    ["Page limit", settings.pageOnly || settings.goal ? "Not applicable" : settings.sitePageLimit === 0 ? "All discovered pages" : String(settings.sitePageLimit)],
     ["Goal", settings.goal || "None configured"],
     ["Simulation mode", settings.simulationMode ? "On" : "Off"],
     ["Runs per demo", settings.consistencyLevel + " · " + formatRunCount(settings.runsPerVersion)],
@@ -1520,6 +1550,10 @@ targetInput.addEventListener("input", () => {
 });
 goalInput.addEventListener("input", updateScopePreview);
 pageOnlyInput.addEventListener("change", updateScopePreview);
+sitePageLimitInput.addEventListener("input", () => {
+  sitePageLimitInput.dataset.userEdited = "true";
+  setError(sitePageLimitInput, sitePageLimitError, "");
+});
 simulationInput.addEventListener("change", clearStaleViews);
 consistencyInput.addEventListener("change", updateConsistencyPreview);
 targetInput.value = "";
@@ -1529,3 +1563,4 @@ updateScopePreview();
 populateConsistencyOptions();
 updateConsistencyPreview();
 void loadLatestRunReport();
+void loadSitePageLimitDefault();

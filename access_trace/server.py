@@ -17,7 +17,12 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 from urllib.parse import quote, unquote, urlsplit
 
-from .domain import CONTROLLED_SCHEME, ValidationError, create_run
+from .domain import (
+    CONTROLLED_SCHEME,
+    ValidationError,
+    configured_site_page_limit,
+    create_run,
+)
 from .evidence import REVIEW_UNAVAILABLE_REASON
 from .journey import execute_assessment
 from .planner import CodexPlanner
@@ -173,6 +178,12 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             return
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"status": "ok"})
+            return
+        if path == "/api/config":
+            self.send_json(
+                HTTPStatus.OK,
+                {"defaultSitePageLimit": configured_site_page_limit()},
+            )
             return
         if path == "/api/runs/latest":
             run = self.server.run_store.latest()

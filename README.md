@@ -50,7 +50,7 @@ yourself.
 
 Web URLs are opened in a fresh isolated browser. With no goal and **Only check
 this page** unchecked, AccessTrace scans the selected page and follows same-origin
-links up to a configurable page limit. Set `ACCESS_TRACE_MAX_SITE_PAGES` to a
+links up to the page limit beside the URL field. Set `ACCESS_TRACE_MAX_SITE_PAGES` to a
 number from 1 to 500 to change the default limit of 25; set it to `0` to crawl
 all discovered same-origin pages. Checking **Only check this page** keeps the
 scan on the selected URL. Off-site links are not followed.

@@ -1,7 +1,8 @@
 """Public data contract for the first Journey & Evidence run boundary."""
 
-import uuid
+import os
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
@@ -12,6 +13,7 @@ from .evidence import attach_evidence_handoff
 SUPPORTED_GOAL = "Submit the contact form"
 INTERACTION_PROFILE = "keyboard-only"
 DEFAULT_SIMULATION_MODE = True
+DEFAULT_MAX_SITE_PAGES = 25
 CONTROLLED_SCHEME = "http"
 DEMO_TITLE = "AccessTrace Contact form"
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -24,6 +26,16 @@ LOCAL_HTML_TARGET_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})/(.+)$")
 
 class ValidationError(ValueError):
     """Raised when a run request does not satisfy the public input contract."""
+
+
+def configured_site_page_limit() -> int:
+    """Return the developer's default page bound, with 0 representing no limit."""
+    configured = os.environ.get("ACCESS_TRACE_MAX_SITE_PAGES", "")
+    try:
+        value = int(configured) if configured.strip() else DEFAULT_MAX_SITE_PAGES
+    except ValueError:
+        value = DEFAULT_MAX_SITE_PAGES
+    return 0 if value == 0 else max(1, min(value, 500))
 
 
 def utc_now() -> str:
@@ -106,6 +118,13 @@ def build_run_request(
     page_only = payload.get("pageOnly", False)
     if not isinstance(page_only, bool):
         raise ValidationError("pageOnly must be boolean")
+    site_page_limit = payload.get("sitePageLimit", configured_site_page_limit())
+    if (
+        not isinstance(site_page_limit, int)
+        or isinstance(site_page_limit, bool)
+        or not 0 <= site_page_limit <= 500
+    ):
+        raise ValidationError("sitePageLimit must be a whole number from 0 to 500")
 
     return {
         "targetUrl": target_url,
@@ -113,6 +132,7 @@ def build_run_request(
         "assessmentScope": derived_scope,
         "goal": goal,
         "pageOnly": page_only,
+        "sitePageLimit": site_page_limit,
         "simulationMode": simulation_mode,
     }
 
@@ -245,6 +265,7 @@ def create_run(
         "assessmentScope": run_request["assessmentScope"],
         "goal": run_request["goal"],
         "pageOnly": run_request["pageOnly"],
+        "sitePageLimit": run_request["sitePageLimit"],
         "successCondition": (
             "Message sent"
             if run_request["targetVersion"] in {"fixed", "broken"}

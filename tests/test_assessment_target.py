@@ -18,12 +18,11 @@ from access_trace.browser import (
     MAX_PLANNER_SCREENSHOT_BYTES,
     _UploadedPageRequestPolicy,
 )
-from access_trace.domain import create_run
+from access_trace.domain import configured_site_page_limit, create_run
 from access_trace.journey import (
     CodexPlanner,
     PlannerError,
     _complete_if_verified,
-    _max_site_pages,
     execute_assessment,
     execute_contact_goal,
     execute_fixed_goal,
@@ -323,6 +322,7 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual(run, json.loads(stored.read_text()))
 
     def test_starting_without_a_goal_uses_whole_site_scope_and_preserves_simulation_mode(self):
+        config_status, config = self.request("GET", "/api/config")
         status, run = self.request(
             "POST",
             "/api/runs",
@@ -333,12 +333,39 @@ class AssessmentTargetTests(unittest.TestCase):
         )
 
         self.assertEqual(201, status)
+        self.assertEqual(200, config_status)
+        self.assertEqual(config["defaultSitePageLimit"], run["sitePageLimit"])
         self.assertEqual("whole-site", run["assessmentScope"])
         self.assertIsNone(run["goal"])
         self.assertFalse(run["simulationMode"])
         self.assertIsNone(run["successCondition"])
         self.assertEqual("not-started", run["observations"][0]["coverage"]["status"])
         self.assertNotIn("Message sent", json.dumps(run["observations"][0]["coverage"]))
+
+    def test_site_page_limit_is_editable_and_zero_is_stored_as_no_limit(self):
+        status, run = self.request(
+            "POST",
+            "/api/runs",
+            {
+                "targetUrl": self.base_url + "/demo/fixed",
+                "sitePageLimit": 0,
+            },
+        )
+        self.assertEqual(201, status)
+        self.assertEqual(0, run["sitePageLimit"])
+
+        with self.assertRaises(HTTPError) as error:
+            self.request(
+                "POST",
+                "/api/runs",
+                {
+                    "targetUrl": self.base_url + "/demo/fixed",
+                    "sitePageLimit": 501,
+                },
+            )
+        response = json.loads(error.exception.read().decode("utf-8"))
+        self.assertEqual(400, error.exception.code)
+        self.assertIn("0 to 500", response["error"]["message"])
 
     def test_whole_site_execution_completes_only_after_declared_focus_coverage(self):
         planner_contexts = []
@@ -455,9 +482,9 @@ class AssessmentTargetTests(unittest.TestCase):
 
     def test_site_page_limit_is_developer_configurable_and_zero_means_uncapped(self):
         with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "7"}):
-            self.assertEqual(7, _max_site_pages())
+            self.assertEqual(7, configured_site_page_limit())
         with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "0"}):
-            self.assertEqual(0, _max_site_pages())
+            self.assertEqual(0, configured_site_page_limit())
 
     def test_local_site_traversal_allows_only_documents_inside_the_uploaded_site(self):
         target = "http://127.0.0.1:4173/sites/0123456789abcdef0123456789abcdef/index.html"

@@ -60,7 +60,14 @@
               aria-describedby="target-hint target-error"
             />
             <p id="target-hint" class="field-hint">Enter an HTTP or HTTPS URL, or choose page files. <code id="recognized-target"></code></p>
-            <label class="page-only-option"><input id="page-only" name="pageOnly" type="checkbox" /> Only check this page</label>
+            <div class="page-scan-options">
+              <label class="page-only-option"><input id="page-only" name="pageOnly" type="checkbox" /> Only check this page</label>
+              <label class="page-limit-option" for="site-page-limit">Page limit
+                <input id="site-page-limit" name="sitePageLimit" type="number" min="0" max="500" step="1" value="25" inputmode="numeric" aria-describedby="site-page-limit-hint site-page-limit-error" />
+              </label>
+            </div>
+            <p id="site-page-limit-hint" class="field-hint page-limit-hint">0 scans all discovered same-origin pages.</p>
+            <p id="site-page-limit-error" class="field-error" hidden></p>
             <p id="target-error" class="field-error" hidden></p>
           </div>
 

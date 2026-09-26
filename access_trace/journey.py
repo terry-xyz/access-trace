@@ -3,7 +3,6 @@
 import copy
 from contextlib import nullcontext
 from contextvars import ContextVar
-import os
 import threading
 import time
 from pathlib import Path
@@ -17,7 +16,13 @@ from .browser import (
     IsolatedKeyboardBrowser,
     MAX_PLANNER_SCREENSHOT_BYTES,
 )
-from .domain import DEMO_TITLE, LOOPBACK_HOSTS, SUPPORTED_GOAL, utc_now
+from .domain import (
+    DEMO_TITLE,
+    LOOPBACK_HOSTS,
+    SUPPORTED_GOAL,
+    configured_site_page_limit,
+    utc_now,
+)
 from .evidence import attach_evidence_handoff
 from .planner import CodexPlanner, PlannerError, validate_action
 from .url_policy import is_browser_error_url, same_web_origin
@@ -34,7 +39,6 @@ MAX_PAGE_URL_LENGTH = 256
 MAX_PAGE_STRING_LENGTH = 80
 MAX_CHARACTER_COUNT = 100_000
 MAX_CONTROLS = 8
-DEFAULT_MAX_SITE_PAGES = 25
 LIFECYCLE_FIELDS = (
     "pageOpen",
     "dialogOpen",
@@ -296,16 +300,6 @@ def _site_page_key(value: Any) -> Optional[str]:
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
     except ValueError:
         return None
-
-
-def _max_site_pages() -> int:
-    """Read the developer-configured page bound, defaulting safely on bad input."""
-    configured = os.environ.get("ACCESS_TRACE_MAX_SITE_PAGES", "")
-    try:
-        value = int(configured) if configured.strip() else DEFAULT_MAX_SITE_PAGES
-    except ValueError:
-        value = DEFAULT_MAX_SITE_PAGES
-    return 0 if value == 0 else max(1, min(value, 500))
 
 
 def _combined_site_coverage(pages: Dict[str, Dict[str, Any]], pending: int) -> Dict[str, Any]:
@@ -1253,7 +1247,7 @@ def _execute_assessment(
     visited_site_pages = set()
     pending_site_pages = []
     site_page_coverage = {}
-    site_page_limit = _max_site_pages()
+    site_page_limit = run.get("sitePageLimit", configured_site_page_limit())
     try:
         if run.get("targetVersion") == "local":
             browser = IsolatedKeyboardBrowser(

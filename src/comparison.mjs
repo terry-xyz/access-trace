@@ -5,6 +5,7 @@ const COMPARISON_SETTING_FIELDS = [
   "scope",
   "goal",
   "pageOnly",
+  "sitePageLimit",
   "simulationMode",
   "interactionProfile",
   "browserConditions",
