@@ -333,15 +333,15 @@ a:hover { color: #fff; }
 .live-result-grid { display: grid; grid-template-columns: 1.05fr 1fr; min-height: 0; gap: 12px; }
 .live-outcome-card, .live-evidence-card { padding: 16px; }
 .live-outcome-card h3, .live-evidence-card h3 { margin: 5px 0 0; color: #e0ebec; font-size: 16px; font-weight: 450; }
-#live-assessment-summary, #live-result-explanation, .run-review-explanation { margin: 8px 0 0; color: var(--muted); font-size: 10px; }
+.run-review-explanation { margin: 8px 0 0; color: var(--muted); font-size: 10px; }
 .live-result-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 16px; margin: 17px 0 0; border-top: 1px solid var(--line); padding-top: 12px; }
 .live-result-facts > div { min-width: 0; }
 .live-result-facts dt { color: var(--dim); font-size: 8px; letter-spacing: 0.07em; text-transform: uppercase; }
 .live-result-facts dd { margin: 3px 0 0; overflow-wrap: anywhere; color: #bdcbcd; font-size: 9px; }
-#live-result-stopping, .live-screenshot-reference, .live-confidence { margin: 11px 0 0; color: var(--muted); font-size: 9px; }
-#live-result-fix-block, .live-result-fix-block, .live-warnings-block { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 9px; }
-#live-result-fix-block strong, .live-result-fix-block strong, .live-warnings-block strong { color: var(--cyan-soft); font-size: 9px; font-weight: 500; }
-#live-result-fix-block p, .live-result-fix-block p { margin: 5px 0 0; color: #b9c9cb; font-size: 9px; }
+.live-screenshot-reference, .live-confidence { margin: 11px 0 0; color: var(--muted); font-size: 9px; }
+.live-result-fix-block, .live-warnings-block { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 9px; }
+.live-result-fix-block strong, .live-warnings-block strong { color: var(--cyan-soft); font-size: 9px; font-weight: 500; }
+.live-result-fix-block p { margin: 5px 0 0; color: #b9c9cb; font-size: 9px; }
 .live-warnings-block { color: var(--amber); font-size: 9px; }
 .live-warnings-block ul { margin: 5px 0 0; padding-left: 18px; }
 .live-result-actions { display: flex; min-height: 38px; align-items: center; gap: 10px; }
