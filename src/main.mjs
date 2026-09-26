@@ -769,6 +769,27 @@ function anchorIdFor(reportToken, locator) {
   return `${reportToken}-${locator.replaceAll(":", "-")}`;
 }
 
+/** appendEvidenceReferenceLinks links review citations to records in this report. */
+function appendEvidenceReferenceLinks(list, references, anchors) {
+  const items = document.createDocumentFragment();
+  for (const reference of references) {
+    const locator = evidenceLocator(reference);
+    const target = locator ? anchors.get(locator) : null;
+    if (!target) continue;
+    const item = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = `#${target.id}`;
+    link.textContent = locator;
+    link.addEventListener("click", () => {
+      const details = target.closest("details");
+      if (details) details.open = true;
+    });
+    item.append(link);
+    items.append(item);
+  }
+  list.replaceChildren(items);
+}
+
 /** actionDescription states the saved key, type count, field, and action status. */
 function actionDescription(action) {
   const parts = [];
@@ -987,6 +1008,44 @@ function renderRunReport(record, root) {
   const explanation = report.querySelector('[data-field="review-explanation"]');
   explanation.hidden = !availableReview;
   explanation.textContent = availableReview ? reporting.explanation : "";
+  const conditionsList = report.querySelector('[data-field="conditions"]');
+  const conditionItems = document.createDocumentFragment();
+  const conditions = availableReview && Array.isArray(reporting.conditions)
+    ? reporting.conditions
+    : [];
+  for (const condition of conditions) {
+    if (typeof condition?.condition !== "string") continue;
+    const item = document.createElement("li");
+    const description = document.createElement("p");
+    description.className = "report-condition-description";
+    description.textContent = condition.condition;
+    const mapping = document.createElement("p");
+    mapping.className = "report-condition-mapping";
+    const criterion = condition.wcagCriterion;
+    if (condition.mappingStatus === "mapped"
+      && typeof criterion?.id === "string"
+      && typeof criterion?.name === "string"
+      && typeof criterion?.url === "string"
+      && criterion.url.startsWith("https://www.w3.org/TR/WCAG22/#")) {
+      const link = document.createElement("a");
+      link.href = criterion.url;
+      link.textContent = `WCAG 2.2 — ${criterion.id} ${criterion.name}`;
+      mapping.append(link);
+    } else {
+      mapping.textContent = "No direct WCAG mapping identified.";
+    }
+    const citations = document.createElement("ul");
+    citations.className = "evidence-reference-list";
+    citations.setAttribute("aria-label", "Evidence for this condition");
+    appendEvidenceReferenceLinks(citations, Array.isArray(condition.evidenceReferences)
+      ? condition.evidenceReferences : [], anchors);
+    citations.hidden = citations.childElementCount === 0;
+    item.append(description, mapping, citations);
+    conditionItems.append(item);
+  }
+  conditionsList.replaceChildren(conditionItems);
+  conditionsList.hidden = conditionsList.childElementCount === 0;
+  report.querySelector('[data-field="wcag-limitation"]').hidden = conditionsList.hidden;
   const confidence = report.querySelector('[data-field="confidence"]');
   confidence.hidden = !availableReview || !["low", "medium", "high"].includes(reporting.confidence);
   confidence.textContent = confidence.hidden ? "" : `Confidence: ${reporting.confidence}`;
@@ -1001,26 +1060,10 @@ function renderRunReport(record, root) {
   }
 
   const referencesList = report.querySelector('[data-field="review-references"]');
-  const referenceItems = document.createDocumentFragment();
   const references = availableReview && Array.isArray(reporting.evidenceReferences)
     ? reporting.evidenceReferences
     : [];
-  for (const reference of references) {
-    const locator = evidenceLocator(reference);
-    const target = locator ? anchors.get(locator) : null;
-    if (!target) continue;
-    const item = document.createElement("li");
-    const link = document.createElement("a");
-    link.href = `#${target.id}`;
-    link.textContent = locator;
-    link.addEventListener("click", () => {
-      const details = target.closest("details");
-      if (details) details.open = true;
-    });
-    item.append(link);
-    referenceItems.append(item);
-  }
-  referencesList.replaceChildren(referenceItems);
+  appendEvidenceReferenceLinks(referencesList, references, anchors);
   referencesList.hidden = referencesList.childElementCount === 0;
 }
 

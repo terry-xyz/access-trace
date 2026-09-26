@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional
 
+from .wcag import WCAG22_CRITERIA
+
 
 EVIDENCE_SCHEMA = "access-trace.evidence.v1"
 MAX_TEXT_LENGTH = 256
@@ -13,6 +15,8 @@ REPORTING_LIMITATION = (
     "Evidence for the configured keyboard assessment on the selected site; "
     "not a general accessibility or WCAG conformance assessment."
 )
+MAX_REPORT_CONDITIONS = 8
+MAX_CONDITION_LENGTH = 240
 
 
 def _text(value: Any, limit: int = MAX_TEXT_LENGTH) -> Optional[str]:
@@ -427,6 +431,57 @@ def _reporting_reference(
     return None
 
 
+def _reporting_condition(
+    value: Any, allowed_references: Dict[str, Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Keep one condition only when its WCAG mapping and citations are valid."""
+    if not isinstance(value, dict):
+        return None
+    condition = value.get("condition")
+    status = value.get("mappingStatus")
+    criterion = value.get("wcagCriterion")
+    references = value.get("evidenceReferences")
+    if (
+        not isinstance(condition, str) or not condition.strip()
+        or len(condition) > MAX_CONDITION_LENGTH
+        or not isinstance(status, str) or status not in {"mapped", "unmapped"}
+        or not isinstance(references, list) or not references or len(references) > 16
+    ):
+        return None
+    if status == "unmapped":
+        if criterion is not None:
+            return None
+        safe_criterion = None
+    else:
+        if not isinstance(criterion, dict):
+            return None
+        criterion_id = criterion.get("id")
+        if not isinstance(criterion_id, str) or criterion_id not in WCAG22_CRITERIA:
+            return None
+        name, slug = WCAG22_CRITERIA[criterion_id]
+        safe_criterion = {
+            "id": criterion_id,
+            "name": name,
+            "url": "https://www.w3.org/TR/WCAG22/#" + slug,
+        }
+        if criterion != safe_criterion:
+            return None
+    safe_references = [
+        _reporting_reference(item, allowed_references) for item in references
+    ]
+    if (
+        any(reference is None for reference in safe_references)
+        or len({reference["id"] for reference in safe_references}) != len(safe_references)
+    ):
+        return None
+    return {
+        "condition": condition,
+        "mappingStatus": status,
+        "wcagCriterion": safe_criterion,
+        "evidenceReferences": safe_references,
+    }
+
+
 def _reporting(
     value: Any, evidence_references: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -437,6 +492,7 @@ def _reporting(
         "evidenceReferences": [],
         "confidence": None,
         "proposedFix": None,
+        "conditions": [],
         "reason": None,
         "limitation": REPORTING_LIMITATION,
     }
@@ -455,6 +511,7 @@ def _reporting(
     confidence = value.get("confidence")
     references = value.get("evidenceReferences")
     proposed_fix = value.get("proposedFix")
+    raw_conditions = value.get("conditions", [])
     if (
         not isinstance(explanation, str)
         or not explanation.strip()
@@ -464,6 +521,8 @@ def _reporting(
         or not isinstance(references, list)
         or not references
         or len(references) > 16
+        or not isinstance(raw_conditions, list)
+        or len(raw_conditions) > MAX_REPORT_CONDITIONS
         or (
             proposed_fix is not None
             and (
@@ -490,6 +549,11 @@ def _reporting(
         != len(safe_references)
     ):
         return pending
+    safe_conditions = [
+        _reporting_condition(item, allowed_references) for item in raw_conditions
+    ]
+    if any(condition is None for condition in safe_conditions):
+        return pending
     return {
         **pending,
         "status": "available",
@@ -497,6 +561,7 @@ def _reporting(
         "evidenceReferences": safe_references,
         "confidence": confidence,
         "proposedFix": proposed_fix,
+        "conditions": safe_conditions,
     }
 
 
