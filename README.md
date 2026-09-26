@@ -18,6 +18,9 @@ From the repository root, start the single server:
 python3 -m access_trace --port 8080
 ```
 
+Use this AccessTrace command rather than Python's `http.server`: the app's
+server provides the demo pages and assessment API as well as the UI.
+
 Open <http://127.0.0.1:8080/>. The built-in demo pages are served by that same
 server:
 
@@ -37,12 +40,14 @@ disable DNS prefetch and speculative preconnection, and make the WebRTC peer
 connection APIs unavailable before page scripts run. The page is sandboxed, and
 the run fails closed if the browser cannot install either lockdown.
 
-Use **Run live assessment** to create and execute a run. AccessTrace invokes the
-installed Codex CLI with the saved login and validates each returned keyboard
-action locally. Planner actions remain limited to keyboard input and bounded
-fictional text. The fixed and broken demos support the goal `Submit the contact
-form`; leave the goal empty for a whole-site keyboard assessment. The report and
-comparison preview buttons still show sample data, not live results.
+Choose a built-in demo or load an HTML file, then select **Start assessment**.
+The app shows run progress and the live report when the assessment finishes.
+AccessTrace invokes the installed Codex CLI with the saved login and validates
+each returned keyboard action locally. Planner actions remain limited to
+keyboard input and bounded fictional text. The fixed and broken demos support
+the goal `Submit the contact form`; leave the goal empty for a whole-site
+keyboard assessment. **Sample report** and **Compare demos** show representative
+sample data; they do not run browser checks.
 
 Redacted run records are written under `.access-trace/runs/`; uploaded HTML
 copies are kept under `.access-trace/runs/sites/`. The live result can also be
