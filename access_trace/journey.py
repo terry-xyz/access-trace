@@ -621,10 +621,11 @@ def _lifecycle_failure(observation: Dict[str, Any]) -> Optional[str]:
         )
     if {"kind": "page-closed"} in observation.get("warnings", []):
         return "browser page closed"
-    if lifecycle.get("offLoopbackRedirect"):
-        return "browser navigated off the selected page origin"
-    if lifecycle.get("navigationRedirect"):
-        return "browser navigated to a different page on the target origin"
+    # Navigation away from the entry URL is evidence about coverage, not a
+    # browser failure. In particular, whole-site scans must be able to follow
+    # links beyond the URL supplied at setup. The observation sanitizer still
+    # bounds and redacts the recorded URL, and lifecycle warnings remain in the
+    # report, but these navigation signals must not terminate the run.
     return None
 
 
@@ -655,6 +656,44 @@ def _planner_failure_evidence(error: PlannerError) -> Dict[str, Any]:
     if message:
         evidence["message"] = message[:160]
     return evidence
+
+
+def _goal_needs_visual_evidence(goal: Any) -> bool:
+    """Request the expensive redacted screenshot only for explicitly visual goals."""
+    if not isinstance(goal, str):
+        return False
+    normalized = goal.casefold()
+    visual_terms = (
+        "visual", "appearance", "color", "colour", "contrast", "font",
+        "typography", "text size", "font size", "zoom", "layout", "visible",
+        "visibility", "spacing", "χρώμα", "χρωμα", "αντίθεση", "αντιθεση",
+        "γραμματοσειρ", "μέγεθος κειμένου", "μεγεθος κειμενου", "εμφάνιση",
+        "εμφανιση", "διάταξη", "διαταξη",
+    )
+    return any(term in normalized for term in visual_terms)
+
+
+def _goal_is_keyboard_audit(goal: Any) -> bool:
+    """Recognize broad keyboard reviews that can be gathered in one traversal."""
+    if not isinstance(goal, str):
+        return False
+    normalized = goal.casefold()
+    asks_for_review = any(
+        term in normalized
+        for term in ("check", "inspect", "review", "assess", "audit", "evaluate", "test", "investigate")
+    )
+    is_about_keyboard_access = any(
+        term in normalized
+        for term in (
+            "keyboard", "focus", "tab order", "accessible name", "accessibility",
+            "links and buttons", "interactive controls", "control names",
+        )
+    )
+    asks_to_perform_an_action = any(
+        term in normalized
+        for term in ("click", "press enter", "submit", "fill in", "type into", "search for", "sign in")
+    )
+    return asks_for_review and is_about_keyboard_access and not asks_to_perform_an_action
 
 
 def _persist_stopping_screenshot(
@@ -730,7 +769,14 @@ def _settle_action(
     _append_action(run, action, before, "delivered")
     observe_after_action = getattr(browser, "observe_focus", None)
     if not (
-        run.get("assessmentScope") == "whole-site"
+        (
+            run.get("assessmentScope") == "whole-site"
+            or (
+                run.get("assessmentScope") == "goal-focused"
+                and run.get("goal") is not None
+                and run.get("goal") != SUPPORTED_GOAL
+            )
+        )
         and action.get("kind") == "key"
         and action.get("key") == "Tab"
         and callable(observe_after_action)
@@ -1037,18 +1083,25 @@ def _complete_with_screenshot(
     browser: IsolatedKeyboardBrowser,
     evidence_directory: Optional[Path],
 ) -> bool:
-    try:
-        _persist_stopping_screenshot(run, browser, evidence_directory)
-    except BrowserCleanupError:
-        raise
-    except BrowserError:
-        _append_warning(
-            run["warnings"],
-            {
-                "kind": "stopping-screenshot-unavailable",
-                "message": "The run completed, but a redacted stopping screenshot could not be captured safely.",
-            },
-        )
+    keyboard_only_goal = (
+        run.get("assessmentScope") == "goal-focused"
+        and run.get("goal") is not None
+        and run.get("goal") != SUPPORTED_GOAL
+        and not _goal_needs_visual_evidence(run.get("goal"))
+    )
+    if not keyboard_only_goal:
+        try:
+            _persist_stopping_screenshot(run, browser, evidence_directory)
+        except BrowserCleanupError:
+            raise
+        except BrowserError:
+            _append_warning(
+                run["warnings"],
+                {
+                    "kind": "stopping-screenshot-unavailable",
+                    "message": "The run completed, but a redacted stopping screenshot could not be captured safely.",
+                },
+            )
     _set_terminal_state(run, "COMPLETED", observation, started)
     return True
 
@@ -1218,6 +1271,7 @@ def _execute_assessment(
 
         consecutive_action_failures = 0
         tab_scan_states = set()
+        keyboard_audit_traversal_done = False
         while True:
             if run.get("assessmentScope") == "whole-site":
                 coverage = current.get("coverage")
@@ -1276,6 +1330,61 @@ def _execute_assessment(
 
             if (
                 run.get("assessmentScope") == "goal-focused"
+                and run.get("goal") != SUPPORTED_GOAL
+                and _goal_is_keyboard_audit(run.get("goal"))
+                and not keyboard_audit_traversal_done
+            ):
+                # A broad keyboard audit needs a traversal, not one planner
+                # startup per focused element. Gather the complete focus path
+                # with individually recorded Tab actions, then let the report
+                # review all collected evidence once the path repeats.
+                seen_focuses = set()
+                while True:
+                    focus = current.get("focus", {})
+                    focus_key = (
+                        focus.get("stableId"),
+                        focus.get("role"),
+                        focus.get("accessibleName"),
+                    ) if isinstance(focus, dict) else None
+                    if focus_key in seen_focuses:
+                        break
+                    seen_focuses.add(focus_key)
+                    try:
+                        current = _settle_action(
+                            run,
+                            browser,
+                            {"kind": "key", "key": "Tab"},
+                            current,
+                            typed_values,
+                            covered_focus_ids,
+                        )
+                    except ActionDeliveryFailure as error:
+                        reason = "Keyboard focus traversal could not be completed reliably."
+                        failure = {"kind": "action-delivery-failure", "message": reason}
+                        _append_warning(run["warnings"], failure)
+                        run["browserFailure"] = failure
+                        current = error.observation or current
+                        current["goalProgress"] = _agent_goal_progress(
+                            run["goal"], "not-possible", reason
+                        )
+                        _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                        return run
+                    lifecycle_failure = _lifecycle_failure(current)
+                    if lifecycle_failure is not None:
+                        raise BrowserError(lifecycle_failure)
+                keyboard_audit_traversal_done = True
+                current["goalProgress"] = _agent_goal_progress(
+                    run["goal"],
+                    "completed",
+                    "Keyboard focus traversal completed; the report evaluates the recorded controls and names.",
+                )
+                _complete_with_screenshot(
+                    run, current, started, browser, evidence_directory
+                )
+                return run
+
+            if (
+                run.get("assessmentScope") == "goal-focused"
                 and run.get("goal") == SUPPORTED_GOAL
                 and run.get("targetVersion") == "broken"
                 and _is_submit_focus(current)
@@ -1299,6 +1408,7 @@ def _execute_assessment(
             if (
                 callable(capture_planner_screenshot)
                 and run.get("targetVersion") != "local"
+                and _goal_needs_visual_evidence(run.get("goal"))
             ):
                 try:
                     screenshot_data_url = capture_planner_screenshot()
@@ -1460,23 +1570,78 @@ def _execute_assessment(
                     return run
                 raise PlannerError("planner stopped without locally verified success")
             try:
-                current = _settle_action(
-                    run,
-                    browser,
-                    action,
-                    current,
-                    typed_values,
-                    covered_focus_ids,
-                )
+                # A page-only review inspects controls without following links
+                # or submitting forms that could leave the selected URL.
                 if (
-                    run.get("goal") is not None
-                    and run.get("goal") != SUPPORTED_GOAL
+                    run.get("pageOnly") is True
+                    and run.get("goal") is None
+                    and action.get("kind") == "key"
+                    and action.get("key") in {"Enter", "Return", "Space"}
                 ):
-                    current["goalProgress"] = _agent_goal_progress(
-                        run["goal"],
-                        action.get("goalStatus") or "in-progress",
-                        action.get("goalReason"),
+                    action = {"kind": "key", "key": "Tab"}
+                tab_steps = (
+                    action.get("tabSteps", 1)
+                    if action.get("kind") == "key" and action.get("key") == "Tab"
+                    else 1
+                )
+                # Goal-focused runs otherwise start a new Codex planner turn
+                # after every single Tab. Planner startup dominates the cost
+                # of a keyboard press, so treat a Tab choice as a short scan
+                # batch. Individual key presses and focus observations are
+                # still recorded; stop early if focus cycles or lands in an
+                # editable field where the planner may need to type.
+                if (
+                    run.get("assessmentScope") == "goal-focused"
+                    and run.get("goal") is not None
+                    and run.get("goal") != SUPPORTED_GOAL
+                    and action.get("kind") == "key"
+                    and action.get("key") == "Tab"
+                ):
+                    tab_steps = max(8, tab_steps)
+                seen_focuses = set()
+                for _ in range(tab_steps):
+                    current_focus = current.get("focus", {})
+                    if isinstance(current_focus, dict):
+                        seen_focuses.add(
+                            (
+                                current_focus.get("stableId"),
+                                current_focus.get("role"),
+                                current_focus.get("accessibleName"),
+                            )
+                        )
+                    current = _settle_action(
+                        run,
+                        browser,
+                        {"kind": "key", "key": "Tab"}
+                        if tab_steps > 1
+                        else action,
+                        current,
+                        typed_values,
+                        covered_focus_ids,
                     )
+                    if (
+                        run.get("goal") is not None
+                        and run.get("goal") != SUPPORTED_GOAL
+                    ):
+                        current["goalProgress"] = _agent_goal_progress(
+                            run["goal"],
+                            action.get("goalStatus") or "in-progress",
+                            action.get("goalReason"),
+                        )
+                    if tab_steps > 1:
+                        current_focus = current.get("focus", {})
+                        focus_key = (
+                            current_focus.get("stableId"),
+                            current_focus.get("role"),
+                            current_focus.get("accessibleName"),
+                        ) if isinstance(current_focus, dict) else None
+                        if focus_key in seen_focuses:
+                            break
+                        seen_focuses.add(focus_key)
+                        if isinstance(current_focus, dict) and current_focus.get(
+                            "role"
+                        ) in {"textbox", "searchBox", "combobox"}:
+                            break
             except ActionDeliveryFailure as error:
                 consecutive_action_failures += 1
                 current = error.observation or current

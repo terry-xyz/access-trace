@@ -190,6 +190,8 @@ a:hover { color: #fff; }
 .field-group input[type="file"]::file-selector-button { margin-right: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--cyan-soft); background: rgba(120, 217, 230, 0.06); font: inherit; }
 .field-hint, .field-error, .scope-status { margin: 4px 0 0; font-size: 9px; line-height: 1.35; }
 .field-hint { color: var(--dim); }
+.page-only-option { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 9px; line-height: 1.4; cursor: pointer; }
+.page-only-option input { width: 13px; height: 13px; margin: 0; accent-color: var(--cyan); }
 .field-hint code, code { color: #a8dbe1; overflow-wrap: anywhere; }
 .field-error { color: var(--red); font-weight: 600; }
 .scope-status { color: var(--cyan); }
@@ -427,6 +429,7 @@ a:hover { color: #fff; }
   .field-group textarea { height: 44px; min-height: 44px; }
   .section-intro { margin: 8px 0 12px; font-size: 9px; }
   .field-hint { font-size: 8px; }
+  .page-only-option { font-size: 8px; }
   .settings-row { grid-template-columns: minmax(0, 1fr) auto; }
   .mode-preview { display: none; }
   .primary-button, .secondary-button { min-height: 32px; padding: 6px 8px; font-size: 9px; }
@@ -531,6 +534,7 @@ body {
 .field-group input:focus, .field-group textarea:focus, .field-group select:focus { border-color: var(--cyan); background: #0b1516; }
 .field-hint, .field-error, .scope-status { margin-top: 7px; font-size: 12px; }
 .field-hint { color: #91a2a4; }
+.page-only-option { font-size: 12px; }
 .scope-status { color: var(--cyan); }
 .help-icon { width: 21px; height: 21px; border-color: #657678; font-size: 12px; }
 .settings-row { grid-column: auto; grid-row: auto; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; }

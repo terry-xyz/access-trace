@@ -13,6 +13,7 @@ if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 const form = document.querySelector("#assessment-form");
 const intro = document.querySelector("#top");
 const targetInput = document.querySelector("#target-url");
+const pageOnlyInput = document.querySelector("#page-only");
 const targetSiteFilesInput = document.querySelector("#target-site-files");
 const targetSiteDirectoryInput = document.querySelector("#target-site-directory");
 const targetSiteStatus = document.querySelector("#target-site-status");
@@ -313,8 +314,9 @@ function setError(input, container, message) {
 function updateScopePreview() {
   const scope = getAssessmentScope(goalInput.value);
   const isWholeSite = scope === "whole-site";
-  scopeStatus.textContent = isWholeSite ? "Whole page" : "Goal focused";
-  scopeChip.textContent = isWholeSite ? "Whole site" : "Goal focused";
+  const label = isWholeSite ? (pageOnlyInput.checked ? "Selected page only" : "Whole site") : "Goal focused";
+  scopeStatus.textContent = label;
+  scopeChip.textContent = label;
   submitLabel.textContent = "Start assessment";
   setError(goalInput, goalError, "");
   if (!workflowInProgress) setActiveView("setup");
@@ -345,6 +347,7 @@ function validateCurrentConfiguration() {
     targetUrl: validation.normalizedUrl,
     scope: goalValidation.scope,
     goal: goalValidation.goal || null,
+    pageOnly: pageOnlyInput.checked,
     simulationMode: simulationInput.checked,
   };
 }
@@ -1025,6 +1028,7 @@ async function handleLiveAssessment() {
       body: JSON.stringify({
         targetUrl: configuration.targetUrl,
         goal: configuration.goal,
+        pageOnly: configuration.pageOnly,
         simulationMode: configuration.simulationMode,
       }),
     });
@@ -1197,6 +1201,7 @@ function getComparisonSettings(configuration) {
     targetUrl: "Built-in broken and fixed demos",
     scope: configuration.scope,
     goal: configuration.goal,
+    pageOnly: configuration.pageOnly,
     simulationMode: configuration.simulationMode,
     consistencyLevel,
     runsPerVersion: CONSISTENCY_RUN_COUNTS[consistencyLevel],
@@ -1250,6 +1255,7 @@ async function handleComparisonRequest() {
             body: JSON.stringify({
               targetUrl: window.location.origin + demo.path,
               goal: configuration.goal,
+              pageOnly: configuration.pageOnly,
               simulationMode: configuration.simulationMode,
             }),
           });
@@ -1318,7 +1324,7 @@ function renderComparisonSettings(settings) {
   const list = document.querySelector("#comparison-settings");
   const values = [
     ["Targets", settings.targetUrl],
-    ["Assessment scope", settings.scope === "whole-site" ? "Whole page" : "Goal focused"],
+    ["Assessment scope", settings.scope === "whole-site" ? (settings.pageOnly ? "Selected page only" : "Whole site") : "Goal focused"],
     ["Goal", settings.goal || "None configured"],
     ["Simulation mode", settings.simulationMode ? "On" : "Off"],
     ["Runs per demo", settings.consistencyLevel + " · " + formatRunCount(settings.runsPerVersion)],
@@ -1513,6 +1519,7 @@ targetInput.addEventListener("input", () => {
   targetSiteStatus.textContent = "Using the page URL above.";
 });
 goalInput.addEventListener("input", updateScopePreview);
+pageOnlyInput.addEventListener("change", updateScopePreview);
 simulationInput.addEventListener("change", clearStaleViews);
 consistencyInput.addEventListener("change", updateConsistencyPreview);
 targetInput.value = "";

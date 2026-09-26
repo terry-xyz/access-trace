@@ -4,6 +4,7 @@ const COMPARISON_SETTING_FIELDS = [
   "targetUrl",
   "scope",
   "goal",
+  "pageOnly",
   "simulationMode",
   "interactionProfile",
   "browserConditions",

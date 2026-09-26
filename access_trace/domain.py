@@ -103,12 +103,16 @@ def build_run_request(
     simulation_mode = payload.get("simulationMode", DEFAULT_SIMULATION_MODE)
     if not isinstance(simulation_mode, bool):
         raise ValidationError("simulationMode must be boolean")
+    page_only = payload.get("pageOnly", False)
+    if not isinstance(page_only, bool):
+        raise ValidationError("pageOnly must be boolean")
 
     return {
         "targetUrl": target_url,
         "targetVersion": target_version,
         "assessmentScope": derived_scope,
         "goal": goal,
+        "pageOnly": page_only,
         "simulationMode": simulation_mode,
     }
 
@@ -240,6 +244,7 @@ def create_run(
         "targetVersion": run_request["targetVersion"],
         "assessmentScope": run_request["assessmentScope"],
         "goal": run_request["goal"],
+        "pageOnly": run_request["pageOnly"],
         "successCondition": (
             "Message sent"
             if run_request["targetVersion"] in {"fixed", "broken"}

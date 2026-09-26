@@ -1647,10 +1647,34 @@ class IsolatedKeyboardBrowser:
                 if isinstance(backend_id, int) and not isinstance(backend_id, bool)
                 else "document"
             )
+            tag = next(
+                (
+                    item.get("tag")
+                    for item in self._accessibility_snapshot_cache.get("controls", [])
+                    if isinstance(item, dict) and item.get("stableId") == stable_id
+                ),
+                "generic",
+            )
+            if (
+                tag == "generic"
+                and isinstance(backend_id, int)
+                and role in {"textbox", "searchBox", "combobox"}
+            ):
+                try:
+                    described = self.connection.call(
+                        "DOM.describeNode",
+                        {"backendNodeId": backend_id, "depth": 0, "pierce": True},
+                    )
+                    dom_node = described.get("node") if isinstance(described, dict) else None
+                    node_name = dom_node.get("nodeName") if isinstance(dom_node, dict) else None
+                    if isinstance(node_name, str):
+                        tag = node_name.lower()
+                except BrowserError:
+                    pass
             focus = {
                 "role": role[:80] if isinstance(role, str) else "generic",
                 "accessibleName": name[:80] if isinstance(name, str) else None,
-                "tag": "generic",
+                "tag": tag,
                 "stableId": stable_id,
                 "isStable": isinstance(backend_id, int) and not isinstance(backend_id, bool),
                 "focusable": True,

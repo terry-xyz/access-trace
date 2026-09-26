@@ -507,6 +507,7 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
         "targetVersion": _text(run.get("targetVersion"), 40),
         "assessmentScope": _text(run.get("assessmentScope"), 40),
         "goal": _text(run.get("goal"), 500),
+        "pageOnly": bool(run.get("pageOnly")),
         "successCondition": _text(run.get("successCondition"), 80),
         "simulationMode": bool(run.get("simulationMode")),
         "interactionProfile": _text(run.get("interactionProfile"), 40),
@@ -553,6 +554,7 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
         for key in (
             "assessmentScope",
             "goal",
+            "pageOnly",
             "successCondition",
             "simulationMode",
             "interactionProfile",
