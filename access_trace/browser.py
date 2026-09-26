@@ -635,13 +635,18 @@ class _UploadedPageRequestPolicy:
     """Allow the uploaded document and its local assets; deny other network use."""
 
     def __init__(
-        self, connection: _WebSocket, target_url: str, main_frame_id: Optional[str]
+        self,
+        connection: _WebSocket,
+        target_url: str,
+        main_frame_id: Optional[str],
+        allow_site_documents: bool = False,
     ):
         self.connection = connection
         self.target = urlsplit(target_url)
         site_match = re.match(r"^(/sites/[0-9a-f]{32})/", self.target.path)
         self.site_prefix = site_match.group(1) + "/" if site_match else ""
         self.main_frame_id = main_frame_id
+        self.allow_site_documents = allow_site_documents
         self.initial_document_allowed = False
 
     def _allows_request(
@@ -681,6 +686,12 @@ class _UploadedPageRequestPolicy:
                 and request.path == self.target.path
                 and request.query == self.target.query
             )
+            if not matches_target and self.allow_site_documents and self.site_prefix:
+                relative = unquote(request.path[len(self.site_prefix):]) if request.path.startswith(self.site_prefix) else ""
+                parts = relative.rstrip("/").split("/")
+                matches_target = bool(relative) and not any(
+                    part in {"", ".", ".."} for part in parts
+                )
             if not matches_target:
                 return False
             # Consume the sole allow before continuing it: if CDP handling fails,
@@ -735,6 +746,7 @@ class IsolatedKeyboardBrowser:
         self,
         target_url: str,
         restrict_network: bool = False,
+        allow_site_navigation: bool = False,
         headless: bool = True,
     ):
         chrome_command = _find_chrome()
@@ -755,6 +767,7 @@ class IsolatedKeyboardBrowser:
             navigation_url = self._www_fallback_after_dns_failure(target_url)
             self._www_host_fallback = navigation_url != target_url
         self.restrict_network = restrict_network
+        self.allow_site_navigation = allow_site_navigation
         self.request_policy: Optional[_UploadedPageRequestPolicy] = None
         self.target_id: Optional[str] = None
         self._page_monitor_active = False
@@ -829,7 +842,10 @@ class IsolatedKeyboardBrowser:
             if self.restrict_network:
                 self._install_uploaded_page_webrtc_lockdown()
                 self.request_policy = _UploadedPageRequestPolicy(
-                    self.connection, target_url, self._main_frame_id
+                    self.connection,
+                    target_url,
+                    self._main_frame_id,
+                    allow_site_documents=allow_site_navigation,
                 )
                 self.connection.event_handler = self.request_policy.handle_event
                 self.connection.call(
@@ -986,10 +1002,12 @@ class IsolatedKeyboardBrowser:
             self._collect_page_events()
             time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
 
-    def _wait_for_target(self, timeout: float = 8.0) -> None:
+    def _wait_for_target(
+        self, timeout: float = 8.0, expected_url: Optional[str] = None
+    ) -> None:
         if self.connection is None:
             raise BrowserError("browser is not connected")
-        expected_url = self.target_url.rstrip("/")
+        expected_url = (expected_url or self.target_url).rstrip("/")
         deadline = time.monotonic() + max(0.5, min(timeout, 20.0))
         previous_url = None
         stable_observations = 0
@@ -1515,6 +1533,85 @@ class IsolatedKeyboardBrowser:
             self._accessibility_tree_nodes is not None
             and self._accessibility_tree_nodes <= 2
         )
+
+    def discover_site_links(self) -> List[str]:
+        """Return bounded same-origin document links for whole-site traversal."""
+        if self.connection is None:
+            raise BrowserError("browser is not connected")
+        result = self.connection.call(
+            "Runtime.evaluate",
+            {
+                "expression": """(() => {
+                  const origin = location.origin;
+                  const links = [];
+                  const seen = new Set();
+                  for (const anchor of document.querySelectorAll('a[href]')) {
+                    try {
+                      const url = new URL(anchor.href, location.href);
+                      if (url.origin !== origin || !['http:', 'https:'].includes(url.protocol)) continue;
+                      if (/\.(?:pdf|zip|gz|tar|7z|rar|png|jpe?g|gif|webp|svg|mp[34]|wav|woff2?|ttf|css|js|mjs|json)$/i.test(url.pathname)) continue;
+                      url.hash = '';
+                      const value = url.href;
+                      if (!seen.has(value)) { seen.add(value); links.push(value); }
+                    } catch {}
+                  }
+                  return links;
+                })()""",
+                "returnByValue": True,
+            },
+        )
+        values = result.get("result", {}).get("value") if isinstance(result, dict) else None
+        if not isinstance(values, list):
+            return []
+        target = urlsplit(self.target_url)
+        links = []
+        seen = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            try:
+                observed = urlsplit(value)
+                if (
+                    not same_web_origin(target, observed)
+                    or observed.username
+                    or observed.password
+                    or is_browser_error_url(value)
+                ):
+                    continue
+                # Queries often contain session or personal data. Traversal
+                # follows the page path only and never persists link URLs.
+                safe_url = urlunsplit((observed.scheme, observed.netloc, observed.path or "/", "", ""))
+            except ValueError:
+                continue
+            if safe_url not in seen:
+                seen.add(safe_url)
+                links.append(safe_url)
+        return links
+
+    def navigate_to(self, url: str) -> None:
+        """Navigate only to a vetted page on the selected web origin."""
+        if self.connection is None:
+            raise BrowserError("browser is not connected")
+        try:
+            target = urlsplit(self.target_url)
+            observed = urlsplit(url)
+        except (TypeError, ValueError) as error:
+            raise BrowserError("site link was not a valid URL") from error
+        if (
+            not same_web_origin(target, observed)
+            or observed.username
+            or observed.password
+            or observed.scheme not in {"http", "https"}
+        ):
+            raise BrowserError("site traversal was blocked outside the selected origin")
+        result = self.connection.call("Page.navigate", {"url": url})
+        if isinstance(result, dict) and result.get("errorText"):
+            raise BrowserError("site page could not be opened")
+        self._navigation_started = True
+        self._navigation_redirect_observed = False
+        self._off_loopback_redirect_observed = None
+        self._browser_load_error_observed = False
+        self._wait_for_target(expected_url=url)
 
     def observe(self) -> Dict[str, Any]:
         if self.connection is None:

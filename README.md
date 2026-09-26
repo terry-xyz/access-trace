@@ -48,9 +48,14 @@ changed. The report may retain the review summary, relevant paths, skipped
 path/reason metadata, and generated patch. Review the patch before applying it
 yourself.
 
-Web URLs are opened in a fresh isolated browser. The browser follows the target
-site while blocking popups and reporting off-site navigation. Uploaded local
-pages have a stricter network policy and cannot submit forms or make connections.
+Web URLs are opened in a fresh isolated browser. With no goal and **Only check
+this page** unchecked, AccessTrace scans the selected page and follows same-origin
+links up to a configurable page limit. Set `ACCESS_TRACE_MAX_SITE_PAGES` to a
+number from 1 to 500 to change the default limit of 25; set it to `0` to crawl
+all discovered same-origin pages. Checking **Only check this page** keeps the
+scan on the selected URL. Off-site links are not followed.
+Uploaded local pages have a stricter network policy and cannot submit forms or
+make connections.
 
 Enter a web URL or choose local page files, then select **Start assessment**.
 The app shows run progress and the live report when the assessment finishes.

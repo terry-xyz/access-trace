@@ -3,6 +3,7 @@
 import copy
 from contextlib import nullcontext
 from contextvars import ContextVar
+import os
 import threading
 import time
 from pathlib import Path
@@ -33,6 +34,7 @@ MAX_PAGE_URL_LENGTH = 256
 MAX_PAGE_STRING_LENGTH = 80
 MAX_CHARACTER_COUNT = 100_000
 MAX_CONTROLS = 8
+DEFAULT_MAX_SITE_PAGES = 25
 LIFECYCLE_FIELDS = (
     "pageOpen",
     "dialogOpen",
@@ -283,6 +285,47 @@ def _coverage_progress(
         "visitedControls": visited_focus_ids,
         "expectedControls": expected_focus_ids,
         "controlsTruncated": bool(raw.get("controlsTruncated")),
+    }
+
+
+def _site_page_key(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = urlsplit(value)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
+    except ValueError:
+        return None
+
+
+def _max_site_pages() -> int:
+    """Read the developer-configured page bound, defaulting safely on bad input."""
+    configured = os.environ.get("ACCESS_TRACE_MAX_SITE_PAGES", "")
+    try:
+        value = int(configured) if configured.strip() else DEFAULT_MAX_SITE_PAGES
+    except ValueError:
+        value = DEFAULT_MAX_SITE_PAGES
+    return 0 if value == 0 else max(1, min(value, 500))
+
+
+def _combined_site_coverage(pages: Dict[str, Dict[str, Any]], pending: int) -> Dict[str, Any]:
+    controls_observed = sum(item.get("controlsObserved", 0) for item in pages.values())
+    controls_expected = sum(item.get("controlsExpected", 0) for item in pages.values())
+    complete = pending == 0
+    return {
+        "status": "completed" if complete else "partial",
+        "completed": complete,
+        "areasObserved": len(pages),
+        "areasExpected": len(pages) + pending,
+        "controlsObserved": controls_observed,
+        "controlsExpected": controls_expected,
+        "scorePercentage": (
+            round(controls_observed / controls_expected * 100)
+            if controls_expected > 0 else None
+        ),
+        "visitedControls": [],
+        "expectedControls": [],
+        "controlsTruncated": any(item.get("controlsTruncated") for item in pages.values()),
     }
 
 
@@ -1207,10 +1250,16 @@ def _execute_assessment(
     browser: Optional[IsolatedKeyboardBrowser] = None
     typed_values: Dict[str, str] = {}
     covered_focus_ids = set()
+    visited_site_pages = set()
+    pending_site_pages = []
+    site_page_coverage = {}
+    site_page_limit = _max_site_pages()
     try:
         if run.get("targetVersion") == "local":
             browser = IsolatedKeyboardBrowser(
-                run["targetUrl"], restrict_network=True
+                run["targetUrl"],
+                restrict_network=True,
+                allow_site_navigation=run.get("pageOnly") is not True,
             )
         else:
             browser = IsolatedKeyboardBrowser(run["targetUrl"])
@@ -1218,7 +1267,7 @@ def _execute_assessment(
         if (
             run.get("targetVersion") == "web"
             and current_raw.get("lifecycle", {}).get("browserLoadError") is not True
-            and browser.needs_headful_retry()
+            and getattr(browser, "needs_headful_retry", lambda: False)()
         ):
             headless_observation = _redacted_observation(
                 current_raw,
@@ -1276,6 +1325,52 @@ def _execute_assessment(
             if run.get("assessmentScope") == "whole-site":
                 coverage = current.get("coverage")
                 if isinstance(coverage, dict) and coverage.get("completed") is True:
+                    page_key = _site_page_key(current.get("url"))
+                    if page_key:
+                        visited_site_pages.add(page_key)
+                        site_page_coverage[page_key] = copy.deepcopy(coverage)
+                    if run.get("pageOnly") is not True:
+                        discover_links = getattr(browser, "discover_site_links", None)
+                        if callable(discover_links):
+                            for link in discover_links():
+                                link_key = _site_page_key(link)
+                                if (
+                                    link_key
+                                    and link_key not in visited_site_pages
+                                    and all(_site_page_key(item) != link_key for item in pending_site_pages)
+                                ):
+                                    pending_site_pages.append(link)
+                    if pending_site_pages and (site_page_limit == 0 or len(visited_site_pages) < site_page_limit):
+                        next_page = pending_site_pages.pop(0)
+                        next_key = _site_page_key(next_page)
+                        if next_key:
+                            visited_site_pages.add(next_key)
+                        browser.navigate_to(next_page)
+                        covered_focus_ids.clear()
+                        current = _redacted_observation(
+                            browser.observe(),
+                            run["targetUrl"],
+                            typed_values.values(),
+                            run["assessmentScope"],
+                            run.get("goal"),
+                            covered_focus_ids,
+                            run.get("successCondition"),
+                        )
+                        run["observations"].append(current)
+                        _record_observation_warnings(run, current)
+                        lifecycle_failure = _lifecycle_failure(current)
+                        if lifecycle_failure is not None:
+                            raise BrowserError(lifecycle_failure)
+                        tab_scan_states.clear()
+                        continue
+                    if pending_site_pages and site_page_limit != 0:
+                        _append_warning(
+                            run["warnings"],
+                            {"kind": "site-page-limit", "message": f"The whole-site scan stopped at its {site_page_limit}-page limit."},
+                        )
+                    current["coverage"] = _combined_site_coverage(
+                        site_page_coverage, len(pending_site_pages)
+                    )
                     _complete_with_screenshot(
                         run, current, started, browser, evidence_directory
                     )

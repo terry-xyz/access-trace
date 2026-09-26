@@ -16,12 +16,14 @@ from access_trace.browser import (
     BrowserError,
     IsolatedKeyboardBrowser,
     MAX_PLANNER_SCREENSHOT_BYTES,
+    _UploadedPageRequestPolicy,
 )
 from access_trace.domain import create_run
 from access_trace.journey import (
     CodexPlanner,
     PlannerError,
     _complete_if_verified,
+    _max_site_pages,
     execute_assessment,
     execute_contact_goal,
     execute_fixed_goal,
@@ -380,6 +382,106 @@ class AssessmentTargetTests(unittest.TestCase):
             completed["evidenceHandoff"]["progress"]["coverage"],
         )
         self.assertIsNone(completed["evidenceHandoff"]["progress"]["goal"])
+
+    def test_whole_site_visits_same_origin_pages_and_zero_config_means_all(self):
+        target = self.base_url + "/docs/demos/fixed/index.html"
+        page_two = self.base_url + "/docs/demos/fixed/one.html"
+        page_three = self.base_url + "/docs/demos/fixed/two.html"
+        run = create_run({"targetUrl": target}, self.server.server_port)
+        visited = []
+        discovered = []
+
+        class SiteBrowser:
+            def __init__(self, target_url):
+                self.url = target_url
+
+            def needs_headful_retry(self):
+                return False
+
+            def observe(self):
+                return {
+                    "url": self.url,
+                    "title": "Site page",
+                    "focus": {"role": "document", "stableId": "document", "isStable": True},
+                    "controls": [],
+                    "controlCount": 0,
+                    "pageContentVisible": True,
+                    "lifecycle": {
+                        "pageOpen": True, "dialogOpen": False, "dialogObserved": False,
+                        "popupObserved": False, "popupAttempted": False, "crashed": False,
+                        "offLoopbackRedirect": False, "navigationRedirect": False,
+                        "browserLoadError": False, "pageContentVisible": True,
+                        "headfulFallback": False,
+                    },
+                }
+
+            def discover_site_links(self):
+                discovered.append(self.url)
+                return [page_two, page_three]
+
+            def navigate_to(self, url):
+                visited.append(url)
+                self.url = url
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "0"}), mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", SiteBrowser
+        ):
+            completed = execute_assessment(run, self.run_directory)
+
+        self.assertEqual([page_two, page_three], visited, (completed["observations"][-1]["url"], completed["observations"][-1]["coverage"]))
+        self.assertEqual("COMPLETED", completed["status"])
+        self.assertEqual(3, completed["stoppingPoint"]["coverage"]["areasObserved"])
+        self.assertEqual("completed", completed["stoppingPoint"]["coverage"]["status"])
+
+        visited.clear()
+        page_only_run = create_run(
+            {"targetUrl": target, "pageOnly": True}, self.server.server_port
+        )
+        discovery_count = len(discovered)
+        with mock.patch(
+            "access_trace.journey.IsolatedKeyboardBrowser", SiteBrowser
+        ):
+            page_only_completed = execute_assessment(page_only_run, self.run_directory)
+        self.assertEqual([], visited)
+        self.assertEqual(discovery_count, len(discovered))
+        self.assertEqual(1, page_only_completed["stoppingPoint"]["coverage"]["areasObserved"])
+
+    def test_site_page_limit_is_developer_configurable_and_zero_means_uncapped(self):
+        with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "7"}):
+            self.assertEqual(7, _max_site_pages())
+        with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "0"}):
+            self.assertEqual(0, _max_site_pages())
+
+    def test_local_site_traversal_allows_only_documents_inside_the_uploaded_site(self):
+        target = "http://127.0.0.1:4173/sites/0123456789abcdef0123456789abcdef/index.html"
+        frame_id = "main-frame"
+        policy = _UploadedPageRequestPolicy(
+            None, target, frame_id, allow_site_documents=True
+        )
+        policy.initial_document_allowed = True
+
+        self.assertTrue(policy._allows_request(
+            "http://127.0.0.1:4173/sites/0123456789abcdef0123456789abcdef/about.html",
+            "GET", "Document", frame_id,
+        ))
+        self.assertFalse(policy._allows_request(
+            "http://127.0.0.1:4173/sites/0123456789abcdef0123456789abcdef/../other.html",
+            "GET", "Document", frame_id,
+        ))
+        self.assertFalse(policy._allows_request(
+            "http://example.test/about.html", "GET", "Document", frame_id,
+        ))
+        self.assertFalse(policy._allows_request(
+            "http://127.0.0.1:4173/sites/0123456789abcdef0123456789abcdef/about.html",
+            "POST", "Document", frame_id,
+        ))
 
     def test_whole_site_continues_after_a_website_action_makes_no_progress(self):
         class WholeSitePlanner:
