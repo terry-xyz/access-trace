@@ -138,6 +138,7 @@ class AccessTraceServer(ThreadingHTTPServer):
         self.active_planners = {}
         self.active_source_reviewers = {}
         self.active_runs = {}
+        self.active_run_activity = {}
         self.cancelled_run_ids = set()
         self.cancelled_source_review_ids = set()
         self.active_planners_lock = threading.Lock()
@@ -202,6 +203,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 self.send_asset(contents, content_type)
             return
         if path.startswith("/api/runs/"):
+            if path.endswith("/activity"):
+                self.get_run_activity(path)
+                return
             self.get_run(path.rsplit("/", 1)[-1])
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Not found"}})
@@ -365,6 +369,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     return
                 self.server.active_planners[run_id] = planner
                 self.server.active_runs[run_id] = run
+                self.server.active_run_activity[run_id] = []
                 registered = True
             completed = execute_assessment(
                 run,
@@ -374,6 +379,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 cancellation_requested=lambda: (
                     run_id in self.server.cancelled_run_ids
                 ),
+                progress_callback=lambda action: self._record_run_activity(run_id, action),
             )
             with self.server.active_planners_lock:
                 # The journey owns its terminal status, including a status
@@ -408,6 +414,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                         del self.server.active_planners[run_id]
                     if self.server.active_runs.get(run_id) is run:
                         del self.server.active_runs[run_id]
+                    self.server.active_run_activity.pop(run_id, None)
                     self.server.cancelled_run_ids.discard(run_id)
         self.send_json(HTTPStatus.OK, completed)
 
@@ -713,6 +720,28 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
             return
         self.send_json(HTTPStatus.OK, run)
+
+    def _record_run_activity(self, run_id: str, action: Dict[str, Any]):
+        if action.get("kind") == "key":
+            message = "Pressed {0}.".format(action.get("key", "keyboard key"))
+        else:
+            message = "Entered {0} characters in {1}.".format(
+                action.get("characterCount", 0), action.get("field", "a field")
+            )
+        event = {"sequence": action.get("sequence"), "message": message}
+        with self.server.active_planners_lock:
+            activity = self.server.active_run_activity.get(run_id)
+            if activity is not None:
+                activity.append(event)
+
+    def get_run_activity(self, path: str):
+        run_id = unquote(path[len("/api/runs/") : -len("/activity")].rstrip("/"))
+        if not RUN_ID_PATTERN.fullmatch(run_id):
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+            return
+        with self.server.active_planners_lock:
+            activity = list(self.server.active_run_activity.get(run_id, []))
+        self.send_json(HTTPStatus.OK, {"events": activity})
 
     def read_json(self, maximum_bytes: int = MAX_REQUEST_BYTES) -> Dict[str, Any]:
         raw_body = self.read_body(maximum_bytes)

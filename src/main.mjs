@@ -175,7 +175,8 @@ function clearCancelableRun(runId) {
 }
 
 /** waitForRunTerminal watches durable run status while execute remains open for the evidence review. */
-async function waitForRunTerminal(runId, shouldContinue, onTerminal) {
+async function waitForRunTerminal(runId, context, shouldContinue, onTerminal) {
+  let activityCount = 0;
   while (shouldContinue()) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1500);
@@ -185,6 +186,23 @@ async function waitForRunTerminal(runId, shouldContinue, onTerminal) {
       });
       if (response.ok) {
         const record = await response.json();
+        if (record && typeof record.status === "string") {
+          const activityResponse = await fetch(
+            `/api/runs/${encodeURIComponent(runId)}/activity`,
+            { signal: controller.signal },
+          );
+          if (activityResponse.ok) {
+            const activity = await activityResponse.json();
+            const events = Array.isArray(activity.events) ? activity.events : [];
+            if (context === "single") {
+              for (const event of events.slice(activityCount)) {
+                appendTerminalActivity(event.message);
+                liveAssessmentStatus.textContent = event.message;
+              }
+            }
+            activityCount = events.length;
+          }
+        }
         if (record && typeof record.status === "string" && record.status !== "IN_PROGRESS") {
           onTerminal(record.status);
           return;
@@ -202,7 +220,7 @@ async function waitForRunTerminal(runId, shouldContinue, onTerminal) {
 /** executeRun watches terminal browser status independently from the final review response. */
 async function executeRun(runId, context) {
   let requestSettled = false;
-  const monitor = waitForRunTerminal(runId, () => !requestSettled, () => {
+  const monitor = waitForRunTerminal(runId, context, () => !requestSettled, () => {
     clearCancelableRun(runId);
     if (context === "single") {
       liveAssessmentStatus.textContent = "Browser run finished. Evidence review is running…";
@@ -261,6 +279,22 @@ function setRunStage(value, label, message) {
     entry.append(time, text);
     terminalLog.append(entry);
   }
+}
+
+/** appendTerminalActivity adds one safe, timestamped line to the live run log. */
+function appendTerminalActivity(message) {
+  const entry = document.createElement("li");
+  const time = document.createElement("time");
+  time.textContent = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date());
+  const text = document.createElement("span");
+  text.textContent = message;
+  entry.append(time, text);
+  terminalLog.append(entry);
+  entry.scrollIntoView({ block: "nearest" });
 }
 
 /** formatScopeLabel gives a stable presentation label to the stored assessment-scope value. */

@@ -26,6 +26,7 @@ BROWSER_RUN_LOCK = threading.Lock()
 _TERMINAL_COORDINATION = ContextVar(
     "access_trace_terminal_coordination", default=None
 )
+_PROGRESS_CALLBACK = ContextVar("access_trace_progress_callback", default=None)
 
 
 MAX_PAGE_URL_LENGTH = 256
@@ -502,6 +503,13 @@ def _append_action(
             "actedAt": utc_now(),
         }
     run["actions"].append(record)
+    callback = _PROGRESS_CALLBACK.get()
+    if callback is not None:
+        try:
+            callback(record)
+        except Exception:
+            # Live activity is optional and must never interrupt a browser action.
+            pass
 
 
 def _set_terminal_state(
@@ -1080,15 +1088,18 @@ def execute_assessment(
     planner: Optional[Any] = None,
     lifecycle_lock: Optional[Any] = None,
     cancellation_requested: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """Execute a bounded whole-site or goal-focused keyboard assessment."""
     with BROWSER_RUN_LOCK:
         token = _TERMINAL_COORDINATION.set(
             (lifecycle_lock, cancellation_requested)
         )
+        progress_token = _PROGRESS_CALLBACK.set(progress_callback)
         try:
             return _execute_assessment(run, evidence_directory, planner)
         finally:
+            _PROGRESS_CALLBACK.reset(progress_token)
             _TERMINAL_COORDINATION.reset(token)
 
 
