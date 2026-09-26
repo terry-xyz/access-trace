@@ -549,6 +549,75 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual(2, completed["stoppingPoint"]["coverage"]["areasObserved"])
         self.assertEqual("partial", completed["stoppingPoint"]["coverage"]["status"])
 
+    def test_whole_site_retries_tab_when_iframe_focus_temporarily_stalls(self):
+        target = self.base_url + "/docs/demos/fixed/index.html"
+        run = create_run({"targetUrl": target, "sitePageLimit": 1}, self.server.server_port)
+        observed_focuses = []
+
+        class IframeStallBrowser:
+            def __init__(self, target_url):
+                self.url = target_url
+                self.focus_id = "document"
+                self.iframe_tabs = 0
+
+            def observe(self):
+                focus = {
+                    "document": {"role": "document", "stableId": "document", "isStable": True},
+                    "first": {"role": "link", "stableId": "first-control", "isStable": True},
+                    "frame": {"role": "Iframe", "stableId": "chat-frame", "accessibleName": "Chat", "isStable": True},
+                    "last": {"role": "button", "stableId": "last-control", "isStable": True},
+                }[self.focus_id]
+                observed_focuses.append(self.focus_id)
+                return {
+                    "url": self.url,
+                    "title": "Site page",
+                    "focus": focus,
+                    "controls": [
+                        {"role": "link", "stableId": "first-control", "focusable": True},
+                        {"role": "Iframe", "stableId": "chat-frame", "focusable": True},
+                        {"role": "button", "stableId": "last-control", "focusable": True},
+                    ],
+                    "controlCount": 3,
+                    "pageContentVisible": True,
+                    "lifecycle": {
+                        "pageOpen": True, "dialogOpen": False, "dialogObserved": False,
+                        "popupObserved": False, "popupAttempted": False, "crashed": False,
+                        "offLoopbackRedirect": False, "navigationRedirect": False,
+                        "browserLoadError": False, "pageContentVisible": True,
+                        "headfulFallback": False,
+                    },
+                }
+
+            def press_key(self, key):
+                if self.focus_id == "document":
+                    self.focus_id = "first"
+                elif self.focus_id == "first":
+                    self.focus_id = "frame"
+                elif self.focus_id == "frame":
+                    self.iframe_tabs += 1
+                    if self.iframe_tabs > 1:
+                        self.focus_id = "last"
+
+            def discover_site_links(self):
+                return [target + "?other=page"]
+
+            def navigate_to(self, url):
+                self.url = url
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", IframeStallBrowser):
+            completed = execute_assessment(run, self.run_directory)
+
+        self.assertIn("last", observed_focuses)
+        self.assertEqual(3, completed["stoppingPoint"]["coverage"]["controlsObserved"], completed.get("warnings"))
+        self.assertEqual(3, completed["stoppingPoint"]["coverage"]["controlsExpected"])
+
     def test_redirected_link_does_not_consume_whole_site_page_limit(self):
         target = self.base_url + "/docs/demos/fixed/index.html"
         redirecting_link = self.base_url + "/docs/demos/fixed/redirect.html"
@@ -556,6 +625,7 @@ class AssessmentTargetTests(unittest.TestCase):
         page_three = self.base_url + "/docs/demos/fixed/third.html"
         run = create_run({"targetUrl": target, "sitePageLimit": 3}, self.server.server_port)
         requested = []
+        tab_presses = {}
 
         class RedirectingBrowser:
             def __init__(self, target_url):
@@ -579,7 +649,7 @@ class AssessmentTargetTests(unittest.TestCase):
                 }
 
             def press_key(self, key):
-                pass
+                tab_presses[self.url] = tab_presses.get(self.url, 0) + 1
 
             def discover_site_links(self):
                 return [redirecting_link, page_two, page_three]
@@ -599,6 +669,7 @@ class AssessmentTargetTests(unittest.TestCase):
             completed = execute_assessment(run, self.run_directory)
 
         self.assertEqual([redirecting_link, page_two, page_three], requested)
+        self.assertEqual(1, tab_presses[target])
         self.assertEqual(3, completed["stoppingPoint"]["coverage"]["areasObserved"])
 
     def test_whole_site_continues_when_tab_observation_temporarily_loses_page_content(self):

@@ -1317,6 +1317,7 @@ def _execute_assessment(
 
         consecutive_action_failures = 0
         tab_scan_states = set()
+        iframe_focus_stalls = {}
         keyboard_audit_traversal_done = False
 
         def finish_whole_site_page() -> bool:
@@ -1338,7 +1339,7 @@ def _execute_assessment(
                         ):
                             pending_site_pages.append(link)
             has_page_capacity = site_page_limit == 0 or len(visited_site_pages) < site_page_limit
-            if pending_site_pages and has_page_capacity:
+            while pending_site_pages and has_page_capacity:
                 next_page = pending_site_pages.pop(0)
                 next_key = _site_page_key(next_page)
                 if next_key:
@@ -1347,9 +1348,30 @@ def _execute_assessment(
                     # do not consume the configured limit of unique pages.
                     attempted_site_pages.add(next_key)
                 browser.navigate_to(next_page)
+                next_raw_observation = browser.observe()
+                observed_page_key = _site_page_key(next_raw_observation.get("url"))
+                if (
+                    observed_page_key
+                    and observed_page_key in visited_site_pages
+                ):
+                    # Canonical redirects and trailing-slash aliases can land
+                    # on a page already scanned. Do not reset its focus coverage
+                    # or spend another scan cycle on the duplicate destination.
+                    _append_warning(
+                        run["warnings"],
+                        {
+                            "kind": "duplicate-site-page",
+                            "message": "A discovered link redirected to a page already checked; the crawl continued to another page.",
+                        },
+                    )
+                    has_page_capacity = (
+                        site_page_limit == 0
+                        or len(visited_site_pages) < site_page_limit
+                    )
+                    continue
                 covered_focus_ids.clear()
                 next_observation = _redacted_observation(
-                    browser.observe(),
+                    next_raw_observation,
                     run["targetUrl"],
                     typed_values.values(),
                     run["assessmentScope"],
@@ -1390,6 +1412,18 @@ def _execute_assessment(
                     continue
                 scan_state = _tab_scan_signature(current)
                 if scan_state in tab_scan_states:
+                    focus = current.get("focus")
+                    if isinstance(focus, dict) and str(focus.get("role", "")).lower() == "iframe":
+                        # Focus reads from the parent page can stay on the iframe
+                        # node while a Tab key is crossing its boundary. Give
+                        # Chrome a small bounded number of extra Tab attempts
+                        # before treating that unchanged iframe focus as a trap.
+                        iframe_key = focus.get("accessibleName") or focus.get("stableId") or "iframe"
+                        retries = iframe_focus_stalls.get(iframe_key, 0)
+                        if retries < 2:
+                            iframe_focus_stalls[iframe_key] = retries + 1
+                            tab_scan_states.discard(scan_state)
+                            continue
                     coverage = current.get("coverage")
                     if isinstance(coverage, dict):
                         coverage["status"] = "partial"
