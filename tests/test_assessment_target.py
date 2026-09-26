@@ -2045,7 +2045,10 @@ class AssessmentTargetTests(unittest.TestCase):
             schema_path = Path(args[args.index("--output-schema") + 1])
             captured["schema_path"] = schema_path
             captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
-            image_path = Path(args[args.index("--image") + 1])
+            image_argument = next(
+                argument for argument in args if argument.startswith("--image=")
+            )
+            image_path = Path(image_argument.split("=", 1)[1])
             captured["image_path"] = image_path
             captured["image_bytes"] = image_path.read_bytes()
             return process
@@ -2087,6 +2090,10 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual(set(CODEX_DISABLED_FEATURES), disabled_features)
         self.assertEqual('web_search="disabled"', args[args.index("--config") + 1])
         self.assertFalse(kwargs["shell"])
+        self.assertTrue(any(argument.startswith("--image=") for argument in args))
+        self.assertTrue(
+            args[-1].startswith("You are the autonomous Codex keyboard-journey planner.")
+        )
         self.assertNotIn("screenshotDataUrl", args[-1])
         self.assertNotIn(context["pageEvidence"]["screenshotDataUrl"], args[-1])
         self.assertEqual(

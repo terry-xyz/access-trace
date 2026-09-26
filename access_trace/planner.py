@@ -441,7 +441,10 @@ class CodexPlanner:
                     raise PlannerError("Codex screenshot input was invalid") from error
                 screenshot_path = directory / "planner-screenshot.png"
                 screenshot_path.write_bytes(screenshot)
-                args.extend(["--image", str(screenshot_path)])
+                # Codex's --image option accepts one or more files. Keep the
+                # value attached so its variadic parser cannot consume the
+                # positional prompt that is appended below.
+                args.append("--image=" + str(screenshot_path))
             # Keep only runtime essentials and the saved account login path.
             # In particular, API keys, provider URLs, proxies, MCP tokens, and
             # cloud credentials must not reach the planner subprocess.
