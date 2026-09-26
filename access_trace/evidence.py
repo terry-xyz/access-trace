@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
+from .source_references import SOURCE_REFERENCES, source_reference
 from .wcag import WCAG22_CRITERIA
 
 
@@ -434,26 +435,38 @@ def _reporting_reference(
 def _reporting_condition(
     value: Any, allowed_references: Dict[str, Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
-    """Keep one condition only when its WCAG mapping and citations are valid."""
+    """Keep one condition only when its source mapping and citations are valid."""
     if not isinstance(value, dict):
         return None
     condition = value.get("condition")
     status = value.get("mappingStatus")
     criterion = value.get("wcagCriterion")
+    cited_source = value.get("sourceReference")
     references = value.get("evidenceReferences")
     if (
         not isinstance(condition, str) or not condition.strip()
         or len(condition) > MAX_CONDITION_LENGTH
-        or not isinstance(status, str) or status not in {"mapped", "unmapped"}
+        or not isinstance(status, str) or status not in {"mapped", "source", "unmapped"}
         or not isinstance(references, list) or not references or len(references) > 16
     ):
         return None
     if status == "unmapped":
-        if criterion is not None:
+        if criterion is not None or cited_source is not None:
+            return None
+        safe_criterion = None
+        safe_source = None
+    elif status == "source":
+        if criterion is not None or not isinstance(cited_source, dict):
+            return None
+        source_id = cited_source.get("id")
+        if not isinstance(source_id, str) or source_id not in SOURCE_REFERENCES:
+            return None
+        safe_source = source_reference(source_id)
+        if cited_source != safe_source:
             return None
         safe_criterion = None
     else:
-        if not isinstance(criterion, dict):
+        if not isinstance(criterion, dict) or cited_source is not None:
             return None
         criterion_id = criterion.get("id")
         if not isinstance(criterion_id, str) or criterion_id not in WCAG22_CRITERIA:
@@ -466,6 +479,7 @@ def _reporting_condition(
         }
         if criterion != safe_criterion:
             return None
+        safe_source = None
     safe_references = [
         _reporting_reference(item, allowed_references) for item in references
     ]
@@ -478,6 +492,7 @@ def _reporting_condition(
         "condition": condition,
         "mappingStatus": status,
         "wcagCriterion": safe_criterion,
+        "sourceReference": safe_source,
         "evidenceReferences": safe_references,
     }
 

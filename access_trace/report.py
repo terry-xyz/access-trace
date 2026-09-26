@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .browser import MAX_PLANNER_SCREENSHOT_BYTES
 from .planner import CodexPlanner
+from .source_references import SOURCE_REFERENCES, source_reference
 from .wcag import WCAG22_CRITERIA
 
 
@@ -59,10 +60,11 @@ REVIEW_OUTPUT_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["condition", "wcagCriterionId", "evidenceReferences"],
+                "required": ["condition", "wcagCriterionId", "sourceReferenceId", "evidenceReferences"],
                 "properties": {
                     "condition": {"type": "string", "minLength": 1, "maxLength": MAX_CONDITION_LENGTH},
                     "wcagCriterionId": {"type": ["string", "null"], "enum": [*WCAG22_CRITERIA, None]},
+                    "sourceReferenceId": {"type": ["string", "null"], "enum": [*SOURCE_REFERENCES, None]},
                     "evidenceReferences": {
                         "type": "array",
                         "minItems": 1,
@@ -84,13 +86,22 @@ REVIEW_PROMPT_INSTRUCTIONS = (
     "null. List each distinct accessibility condition supported by the recorded "
     "evidence in conditions; use an empty list if none is supported. For each "
     "condition, cite its own evidence IDs and select wcagCriterionId only when "
-    "that success criterion directly relates to the observed condition. Use null "
-    "if the evidence does not justify a direct mapping. Examples: inability to "
+    "that success criterion directly relates to the observed condition. If no "
+    "WCAG criterion directly applies, select sourceReferenceId from the source "
+    "catalog only when the observed condition directly matches that statement. "
+    "Set both IDs to null if neither directly applies. Never select both IDs. "
+    "Do not infer a missing feature from a single screenshot or short journey. "
+    "Examples: inability to "
     "operate a control by keyboard relates to 2.1.1; trapped keyboard focus "
     "to 2.1.2; unexpected focus order to 2.4.3; invisible focus to 2.4.7; "
     "missing control name or role to 4.1.2. These are correlations, not "
     "determinations of WCAG failure. Valid WCAG 2.2 IDs: "
-    + ", ".join(WCAG22_CRITERIA) + ". Do not infer unobserved page behavior, claim general accessibility or "
+    + ", ".join(WCAG22_CRITERIA) + ". Source catalog (IDs, summaries, and locators): "
+    + "; ".join(
+        f"{reference_id}: {source['summary']} [{source['locator']}]"
+        for reference_id, source in SOURCE_REFERENCES.items()
+    ) + ". Cite these sources as correlations to their stated requirements or research findings, "
+    "not as proof of compliance or endorsement. Do not infer unobserved page behavior, claim general accessibility or "
     "WCAG conformance, or call tools, run commands, read files, or use the network. "
     "Return one JSON object with exactly the required schema fields."
 )
@@ -373,10 +384,11 @@ def validate_review(
         raise ReviewError("Evidence review returned an invalid result")
     conditions = []
     for item in raw_conditions:
-        if not isinstance(item, dict) or set(item) != {"condition", "wcagCriterionId", "evidenceReferences"}:
+        if not isinstance(item, dict) or set(item) != {"condition", "wcagCriterionId", "sourceReferenceId", "evidenceReferences"}:
             raise ReviewError("Evidence review returned an invalid result")
         condition = item["condition"]
         criterion_id = item["wcagCriterionId"]
+        source_id = item["sourceReferenceId"]
         condition_references = item["evidenceReferences"]
         if (
             not isinstance(condition, str) or not condition.strip()
@@ -384,6 +396,10 @@ def validate_review(
             or (criterion_id is not None and (
                 not isinstance(criterion_id, str) or criterion_id not in WCAG22_CRITERIA
             ))
+            or (source_id is not None and (
+                not isinstance(source_id, str) or source_id not in SOURCE_REFERENCES
+            ))
+            or (criterion_id is not None and source_id is not None)
             or not isinstance(condition_references, list)
             or not condition_references
             or len(condition_references) > MAX_REVIEW_REFERENCES
@@ -404,7 +420,8 @@ def validate_review(
         conditions.append({
             "condition": condition,
             "wcagCriterion": criterion,
-            "mappingStatus": "mapped" if criterion else "unmapped",
+            "sourceReference": source_reference(source_id) if source_id is not None else None,
+            "mappingStatus": "mapped" if criterion else "source" if source_id else "unmapped",
             "evidenceReferences": [allowed_references[reference_id] for reference_id in condition_references],
         })
 

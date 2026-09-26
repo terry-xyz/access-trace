@@ -1022,6 +1022,7 @@ function renderRunReport(record, root) {
     const mapping = document.createElement("p");
     mapping.className = "report-condition-mapping";
     const criterion = condition.wcagCriterion;
+    const source = condition.sourceReference;
     if (condition.mappingStatus === "mapped"
       && typeof criterion?.id === "string"
       && typeof criterion?.name === "string"
@@ -1031,8 +1032,19 @@ function renderRunReport(record, root) {
       link.href = criterion.url;
       link.textContent = `WCAG 2.2 — ${criterion.id} ${criterion.name}`;
       mapping.append(link);
+    } else if (condition.mappingStatus === "source"
+      && typeof source?.source === "string"
+      && typeof source?.sourceType === "string"
+      && typeof source?.locator === "string"
+      && typeof source?.summary === "string"
+      && typeof source?.url === "string"
+      && /^https:\/\/(?:iris\.who\.int|www\.etsi\.org|doi\.org)\//.test(source.url)) {
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.textContent = `${source.sourceType}: ${source.source} — ${source.locator}`;
+      mapping.append("No direct WCAG match identified. Related source: ", link, `. ${source.summary}`);
     } else {
-      mapping.textContent = "No direct WCAG mapping identified.";
+      mapping.textContent = "No direct WCAG or supplied-source mapping identified.";
     }
     const citations = document.createElement("ul");
     citations.className = "evidence-reference-list";
