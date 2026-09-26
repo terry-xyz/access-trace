@@ -23,6 +23,7 @@ from access_trace.journey import (
     CodexPlanner,
     PlannerError,
     _complete_if_verified,
+    _site_page_key,
     execute_assessment,
     execute_contact_goal,
     execute_fixed_goal,
@@ -491,11 +492,83 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual(discovery_count, len(discovered))
         self.assertEqual(1, page_only_completed["stoppingPoint"]["coverage"]["areasObserved"])
 
+    def test_whole_site_scrapes_urls_before_visiting_only_the_configured_pages(self):
+        target = self.base_url + "/docs/demos/fixed/index.html"
+        page_two = self.base_url + "/docs/demos/fixed/one.html"
+        page_three = self.base_url + "/docs/demos/fixed/two.html"
+        page_four = self.base_url + "/docs/demos/fixed/three.html"
+        run = create_run({"targetUrl": target, "sitePageLimit": 3}, self.server.server_port)
+        events = []
+        visited = []
+
+        class SitemapBrowser:
+            def __init__(self, target_url):
+                self.url = target_url
+
+            def observe(self):
+                events.append("observe:" + self.url)
+                return {
+                    "url": self.url,
+                    "title": "Site page",
+                    "focus": {"role": "document", "stableId": "document", "isStable": True},
+                    "controls": [],
+                    "controlCount": 0,
+                    "pageContentVisible": True,
+                    "lifecycle": {
+                        "pageOpen": True, "dialogOpen": False, "dialogObserved": False,
+                        "popupObserved": False, "popupAttempted": False, "crashed": False,
+                        "offLoopbackRedirect": False, "navigationRedirect": False,
+                        "browserLoadError": False, "pageContentVisible": True,
+                        "headfulFallback": False,
+                    },
+                }
+
+            def crawl_site_pages(self):
+                events.append("scrape-links")
+                return {
+                    "pages": [target, page_two, page_three, page_four],
+                    "source": "sitemap",
+                    "truncated": False,
+                }
+
+            def discover_site_links(self):
+                raise AssertionError("the prepared URL list should be used without per-page discovery")
+
+            def navigate_to(self, url):
+                events.append("visit:" + url)
+                visited.append(url)
+                self.url = url
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", SitemapBrowser):
+            completed = execute_assessment(run, self.run_directory)
+
+        self.assertLess(events.index("scrape-links"), events.index("visit:" + page_two))
+        self.assertEqual([page_two, page_three], visited)
+        self.assertEqual(4, completed["siteDiscovery"]["pagesFound"])
+        self.assertEqual(3, completed["stoppingPoint"]["coverage"]["areasObserved"])
+
     def test_site_page_limit_is_developer_configurable_and_zero_means_uncapped(self):
         with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "7"}):
             self.assertEqual(7, configured_site_page_limit())
         with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "0"}):
             self.assertEqual(0, configured_site_page_limit())
+
+    def test_site_page_key_normalizes_default_ports_and_hostname_case(self):
+        self.assertEqual(
+            _site_page_key("https://www.gov.gr/el"),
+            _site_page_key("HTTPS://WWW.GOV.GR:443/el"),
+        )
+        self.assertEqual(
+            _site_page_key("http://example.test/page"),
+            _site_page_key("http://EXAMPLE.TEST:80/page"),
+        )
 
     def test_whole_site_continues_to_linked_pages_after_focus_traversal_stalls(self):
         target = self.base_url + "/docs/demos/fixed/index.html"

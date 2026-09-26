@@ -53,6 +53,7 @@ PERMITTED_KEYS = {
 }
 MAX_TYPED_CHARACTERS = 80
 MAX_PLANNER_SCREENSHOT_BYTES = 256 * 1024
+MAX_SITE_DISCOVERY_PAGES = 10_000
 BROWSER_STARTUP_TIMEOUT = 15.0
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 WEBRTC_LOCKDOWN_SCRIPT = r"""
@@ -1606,6 +1607,171 @@ class IsolatedKeyboardBrowser:
                 seen.add(safe_url)
                 links.append(safe_url)
         return links
+
+    def crawl_site_pages(self) -> Dict[str, Any]:
+        """Discover same-origin pages before any keyboard audit begins.
+
+        Prefer robots.txt and sitemap files for fast complete discovery, then
+        add same-origin links scraped from the current page. Linked pages are
+        never opened during discovery; the journey applies its configured page
+        limit only after this URL list is ready.
+        """
+        if self.connection is None:
+            raise BrowserError("browser is not connected")
+        result = self.connection.call(
+            "Runtime.evaluate",
+            {
+                "expression": r"""(async () => {
+                  const origin = location.origin;
+                  const maxPages = 10000;
+                  const maxSitemaps = 64;
+                  const deadline = performance.now() + 7500;
+                  const excluded = /\.(?:pdf|zip|gz|tar|7z|rar|png|jpe?g|gif|webp|svg|mp[34]|wav|woff2?|ttf|css|js|mjs|json|xml)$/i;
+                  const canonical = value => {
+                    try {
+                      const url = new URL(value, location.href);
+                      if (url.origin !== origin || !["http:", "https:"].includes(url.protocol)) return null;
+                      if (url.username || url.password || excluded.test(url.pathname)) return null;
+                      url.search = "";
+                      url.hash = "";
+                      return url.href;
+                    } catch { return null; }
+                  };
+                  const pages = [];
+                  const seenPages = new Set();
+                  const addPage = value => {
+                    const page = canonical(value);
+                    if (!page || seenPages.has(page) || pages.length >= maxPages) return null;
+                    seenPages.add(page);
+                    pages.push(page);
+                    return page;
+                  };
+                  const readLimited = async response => {
+                    const reader = response.body?.getReader();
+                    if (!reader) return "";
+                    const chunks = [];
+                    let length = 0;
+                    while (length < 1500000) {
+                      const {value, done} = await reader.read();
+                      if (done) break;
+                      const chunk = value.subarray(0, 1500000 - length);
+                      chunks.push(chunk);
+                      length += chunk.length;
+                      if (chunk.length !== value.length) { await reader.cancel(); break; }
+                    }
+                    const bytes = new Uint8Array(length);
+                    let offset = 0;
+                    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+                    return new TextDecoder().decode(bytes);
+                  };
+                  const fetchText = async value => {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), 2200);
+                    try {
+                      const response = await fetch(value, {
+                        credentials: "omit", cache: "no-store", redirect: "follow",
+                        signal: controller.signal,
+                        headers: {Accept: "text/html, application/xml, text/xml, text/plain;q=0.9"},
+                      });
+                      if (!response.ok || new URL(response.url).origin !== origin) return null;
+                      return {url: response.url, type: response.headers.get("content-type") || "", text: await readLimited(response)};
+                    } catch { return null; }
+                    finally { clearTimeout(timer); }
+                  };
+                  addPage(location.href);
+                  const sitemapQueue = [];
+                  const sitemapSeen = new Set();
+                  const robots = await fetchText(new URL("/robots.txt", location.href).href);
+                  if (robots?.text) {
+                    for (const line of robots.text.split(/\r?\n/)) {
+                      const match = /^\s*sitemap\s*:\s*(\S+)/i.exec(line);
+                      const sitemap = match && canonical(match[1]);
+                      if (sitemap) sitemapQueue.push(sitemap);
+                    }
+                  }
+                  if (!sitemapQueue.length) {
+                    sitemapQueue.push(new URL("/sitemap.xml", location.href).href);
+                    sitemapQueue.push(new URL("/sitemap_index.xml", location.href).href);
+                  }
+                  while (sitemapQueue.length && sitemapSeen.size < maxSitemaps && performance.now() < deadline) {
+                    const sitemap = sitemapQueue.shift();
+                    if (!sitemap || sitemapSeen.has(sitemap)) continue;
+                    sitemapSeen.add(sitemap);
+                    const response = await fetchText(sitemap);
+                    if (!response || !/xml|text/i.test(response.type)) continue;
+                    const xml = new DOMParser().parseFromString(response.text, "application/xml");
+                    if (xml.querySelector("parsererror")) continue;
+                    const isIndex = xml.documentElement?.localName === "sitemapindex";
+                    for (const node of xml.getElementsByTagNameNS("*", "loc")) {
+                      const value = node.textContent?.trim();
+                      if (!value) continue;
+                      if (isIndex) {
+                        const nested = canonical(value);
+                        if (nested && !sitemapSeen.has(nested)) sitemapQueue.push(nested);
+                      } else addPage(value);
+                      if (pages.length >= maxPages) break;
+                    }
+                  }
+                  const hasSitemap = pages.length > 1;
+                  const pendingNodes = Array.from(document.childNodes).reverse();
+                  const seenNodes = new Set();
+                  while (pendingNodes.length && seenNodes.size < 50000 && pages.length < maxPages) {
+                    const node = pendingNodes.pop();
+                    if (!node || node.nodeType !== Node.ELEMENT_NODE || seenNodes.has(node)) continue;
+                    seenNodes.add(node);
+                    if (node.tagName === "A" && node.hasAttribute("href")) {
+                      try { addPage(new URL(node.getAttribute("href"), location.href).href); } catch {}
+                    }
+                    let children;
+                    if (node.tagName === "SLOT") {
+                      const assigned = node.assignedElements({flatten: true});
+                      children = assigned.length ? assigned : Array.from(node.children);
+                    } else if (node.shadowRoot) children = Array.from(node.shadowRoot.children);
+                    else children = Array.from(node.children);
+                    for (let index = children.length - 1; index >= 0; index -= 1) pendingNodes.push(children[index]);
+                  }
+                  return {
+                    pages,
+                    source: hasSitemap ? "sitemap" : "page-links",
+                    truncated: pages.length >= maxPages || sitemapQueue.length > 0 || seenNodes.size >= 50000,
+                  };
+                })()""".replace(
+                    "const maxPages = 10000;",
+                    "const maxPages = {0};".format(MAX_SITE_DISCOVERY_PAGES),
+                ),
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
+        value = result.get("result", {}).get("value") if isinstance(result, dict) else None
+        if not isinstance(value, dict) or not isinstance(value.get("pages"), list):
+            raise BrowserError("site page discovery returned no page list")
+        target = urlsplit(self.target_url)
+        pages = []
+        seen = set()
+        for page in value["pages"]:
+            if not isinstance(page, str):
+                continue
+            try:
+                observed = urlsplit(page)
+                if (
+                    not same_web_origin(target, observed)
+                    or observed.username
+                    or observed.password
+                    or is_browser_error_url(page)
+                ):
+                    continue
+                safe_url = urlunsplit((observed.scheme, observed.netloc, observed.path or "/", "", ""))
+            except ValueError:
+                continue
+            if safe_url not in seen:
+                seen.add(safe_url)
+                pages.append(safe_url)
+        return {
+            "pages": pages,
+            "source": value.get("source") if value.get("source") in {"sitemap", "page-links"} else "page-links",
+            "truncated": value.get("truncated") is True,
+        }
 
     def navigate_to(self, url: str) -> None:
         """Navigate only to a vetted page on the selected web origin."""

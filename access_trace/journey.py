@@ -297,7 +297,19 @@ def _site_page_key(value: Any) -> Optional[str]:
         return None
     try:
         parsed = urlsplit(value)
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").lower()
+        if not scheme or not hostname or parsed.username or parsed.password:
+            return None
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = "[" + hostname + "]"
+        port = parsed.port
+        if port is not None and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            hostname += ":" + str(port)
+        return urlunsplit((scheme, hostname, parsed.path or "/", "", ""))
     except ValueError:
         return None
 
@@ -1250,6 +1262,7 @@ def _execute_assessment(
     attempted_site_pages = set()
     pending_site_pages = []
     site_page_coverage = {}
+    site_discovery_complete = False
     site_page_limit = run.get("sitePageLimit", configured_site_page_limit())
     try:
         if run.get("targetVersion") == "local":
@@ -1315,6 +1328,57 @@ def _execute_assessment(
         if lifecycle_failure is not None:
             raise BrowserError(lifecycle_failure)
 
+        if (
+            run.get("assessmentScope") == "whole-site"
+            and run.get("pageOnly") is not True
+        ):
+            crawl_site_pages = getattr(browser, "crawl_site_pages", None)
+            if callable(crawl_site_pages):
+                try:
+                    discovery = crawl_site_pages()
+                except BrowserError:
+                    _append_warning(
+                        run["warnings"],
+                        {
+                            "kind": "site-discovery-failed",
+                            "message": "The site page list could not be fetched up front; the scan fell back to links found on each assessed page.",
+                        },
+                    )
+                else:
+                    pages = discovery.get("pages") if isinstance(discovery, dict) else None
+                    if isinstance(pages, list) and pages:
+                        site_discovery_complete = True
+                        current_page_key = _site_page_key(current.get("url"))
+                        for page in pages:
+                            page_key = _site_page_key(page)
+                            if (
+                                page_key
+                                and page_key != current_page_key
+                                and all(_site_page_key(item) != page_key for item in pending_site_pages)
+                            ):
+                                pending_site_pages.append(page)
+                        run["siteDiscovery"] = {
+                            "source": discovery.get("source", "page-links"),
+                            "pagesFound": len(pages),
+                            "truncated": discovery.get("truncated") is True,
+                        }
+                        if discovery.get("truncated") is True:
+                            _append_warning(
+                                run["warnings"],
+                                {
+                                    "kind": "site-discovery-limit",
+                                    "message": "The preliminary URL scrape reached its safety limit; only the discovered pages were queued for assessment.",
+                                },
+                            )
+                    else:
+                        _append_warning(
+                            run["warnings"],
+                            {
+                                "kind": "site-discovery-failed",
+                                "message": "The preliminary URL scrape returned no pages; the scan fell back to links found on each assessed page.",
+                            },
+                        )
+
         consecutive_action_failures = 0
         tab_scan_states = set()
         iframe_focus_stalls = {}
@@ -1326,7 +1390,7 @@ def _execute_assessment(
             if page_key:
                 visited_site_pages.add(page_key)
                 site_page_coverage[page_key] = copy.deepcopy(current.get("coverage") or {})
-            if run.get("pageOnly") is not True:
+            if run.get("pageOnly") is not True and not site_discovery_complete:
                 discover_links = getattr(browser, "discover_site_links", None)
                 if callable(discover_links):
                     for link in discover_links():
