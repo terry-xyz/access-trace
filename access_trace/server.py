@@ -268,10 +268,11 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 self.server.cancelled_run_ids.discard(run_id)
                 self.server.run_store.save(completed)
             try:
+                review_planner = self.server.planner_factory()
                 review = review_evidence(
                     completed,
                     self.server.run_store.directory,
-                    planner,
+                    review_planner,
                 )
             except Exception:
                 completed["evidenceHandoff"]["reporting"] = {
