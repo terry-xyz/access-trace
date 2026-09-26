@@ -5,13 +5,7 @@ import {
 } from "./assessment.mjs";
 import { filterSensitiveSiteFiles } from "./site-files.mjs";
 
-const brandIntro = document.querySelector(".brand-intro");
-if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-  window.setTimeout(() => brandIntro?.remove(), 650);
-}
-
 const form = document.querySelector("#assessment-form");
-const intro = document.querySelector("#top");
 const targetInput = document.querySelector("#target-url");
 const pageOnlyInput = document.querySelector("#page-only");
 const sitePageLimitInput = document.querySelector("#site-page-limit");
@@ -54,13 +48,82 @@ let activeLiveRunId = null;
 let workflowInProgress = false;
 let latestRunRecord = null;
 
+/** positionHelpTooltip keeps each help popup inside the visible browser window. */
+function positionHelpTooltip(button) {
+  const tooltipId = button.getAttribute("aria-describedby");
+  const tooltip = button.helpTooltip ?? (tooltipId ? document.getElementById(tooltipId) : null);
+  if (!tooltip) return;
+  button.helpTooltip = tooltip;
+  if (button.closest(".report-label-with-help")) tooltip.classList.add("tooltip-report-label");
+  if (button.closest(".report-progress-heading")) tooltip.classList.add("tooltip-report-progress");
+  if (tooltip.parentElement !== document.body) document.body.append(tooltip);
+  tooltip.classList.remove("tooltip-below");
+  tooltip.style.display = "block";
+  const anchor = button.getBoundingClientRect();
+  const bounds = window.visualViewport;
+  const viewportWidth = bounds?.width ?? window.innerWidth;
+  const viewportHeight = bounds?.height ?? window.innerHeight;
+  const offsetLeft = bounds?.offsetLeft ?? 0;
+  const offsetTop = bounds?.offsetTop ?? 0;
+  const margin = 12;
+  const gap = 9;
+  const popup = tooltip.getBoundingClientRect();
+  const left = Math.max(offsetLeft + margin, Math.min(
+    anchor.left + anchor.width / 2 - popup.width / 2,
+    offsetLeft + viewportWidth - popup.width - margin,
+  ));
+  const aboveTop = anchor.top - popup.height - gap;
+  const belowTop = anchor.bottom + gap;
+  const aboveSpace = anchor.top - offsetTop;
+  const belowSpace = offsetTop + viewportHeight - anchor.bottom;
+  let top = aboveTop;
+  if (aboveTop < offsetTop + margin && belowSpace > aboveSpace) {
+    top = belowTop;
+    tooltip.classList.add("tooltip-below");
+  }
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${Math.max(offsetTop + margin, Math.min(top, offsetTop + viewportHeight - popup.height - margin))}px`;
+  tooltip.style.setProperty("--tooltip-arrow-x", `${Math.max(10, Math.min(popup.width - 10, anchor.left + anchor.width / 2 - left))}px`);
+}
+
+function closeHelpTooltip(button) {
+  const tooltipId = button.getAttribute("aria-describedby");
+  const tooltip = tooltipId ? document.getElementById(tooltipId) : null;
+  if (tooltip) tooltip.style.display = "none";
+}
+
+document.addEventListener("pointerover", (event) => {
+  const button = event.target.closest?.(".help-icon");
+  if (button) positionHelpTooltip(button);
+});
+document.addEventListener("pointerout", (event) => {
+  const button = event.target.closest?.(".help-icon");
+  if (!button || button.contains(event.relatedTarget) || button.matches(":focus-visible")) return;
+  if (event.relatedTarget === button.helpTooltip || button.helpTooltip?.contains(event.relatedTarget)) return;
+  closeHelpTooltip(button);
+});
+document.addEventListener("focusin", (event) => {
+  const button = event.target.closest?.(".help-icon");
+  if (button) positionHelpTooltip(button);
+});
+document.addEventListener("focusout", (event) => {
+  const button = event.target.closest?.(".help-icon");
+  if (button) closeHelpTooltip(button);
+});
+function repositionOpenHelpTooltips() {
+  for (const button of document.querySelectorAll(".help-icon:hover, .help-icon:focus-visible")) positionHelpTooltip(button);
+}
+window.addEventListener("resize", repositionOpenHelpTooltips);
+window.addEventListener("scroll", repositionOpenHelpTooltips, true);
+window.visualViewport?.addEventListener("resize", repositionOpenHelpTooltips);
+window.visualViewport?.addEventListener("scroll", repositionOpenHelpTooltips);
+
 const MAX_TARGET_SITE_FILES = 200;
 const MAX_TARGET_SITE_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_TARGET_SITE_FILE_BYTES = 5 * 1024 * 1024;
 /** setActiveView keeps one focused app screen visible without scrolling the document. */
 function setActiveView(view) {
   const activeView = view === "live" ? "report" : view;
-  intro.hidden = activeView !== "setup";
   setupSection.hidden = activeView !== "setup";
   liveAssessmentSection.hidden = activeView !== "report";
   for (const [key, button] of Object.entries(navButtons)) {
@@ -400,6 +463,22 @@ function setField(report, field, value) {
   if (element) element.textContent = value;
 }
 
+/** setReportProgressBar renders a percentage only when its recorded denominator is meaningful. */
+function setReportProgressBar(report, field, observed, expected) {
+  const row = report.querySelector(`[data-field="${field}-progress-row"]`);
+  if (!row) return;
+  const available = observed !== null && expected !== null && expected > 0;
+  row.hidden = !available;
+  if (!available) return;
+
+  const percentage = Math.round(Math.min(100, (observed / expected) * 100));
+  setField(report, `${field}-percent`, `${percentage}%`);
+  setField(report, `${field}-count`, `${observed} / ${expected}`);
+  const progress = row.querySelector("progress");
+  progress.value = percentage;
+  progress.setAttribute("aria-valuetext", `${percentage}% (${observed} of ${expected})`);
+}
+
 /** recordedNumber distinguishes a recorded zero from a missing statistic. */
 function recordedNumber(value) {
   return Number.isFinite(value) && value >= 0 ? value : null;
@@ -547,6 +626,8 @@ function renderRunReport(record, root) {
   const status = stats.terminalStatus ?? record?.status;
   const coverage = stats.coverage ?? stopping.coverage ?? evidence.progress?.coverage;
   const assessmentScope = assessment.assessmentScope ?? record?.assessmentScope;
+  const controlsObserved = recordedNumber(coverage?.controlsObserved);
+  const controlsExpected = recordedNumber(coverage?.controlsExpected);
   const coverageObserved = recordedNumber(coverage?.controlsObserved ?? coverage?.areasObserved);
   const coverageExpected = recordedNumber(coverage?.controlsExpected ?? coverage?.areasExpected);
   const coverageScore = recordedNumber(coverage?.scorePercentage)
@@ -566,64 +647,35 @@ function renderRunReport(record, root) {
     ? `Run ${record.id}`
     : "Assessment result");
   setField(report, "status-label", statusLabel);
-  setField(report, "outcome-heading", statusLabel);
   report.querySelector('[data-field="status"]').dataset.outcome = (
     typeof status === "string" ? status.toLowerCase() : "unknown"
   );
 
-  const durationMs = recordedNumber(stats.durationMs ?? record?.durationMs);
-  setField(report, "duration", durationMs === null ? "Not recorded" : `${(durationMs / 1000).toFixed(1)} seconds`);
   const interactions = recordedNumber(stats.interactionCount ?? record?.interactionCount);
-  setField(report, "interactions", interactions === null ? "Not recorded" : `${interactions} keyboard interactions`);
-  const rawActionCount = Array.isArray(record?.actions) ? record.actions.length : null;
-  const actionCount = recordedNumber(stats.actionCount ?? rawActionCount);
-  setField(report, "action-count", actionCount === null ? "Not recorded" : `${actionCount} actions`);
+  setField(report, "interactions", interactions === null ? "—" : `${interactions}`);
 
-  const coverageUnit = Number.isFinite(coverage?.controlsExpected) || Number.isFinite(coverage?.controlsObserved)
-    ? "controls observed"
-    : "areas observed";
-  const coverageText = coverageObserved !== null && coverageExpected !== null
-    ? `${coverageObserved} of ${coverageExpected} ${coverageUnit}`
-    : typeof coverage?.status === "string" && coverage.status
-      ? `Status: ${coverage.status}`
-      : "Not available";
-  setField(report, "coverage", coverageText);
-  const showCoverageScore = assessmentScope === "whole-site" && coverageScore !== null;
-  setField(report, "coverage-score", showCoverageScore ? `${coverageScore} / 100` : "Not available");
-  report.querySelector('[data-field="coverage-score-note"]').hidden = !showCoverageScore;
+  const displayCoverageScore = coverageScore === null
+    ? null
+    : Math.round(Math.min(100, coverageScore));
+  const showCoverageScore = displayCoverageScore !== null;
+  const coveragePie = report.querySelector('[data-field="coverage-pie"]');
+  coveragePie.style.setProperty("--coverage", `${displayCoverageScore ?? 0}%`);
+  coveragePie.setAttribute("aria-label", showCoverageScore
+    ? `Overall coverage score: ${displayCoverageScore} percent. The score measures detected controls observed.`
+    : "Overall coverage score unavailable for this run.");
+  setField(report, "coverage-pie-value", showCoverageScore ? `${displayCoverageScore}%` : "—");
+  setReportProgressBar(report, "controls", controlsObserved, controlsExpected);
+  setReportProgressBar(
+    report,
+    "pages",
+    recordedNumber(coverage?.areasObserved),
+    recordedNumber(coverage?.areasExpected),
+  );
 
   const goalProgress = stats.goalProgress ?? stopping.goalProgress ?? evidence.progress?.goal;
   const completedFields = recordedNumber(goalProgress?.completedFields);
   const expectedFields = recordedNumber(goalProgress?.expectedFields);
-  let goalProgressText = "Not available";
-  if (completedFields !== null && expectedFields !== null) {
-    goalProgressText = `${completedFields} of ${expectedFields} goal fields completed`;
-  } else if (goalProgress?.status === "not-possible") {
-    goalProgressText = `Not possible: ${goalProgress.reason || "the agent could not complete this goal."}`;
-  } else if (goalProgress?.status === "completed") {
-    goalProgressText = "The agent reports that the goal was completed.";
-  } else if (goalProgress?.status === "not-accessibility-related") {
-    goalProgressText = `Rejected: ${goalProgress.reason || "the goal is unrelated to website accessibility."}`;
-  } else if (typeof goalProgress?.status === "string" && goalProgress.status) {
-    goalProgressText = `Status: ${goalProgress.status}`;
-  }
-  setField(report, "goal-progress", goalProgressText);
-
-  const successCondition = stopping.successCondition || assessment.successCondition || record?.successCondition;
-  const successMatched = stopping.successMatched ?? record?.successMatched;
-  const hasGoal = Boolean(assessment.goal || record?.goal);
-  const successText = typeof successCondition === "string" && successCondition
-    ? `${successCondition} · ${successMatched === true ? "Reached" : successMatched === false ? "Not reached" : "Result not recorded"}`
-    : goalProgress?.status === "completed"
-      ? "Agent reports goal completed"
-      : goalProgress?.status === "not-possible"
-        ? "Goal not possible"
-        : goalProgress?.status === "not-accessibility-related"
-          ? "Goal unrelated to accessibility"
-        : hasGoal ? "Agent assessing goal" : "Not applicable for a whole-page check";
-  setField(report, "success", successText);
-  setField(report, "target", assessment.targetUrl || record?.targetUrl || "Not recorded");
-  setField(report, "goal", assessment.goal || record?.goal || "No goal configured");
+  setReportProgressBar(report, "goal", completedFields, expectedFields);
 
   const screenshotRef = evidence.stopping?.screenshotRef ?? record?.stoppingScreenshotRef;
   if (typeof screenshotRef === "string" && screenshotRef) {
@@ -675,9 +727,6 @@ function renderRunReport(record, root) {
   const availableReview = reporting.status === "available"
     && typeof reporting.explanation === "string"
     && reporting.explanation.trim() !== "";
-  setField(report, "review-status", availableReview
-    ? "Review available"
-    : reporting.status === "pending" ? "Review pending" : "Review unavailable");
   const explanation = report.querySelector('[data-field="review-explanation"]');
   explanation.hidden = !availableReview;
   explanation.textContent = availableReview ? reporting.explanation : "";
@@ -730,19 +779,11 @@ function renderRunReport(record, root) {
   }
   conditionsList.replaceChildren(conditionItems);
   conditionsList.hidden = conditionsList.childElementCount === 0;
-  report.querySelector('[data-field="wcag-limitation"]').hidden = conditionsList.hidden;
-  const confidence = report.querySelector('[data-field="confidence"]');
-  confidence.hidden = !availableReview || !["low", "medium", "high"].includes(reporting.confidence);
-  confidence.textContent = confidence.hidden ? "" : `Confidence: ${reporting.confidence}`;
 
   const fixBlock = report.querySelector('[data-field="fix-block"]');
-  fixBlock.hidden = !availableReview;
-  if (availableReview) {
-    const proposedFix = typeof reporting.proposedFix === "string" && reporting.proposedFix.trim()
-      ? reporting.proposedFix
-      : "No evidence-supported fix available";
-    setField(report, "fix", proposedFix);
-  }
+  const proposedFix = typeof reporting.proposedFix === "string" ? reporting.proposedFix.trim() : "";
+  fixBlock.hidden = !availableReview || !proposedFix;
+  if (!fixBlock.hidden) setField(report, "fix", proposedFix);
 
   const referencesList = report.querySelector('[data-field="review-references"]');
   const references = availableReview && Array.isArray(reporting.evidenceReferences)

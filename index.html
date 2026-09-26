@@ -14,13 +14,14 @@
   </head>
   <body>
     <div class="brand-intro" aria-hidden="true">
-      <h1>AccessTrace.</h1>
+      <h1>AccessTrace</h1>
     </div>
+    <canvas id="network-background" class="network-background" aria-hidden="true"></canvas>
     <a class="skip-link" href="#main-content">Skip to content</a>
 
     <header class="site-header">
       <div class="header-inner">
-        <a class="brand" href="#top" aria-label="AccessTrace home">
+        <a class="brand" href="./" aria-label="AccessTrace home">
           <img class="brand-logo" src="./assets/access-trace-logo-dark.svg" alt="AccessTrace" />
         </a>
         <nav aria-label="Page navigation" class="header-nav">
@@ -32,12 +33,6 @@
     </header>
 
     <main id="main-content" class="page-shell">
-      <div id="top" class="intro">
-        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> KEYBOARD ASSESSMENT</p>
-        <h1>See what your keyboard can reach.</h1>
-        <p class="intro-copy">Choose a page. Review its recorded evidence when the run ends.</p>
-      </div>
-
       <section id="setup" class="setup-card" aria-labelledby="setup-heading">
         <div class="section-heading">
           <div>
@@ -51,7 +46,7 @@
         <form id="assessment-form" novalidate>
           <div class="source-fields">
           <div class="field-group">
-            <div class="field-label-row"><label for="target-url">Page URL <span class="required-label">Required</span></label><button class="help-icon" type="button" aria-label="About page URLs" aria-describedby="tip-local-page"><span aria-hidden="true">?</span><span id="tip-local-page" class="tooltip" role="tooltip">Enter any HTTP or HTTPS page URL, or choose local page files below. Local files are served from an isolated AccessTrace path.</span></button></div>
+            <div class="field-label-row"><label for="target-url">Page URL <span class="required-label">Required</span></label><label class="page-only-option" for="page-only"><input id="page-only" name="pageOnly" type="checkbox" /> Only check this page</label></div>
             <input
               id="target-url"
               name="targetUrl"
@@ -63,7 +58,6 @@
             />
             <p id="target-hint" class="field-hint">Enter an HTTP or HTTPS URL, or choose page files. <code id="recognized-target"></code></p>
             <div class="page-scan-options">
-              <label class="page-only-option"><input id="page-only" name="pageOnly" type="checkbox" /> Only check this page</label>
               <label class="page-limit-option" for="site-page-limit">Max site pages
                 <input id="site-page-limit" name="sitePageLimit" type="number" min="0" max="500" step="1" value="25" inputmode="numeric" aria-describedby="site-page-limit-hint site-page-limit-error" />
               </label>
@@ -74,7 +68,7 @@
           </div>
 
           <div class="field-group local-site-field">
-            <div class="field-label-row"><label for="target-site-files">Local page files <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About local page files" aria-describedby="target-site-hint"><span aria-hidden="true">?</span><span id="target-site-hint" class="tooltip" role="tooltip">Choose an HTML file and any needed CSS, JavaScript, or other asset files. AccessTrace uploads the selected page contents and places its local URL in the Page URL field.</span></button></div>
+            <div class="field-label-row"><label for="target-site-files">Local page files <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About local page files" aria-describedby="target-site-hint"><span aria-hidden="true">i</span><span id="target-site-hint" class="tooltip" role="tooltip">Enter any HTTP or HTTPS page URL above, or choose an HTML file and any needed CSS, JavaScript, or other assets. AccessTrace uploads the selected page contents and places their isolated local URL in the Page URL field.</span></button></div>
             <input id="target-site-files" class="visually-hidden-file-input" type="file" accept=".html,.htm,.css,.js,.mjs,.json,.svg,.png,.jpg,.jpeg,.webp,.gif,.woff,.woff2,.ttf" multiple aria-describedby="target-site-status" hidden />
             <button id="choose-local-files" class="secondary-button" type="button">Choose files</button>
             <p id="target-site-status" class="scope-status" role="status" aria-live="polite"></p>
@@ -84,7 +78,7 @@
 
           <div class="assessment-fields">
           <div class="field-group">
-            <div class="field-label-row"><label for="assessment-goal">Goal <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About assessment goals" aria-describedby="tip-goal"><span aria-hidden="true">?</span><span id="tip-goal" class="tooltip" role="tooltip">Describe the outcome you want. The agent will use the available browser evidence and keyboard controls, or explain why it cannot complete the goal. It cannot use credentials, run code, or perform unsafe side effects.</span></button></div>
+            <div class="field-label-row"><label for="assessment-goal">Goal <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About assessment goals" aria-describedby="tip-goal"><span aria-hidden="true">i</span><span id="tip-goal" class="tooltip" role="tooltip">Describe the outcome you want. The agent will use the available browser evidence and keyboard controls, or explain why it cannot complete the goal. It cannot use credentials, run code, or perform unsafe side effects.</span></button></div>
             <textarea
               id="assessment-goal"
               name="goal"
@@ -106,7 +100,7 @@
               <span id="submit-label">Start assessment</span> <span aria-hidden="true">→</span>
             </button>
             <span class="action-note">Local run · keyboard only</span>
-            <button class="help-icon privacy-help" type="button" aria-label="About privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. Local page files are uploaded to this AccessTrace server and served in an isolated browser page; external requests from uploaded pages are blocked. A local screenshot copy is kept only when values can be covered safely.</span></button>
+            <button class="help-icon privacy-help" type="button" aria-label="About privacy" aria-describedby="tip-privacy"><span aria-hidden="true">i</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. Local page files are uploaded to this AccessTrace server and served in an isolated browser page; external requests from uploaded pages are blocked. A local screenshot copy is kept only when values can be covered safely.</span></button>
           </div>
           <section class="privacy-summary" aria-labelledby="privacy-summary-heading">
             <h3 id="privacy-summary-heading">AccessTrace doesn’t use your data for advertising or tracking.</h3>
@@ -121,10 +115,15 @@
 
       <section id="live-assessment" class="report-section live-run-result" aria-label="Assessment report" hidden>
         <div id="report-empty-state" class="report-empty-state" hidden>
-          <p class="step-label">RUN REPORT</p>
-          <h2 id="report-empty-heading">No report yet</h2>
-          <p>Complete an assessment to create a report from its recorded run data.</p>
-          <button id="report-empty-new-assessment" class="primary-button" type="button">New assessment <span aria-hidden="true">→</span></button>
+          <section class="report-placeholder-card" aria-labelledby="report-empty-heading">
+            <p class="card-kicker">REPORT</p>
+            <h2 id="report-empty-heading">No report yet</h2>
+            <button id="report-empty-new-assessment" class="primary-button" type="button">New assessment <span aria-hidden="true">→</span></button>
+          </section>
+          <section class="report-placeholder-card" aria-label="Assessment evidence">
+            <p class="card-kicker">EVIDENCE</p>
+            <h2>Ready when you are</h2>
+          </section>
         </div>
         <div id="live-terminal" class="terminal-screen">
           <div class="report-heading-row">
@@ -137,7 +136,7 @@
           <div class="terminal-progress-block">
             <div class="terminal-progress-label"><span id="live-progress-label">Waiting to start</span><strong><span id="live-progress-percent">0</span>%</strong></div>
             <progress id="live-run-progress" value="0" max="100" aria-label="Run stage progress" aria-valuetext="Waiting to start"></progress>
-            <p class="terminal-progress-note">Run stage, not page coverage <button class="help-icon" type="button" aria-label="About run progress" aria-describedby="tip-progress"><span aria-hidden="true">?</span><span id="tip-progress" class="tooltip" role="tooltip">Progress follows run stages. The final report shows how much of the page was checked.</span></button></p>
+            <p class="terminal-progress-note">Run stage, not page coverage <button class="help-icon" type="button" aria-label="About run progress" aria-describedby="tip-progress"><span aria-hidden="true">i</span><span id="tip-progress" class="tooltip" role="tooltip">Progress follows run stages. The final report shows how much of the page was checked.</span></button></p>
           </div>
           <div class="terminal-window" aria-label="Assessment activity">
             <div class="terminal-window-bar"><span></span><span></span><span></span><strong>access-trace / local-run</strong></div>
@@ -161,62 +160,188 @@
 
       <template id="run-report-template">
         <article class="run-report">
-          <div class="report-heading-row">
-            <div>
-              <p class="step-label">RUN REPORT</p>
-              <h2 data-field="heading" tabindex="-1">Assessment result</h2>
-              <p class="report-subtitle">Recorded evidence for this keyboard run.</p>
-            </div>
-            <span class="terminal-status" data-field="status"><span class="status-dot" aria-hidden="true"></span><span data-field="status-label"></span></span>
-          </div>
+          <h2 class="visually-hidden" data-field="heading" tabindex="-1">Assessment result</h2>
           <div class="live-result-grid">
             <section class="live-outcome-card" aria-label="Recorded run statistics">
-              <p class="card-kicker">RUN FACTS</p>
-              <h3 data-field="outcome-heading">—</h3>
-              <dl class="live-result-facts">
-                <div><dt>Duration</dt><dd data-field="duration">Not recorded</dd></div>
-                <div><dt>Keyboard interactions</dt><dd data-field="interactions">Not recorded</dd></div>
-                <div><dt>Ordered actions</dt><dd data-field="action-count">Not recorded</dd></div>
-                <div><dt>Coverage</dt><dd data-field="coverage">Not available</dd></div>
-                <div><dt>Coverage score</dt><dd data-field="coverage-score">Not available</dd></div>
-                <div><dt>Goal progress</dt><dd data-field="goal-progress">Not available</dd></div>
-                <div><dt>Success condition</dt><dd data-field="success">Not recorded</dd></div>
-                <div><dt>Target</dt><dd data-field="target">Not recorded</dd></div>
-                <div><dt>Goal</dt><dd data-field="goal">None recorded</dd></div>
-              </dl>
-              <p class="run-report-score-note" data-field="coverage-score-note" hidden>
-                Share of detected controls observed; this is not an accessibility conformance rating.
-              </p>
+              <div class="report-label-with-help">
+                <p class="card-kicker">OVERALL COVERAGE SCORE</p>
+                <button class="help-icon" type="button" aria-label="About the coverage score" aria-describedby="tip-report-score"><span aria-hidden="true">?</span><span id="tip-report-score" class="tooltip" role="tooltip">Share of detected keyboard controls reached during the assessment. It is a coverage measure, not an accessibility conformance score.</span></button>
+              </div>
+              <div class="coverage-score-layout">
+                <div class="coverage-score-pie" data-field="coverage-pie" role="img" aria-label="Coverage score unavailable">
+                  <span data-field="coverage-pie-value" aria-hidden="true">—</span>
+                </div>
+              </div>
+              <div class="report-progress-list" aria-label="Assessment percentages">
+                <div class="report-progress-row" data-field="controls-progress-row" hidden>
+                  <div class="report-progress-heading"><span>Controls reached</span><button class="help-icon" type="button" aria-label="About controls reached" aria-describedby="tip-controls-reached"><span aria-hidden="true">?</span><span id="tip-controls-reached" class="tooltip" role="tooltip">Controls observed as reached with keyboard input, compared with the controls detected for this assessment.</span></button><strong data-field="controls-percent">—</strong></div>
+                  <progress data-field="controls-progress" max="100" value="0" aria-label="Controls reached"></progress>
+                  <small data-field="controls-count"></small>
+                </div>
+                <div class="report-progress-row" data-field="pages-progress-row" hidden>
+                  <div class="report-progress-heading"><span>Pages covered</span><button class="help-icon" type="button" aria-label="About pages covered" aria-describedby="tip-pages-covered"><span aria-hidden="true">?</span><span id="tip-pages-covered" class="tooltip" role="tooltip">Pages observed during the assessment, compared with the pages discovered for the selected site.</span></button><strong data-field="pages-percent">—</strong></div>
+                  <progress data-field="pages-progress" max="100" value="0" aria-label="Pages covered"></progress>
+                  <small data-field="pages-count"></small>
+                </div>
+                <div class="report-progress-row" data-field="goal-progress-row" hidden>
+                  <div class="report-progress-heading"><span>Goal progress</span><button class="help-icon" type="button" aria-label="About goal progress" aria-describedby="tip-goal-progress"><span aria-hidden="true">?</span><span id="tip-goal-progress" class="tooltip" role="tooltip">Completed goal fields compared with the fields the assessment expected to complete.</span></button><strong data-field="goal-percent">—</strong></div>
+                  <progress data-field="goal-progress-bar" max="100" value="0" aria-label="Goal progress"></progress>
+                  <small data-field="goal-count"></small>
+                </div>
+              </div>
+              <div class="interaction-metric">
+                <span>Keyboard interactions</span>
+                <button class="help-icon" type="button" aria-label="About keyboard interactions" aria-describedby="tip-interactions"><span aria-hidden="true">?</span><span id="tip-interactions" class="tooltip" role="tooltip">Number of keyboard actions recorded during the assessment.</span></button>
+                <strong data-field="interactions">—</strong>
+              </div>
             </section>
             <section class="live-evidence-card" aria-label="Evidence review">
-              <p class="card-kicker">EVIDENCE REVIEW</p>
-              <h3 data-field="review-status">Review pending</h3>
-              <p class="run-review-explanation" data-field="review-explanation"></p>
+              <span class="terminal-status" data-field="status"><span class="status-dot" aria-hidden="true"></span><span data-field="status-label"></span></span>
+              <div class="report-label-with-help">
+                <p class="card-kicker">EVIDENCE REVIEW</p>
+                <button class="help-icon" type="button" aria-label="About the evidence review" aria-describedby="tip-evidence-review"><span aria-hidden="true">?</span><span id="tip-evidence-review" class="tooltip" role="tooltip">This summary describes recorded evidence. It can be limited when the browser run could not start and does not establish accessibility conformance.</span></button>
+              </div>
               <ol class="report-condition-list" data-field="conditions" aria-label="Accessibility conditions and WCAG correlations" hidden></ol>
-              <p class="report-wcag-limitation" data-field="wcag-limitation" hidden>References describe related criteria or source statements for observed conditions; they do not establish conformance or prove a source requirement is unmet.</p>
-              <p class="live-confidence" data-field="confidence" hidden></p>
               <ul class="evidence-reference-list" data-field="review-references" aria-label="Evidence cited by the review"></ul>
               <div class="run-report-fix live-result-fix-block" data-field="fix-block" hidden><strong>Proposed fix</strong><p data-field="fix"></p></div>
               <p class="live-screenshot-reference" data-field="screenshot" hidden></p>
               <div class="live-warnings-block" data-field="warnings-block" hidden><strong>Warnings</strong><ul data-field="warnings"></ul></div>
+              <details class="live-evidence-details">
+                <summary>More evidence</summary>
+                <div class="live-evidence-lists">
+                  <section><h3>Review summary</h3><p class="run-review-explanation" data-field="review-explanation"></p></section>
+                  <section><h3>Ordered actions</h3><ol data-field="actions"></ol></section>
+                  <section><h3>Focus observations</h3><ol data-field="observations"></ol></section>
+                  <section><h3>Recovery checks</h3><ol data-field="recoveries"></ol></section>
+                </div>
+              </details>
             </section>
           </div>
-          <details class="live-evidence-details">
-            <summary>View ordered actions, focus observations, and recovery checks</summary>
-            <div class="live-evidence-lists">
-              <section><h3>Ordered actions</h3><ol data-field="actions"></ol></section>
-              <section><h3>Focus observations</h3><ol data-field="observations"></ol></section>
-              <section><h3>Recovery checks</h3><ol data-field="recoveries"></ol></section>
-            </div>
-          </details>
         </article>
       </template>
 
 
       <footer class="site-footer">
         <span>AccessTrace <span aria-hidden="true">·</span> local-first keyboard evidence</span>
-        <a href="#top">Back to top ↑</a>
+        <a href="#setup">Back to top ↑</a>
       </footer>
     </main>
+    <script type="module">
+      const canvas = document.querySelector("#network-background");
+      const context = canvas?.getContext("2d");
+
+      if (canvas && context) {
+        const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+        let width = 0;
+        let height = 0;
+        let particles = [];
+        let pointer = { x: -1000, y: -1000 };
+        let frame = 0;
+
+        function draw() {
+          context.clearRect(0, 0, width, height);
+          const cellSize = 120;
+          const cells = new Map();
+
+          particles.forEach((particle) => {
+            if (!reducedMotion.matches) {
+              const dx = pointer.x - particle.x;
+              const dy = pointer.y - particle.y;
+              const distance = Math.hypot(dx, dy);
+              if (distance < 100) {
+                const force = (100 - distance) / 100;
+                particle.x -= dx * force * 0.05;
+                particle.y -= dy * force * 0.05;
+              }
+              particle.x += particle.speedX;
+              particle.y += particle.speedY;
+              if (particle.x < 0 || particle.x > width) particle.speedX *= -1;
+              if (particle.y < 0 || particle.y > height) particle.speedY *= -1;
+            }
+
+            const key = `${Math.floor(particle.x / cellSize)},${Math.floor(particle.y / cellSize)}`;
+            if (!cells.has(key)) cells.set(key, []);
+            cells.get(key).push(particle);
+          });
+
+          for (const particle of particles) {
+            const cellX = Math.floor(particle.x / cellSize);
+            const cellY = Math.floor(particle.y / cellSize);
+            for (let x = cellX - 1; x <= cellX + 1; x += 1) {
+              for (let y = cellY - 1; y <= cellY + 1; y += 1) {
+                for (const other of cells.get(`${x},${y}`) || []) {
+                  if (other.index <= particle.index) continue;
+                  const distance = Math.hypot(particle.x - other.x, particle.y - other.y);
+                  if (distance >= cellSize) continue;
+                  context.strokeStyle = `rgba(255, 255, 255, ${(1 - distance / cellSize) * 0.14})`;
+                  context.lineWidth = 0.5;
+                  context.beginPath();
+                  context.moveTo(particle.x, particle.y);
+                  context.lineTo(other.x, other.y);
+                  context.stroke();
+                }
+              }
+            }
+          }
+
+          for (const particle of particles) {
+            context.fillStyle = particle.accent ? "rgba(34, 211, 238, 0.92)" : "rgba(255, 255, 255, 0.92)";
+            context.beginPath();
+            context.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+            context.fill();
+          }
+        }
+
+        function resize() {
+          width = window.innerWidth;
+          height = window.innerHeight;
+          const ratio = Math.min(window.devicePixelRatio || 1, 2);
+          canvas.width = Math.round(width * ratio);
+          canvas.height = Math.round(height * ratio);
+          context.setTransform(ratio, 0, 0, ratio, 0, 0);
+          const count = width < 768 ? 150 : 400;
+          particles = Array.from({ length: count }, (_, index) => ({
+            index,
+            x: Math.random() * width,
+            y: Math.random() * height,
+            size: Math.random() * 1.1 + 0.5,
+            speedX: (Math.random() - 0.5) * 0.5,
+            speedY: (Math.random() - 0.5) * 0.5,
+            accent: Math.random() > 0.965,
+          }));
+          draw();
+          if (!reducedMotion.matches && !frame) frame = requestAnimationFrame(animate);
+        }
+
+        function animate() {
+          frame = 0;
+          if (document.hidden || reducedMotion.matches) return;
+          draw();
+          frame = requestAnimationFrame(animate);
+        }
+
+        window.addEventListener("resize", resize, { passive: true });
+        window.addEventListener("pointermove", (event) => {
+          pointer = { x: event.clientX, y: event.clientY };
+        }, { passive: true });
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden && frame) {
+            cancelAnimationFrame(frame);
+            frame = 0;
+          } else if (!reducedMotion.matches && !frame) {
+            frame = requestAnimationFrame(animate);
+          }
+        });
+        reducedMotion.addEventListener("change", () => {
+          if (reducedMotion.matches && frame) {
+            cancelAnimationFrame(frame);
+            frame = 0;
+          } else if (!document.hidden && !frame) {
+            frame = requestAnimationFrame(animate);
+          }
+        });
+        resize();
+      }
+    </script>
   </body>
 </html>
