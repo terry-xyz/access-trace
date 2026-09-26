@@ -328,6 +328,7 @@ def review_evidence(
         _safe_stopping_screenshot(evidence_directory, screenshot_ref)
         if isinstance(screenshot_reference, dict)
         and screenshot_reference.get("ref") == screenshot_ref
+        and screenshot_reference.get("redacted") is True
         else None
     )
 
