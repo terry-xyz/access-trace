@@ -29,12 +29,13 @@ const liveAssessmentButton = document.querySelector("#start-live-assessment");
 const cancelLiveAssessmentButton = document.querySelector("#cancel-live-assessment");
 const liveAssessmentSection = document.querySelector("#live-assessment");
 const liveAssessmentStatus = document.querySelector("#live-assessment-status");
-const liveAssessmentSummary = document.querySelector("#live-assessment-summary");
 const liveRecordDownload = document.querySelector("#download-live-record");
 const liveRecordDetails = document.querySelector("#live-record-details");
 const liveRecordJson = document.querySelector("#live-record-json");
 const liveTerminal = document.querySelector("#live-terminal");
 const liveResult = document.querySelector("#live-result");
+const liveRunReport = document.querySelector("#live-run-report");
+const runReportTemplate = document.querySelector("#run-report-template");
 const liveRunProgress = document.querySelector("#live-run-progress");
 const liveProgressLabel = document.querySelector("#live-progress-label");
 const liveProgressPercent = document.querySelector("#live-progress-percent");
@@ -45,27 +46,22 @@ const goalError = document.querySelector("#goal-error");
 const scopeStatus = document.querySelector("#scope-status");
 const scopeChip = document.querySelector("#scope-chip");
 const submitLabel = document.querySelector("#submit-label");
-const report = document.querySelector("#sample-report");
-const reportHeading = document.querySelector("#report-heading");
 const comparisonButton = document.querySelector("#view-comparison");
 const comparisonSection = document.querySelector("#sample-comparison");
 const comparisonHeading = document.querySelector("#comparison-heading");
 const setupSection = document.querySelector("#setup");
-const sampleReportButton = document.querySelector("#view-sample-report");
 const newAssessmentButton = document.querySelector("#new-assessment");
 const navButtons = {
   setup: document.querySelector("#nav-setup"),
-  sample: document.querySelector("#nav-sample-report"),
   comparison: document.querySelector("#nav-comparison"),
 };
-let recordUrl;
 let liveRecordUrl;
+let reportRenderSequence = 0;
 let activeLiveRunId = null;
 
 /** setActiveView keeps one focused app screen visible without scrolling the document. */
 function setActiveView(view) {
   setupSection.hidden = view !== "setup";
-  report.hidden = view !== "sample";
   comparisonSection.hidden = view !== "comparison";
   liveAssessmentSection.hidden = view !== "live";
   for (const [key, button] of Object.entries(navButtons)) {
@@ -139,145 +135,6 @@ function updateScopePreview() {
   if (!activeLiveRunId) setActiveView("setup");
 }
 
-/** renderOrderedActions shows the bounded keyboard action sequence from the representative sample. */
-function renderOrderedActions(sample) {
-  const list = document.querySelector("#action-list");
-  const fragment = document.createDocumentFragment();
-
-  for (const action of sample.orderedActions) {
-    const item = document.createElement("li");
-    item.id = action.id;
-    item.className = `action-item action-${action.outcome}`;
-
-    const topLine = document.createElement("div");
-    topLine.className = "action-topline";
-    const key = document.createElement("span");
-    key.className = "key-chip";
-    key.textContent = action.key;
-    const target = document.createElement("strong");
-    target.textContent = action.target;
-    const outcome = document.createElement("span");
-    outcome.className = "action-outcome";
-    outcome.textContent = action.outcome === "passed" ? "Website check passed" : "Website check failed";
-    topLine.append(key, target, outcome);
-
-    const result = document.createElement("p");
-    result.textContent = action.result;
-    item.append(topLine, result);
-    fragment.append(item);
-  }
-
-  list.replaceChildren(fragment);
-}
-
-/** renderSampleFacts fills report copy, links, and illustrative evidence from the representative sample record. */
-function renderSampleFacts(sample) {
-  const facts = {
-    terminalStatus: sample.terminalStatus,
-    scopeLabel: formatScopeLabel(sample.scope),
-    outcomeTitle: sample.outcomeTitle,
-    coverage: sample.coverage,
-    explanationTitle: sample.explanationTitle,
-    explanation: sample.explanation,
-    confidence: sample.confidence,
-    confidenceContext: sample.confidenceContext,
-    proposedFixTitle: sample.proposedFixTitle,
-    proposedFix: sample.proposedFix,
-    duration: sample.duration,
-    interactionCount: String(sample.interactionCount),
-    goalSummary: sample.goal ?? "None supplied",
-    agentFailureSummary: sample.agentFailures.length
-      ? sample.agentFailures.join(", ")
-      : "None recorded in sample",
-    screenshotTitle: `${sample.screenshot.id} · ${sample.screenshot.title}`,
-    screenshotDescription: sample.screenshot.description,
-  };
-
-  for (const [field, value] of Object.entries(facts)) {
-    for (const element of report.querySelectorAll(`[data-sample-fact="${field}"]`)) {
-      element.textContent = value;
-    }
-  }
-
-  const referenceLink = report.querySelector('[data-sample-link="wcagReference"]');
-  referenceLink.href = sample.wcagReference.url;
-  document.querySelector("#wcag-reference-label").textContent = sample.wcagReference.label;
-
-  const warningList = report.querySelector('[data-sample-list="warnings"]');
-  const warningItems = document.createDocumentFragment();
-  for (const warning of sample.warnings) {
-    const item = document.createElement("li");
-    item.textContent = warning;
-    warningItems.append(item);
-  }
-  warningList.replaceChildren(warningItems);
-
-  const screenshot = report.querySelector("[data-sample-screenshot]");
-  screenshot.id = sample.screenshot.id;
-  screenshot.setAttribute("aria-label", sample.screenshot.description);
-  document.querySelector("#capture-site-name").textContent = sample.screenshot.siteName;
-
-  const navigation = document.querySelector("#capture-nav");
-  const navigationItems = document.createDocumentFragment();
-  for (const entry of sample.screenshot.navigation) {
-    const item = document.createElement("span");
-    item.textContent = entry.label;
-    if (entry.focused) item.className = "capture-focused";
-    navigationItems.append(item);
-  }
-  navigation.replaceChildren(navigationItems);
-  document.querySelector("#evidence-count").textContent = `${sample.orderedActions.length} ordered sample actions`;
-}
-
-/** renderFocusObservations gives each sample row the ID used by its evidence links. */
-function renderFocusObservations(sample) {
-  const body = document.querySelector("#focus-table-body");
-  const fragment = document.createDocumentFragment();
-
-  for (const observation of sample.focusObservations) {
-    const row = document.createElement("tr");
-    row.id = observation.id;
-    const referenceCell = document.createElement("td");
-    const reference = document.createElement("a");
-    reference.href = `#${observation.id}`;
-    reference.textContent = observation.id;
-    referenceCell.append(reference);
-
-    const targetCell = document.createElement("td");
-    targetCell.append(document.createTextNode(`${observation.target} · ${observation.role}`));
-    const indicatorCell = document.createElement("td");
-    indicatorCell.textContent = observation.indicator;
-    row.append(referenceCell, targetCell, indicatorCell);
-    fragment.append(row);
-  }
-
-  body.replaceChildren(fragment);
-}
-
-/** renderRecoveryEvidence attaches stable sample IDs so a reference lands on the cited recovery item. */
-function renderRecoveryEvidence(sample) {
-  const list = document.querySelector("#recovery-list");
-  const fragment = document.createDocumentFragment();
-
-  for (const evidence of sample.recoveryEvidence) {
-    const item = document.createElement("li");
-    item.id = evidence.id;
-    item.textContent = evidence.text;
-    fragment.append(item);
-  }
-
-  list.replaceChildren(fragment);
-}
-
-/** createEvidenceLink connects a human-readable evidence label to its in-report record. */
-function createEvidenceLink(reference) {
-  const link = document.createElement("a");
-  link.href = `#${reference.id}`;
-  link.textContent = reference.id;
-  link.setAttribute("aria-label", `${reference.id}: ${reference.label}`);
-  return link;
-}
-
 /** comparisonEvidenceLink labels a reference to its source report's underlying evidence. */
 function comparisonEvidenceLink(version, record, runNumber = 1) {
   const reportName = version === "original" ? "Original" : "Updated";
@@ -292,128 +149,8 @@ function comparisonEvidencePair(original, updated, runNumber = 1) {
   ];
 }
 
-/** renderEvidenceReferences attaches the same sample citations to both the explanation and proposed fix. */
-function renderEvidenceReferences(sample) {
-  const explanationList = document.querySelector("#explanation-evidence");
-  const fixReferences = document.querySelector("#fix-evidence-references");
-  const listFragment = document.createDocumentFragment();
-  const fixFragment = document.createDocumentFragment();
-
-  for (const [index, reference] of sample.evidenceReferences.entries()) {
-    const item = document.createElement("li");
-    item.append(createEvidenceLink(reference), document.createTextNode(` ${reference.label}`));
-    listFragment.append(item);
-
-    if (index > 0) {
-      fixFragment.append(document.createTextNode(index === sample.evidenceReferences.length - 1 ? ", and " : ", "));
-    }
-    fixFragment.append(createEvidenceLink(reference));
-  }
-
-  explanationList.replaceChildren(listFragment);
-  fixReferences.replaceChildren(fixFragment);
-}
-
-/** renderScoreAndMetrics uses one sample record for the score formula and all named metric values. */
-function renderScoreAndMetrics(sample) {
-  const score = sample.score;
-  document.querySelector("#score-percent").textContent = score.percentage ?? "—";
-  const separator = document.createElement("span");
-  separator.textContent = "/";
-  separator.setAttribute("aria-hidden", "true");
-  document.querySelector("#score-count").replaceChildren(
-    document.createTextNode(`${score.passed} passed `),
-    separator,
-    document.createTextNode(` ${score.attempted} attempted`),
-  );
-  document.querySelector("#score-formula").textContent = score.percentage === null
-    ? score.label
-    : `${score.passed} ÷ ${score.attempted} × 100 = ${score.percentage}%`;
-
-  const progress = document.querySelector("#score-progress");
-  progress.value = score.passed;
-  progress.max = score.attempted || 1;
-  progress.textContent = score.percentage === null ? score.label : `${score.percentage}%`;
-  progress.setAttribute("aria-label", score.label);
-
-  const grid = document.querySelector("#metrics-grid");
-  const fragment = document.createDocumentFragment();
-  for (const metric of sample.metrics) {
-    const card = document.createElement("div");
-    card.className = "metric-card";
-    const name = document.createElement("dt");
-    name.textContent = metric.name;
-    const value = document.createElement("dd");
-    const fraction = document.createElement("span");
-    fraction.textContent = ` / ${metric.attempted}`;
-    value.append(document.createTextNode(String(metric.passed)), fraction);
-    const track = document.createElement("div");
-    track.className = "metric-track";
-    track.setAttribute("aria-hidden", "true");
-    const fill = document.createElement("span");
-    fill.style.width = `${metric.attempted === 0 ? 0 : (metric.passed / metric.attempted) * 100}%`;
-    track.append(fill);
-    value.append(track);
-    card.append(name, value);
-    fragment.append(card);
-  }
-  grid.replaceChildren(fragment);
-}
-
-/** prepareSampleRecord packages the sample evidence with the current configuration without implying a live run. */
-function prepareSampleRecord(sample, context) {
-  const record = {
-    ...sample,
-    isRepresentativeSample: true,
-    recordNote: "Representative report data, not a live assessment or evidence about the configured goal.",
-    configuredContext: context,
-  };
-  const file = new Blob([JSON.stringify(record, null, 2)], {
-    type: "application/json",
-  });
-
-  if (recordUrl) URL.revokeObjectURL(recordUrl);
-  recordUrl = URL.createObjectURL(file);
-  const downloadLink = document.querySelector("#download-record");
-  downloadLink.href = recordUrl;
-  downloadLink.download = `${sample.runId.toLowerCase()}.json`;
-}
-
-/** updateReportContext copies validated settings into every report field that presents them. */
-function updateReportContext(context) {
-  for (const [field, value] of Object.entries(context)) {
-    const elements = report.querySelectorAll(`[data-report-context="${field}"]`);
-    for (const element of elements) element.textContent = value;
-  }
-}
-
-/** showSampleReport reveals the labeled sample after validation and never starts a browser run. */
-function showSampleReport(configuration) {
-  const goal = configuration.goal;
-  const sample = configuration.scope === "whole-site"
-    ? WHOLE_SITE_SAMPLE
-    : { ...GOAL_FOCUSED_SAMPLE, goal };
-  const context = {
-    targetUrl: configuration.targetUrl,
-    assessmentScope: sample.scope,
-    goal: sample.goal,
-    simulationMode: configuration.simulationMode,
-  };
-
-  updateReportContext({
-    target: configuration.targetUrl,
-    simulationMode: configuration.simulationMode ? "On" : "Off",
-  });
-
-  renderReportSample(sample);
-  prepareSampleRecord(sample, context);
-  setActiveView("sample");
-  reportHeading.focus({ preventScroll: true });
-}
-
 /** validateCurrentConfiguration applies the same target and goal boundary to reports and comparisons. */
 function validateCurrentConfiguration() {
-  report.hidden = true;
   comparisonSection.hidden = true;
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
@@ -503,115 +240,280 @@ function updateRecognizedTargetLabel() {
     : "Choose a built-in demo or load a local HTML file";
 }
 
-/** appendTextItems renders bounded evidence without interpreting page-provided text as markup. */
-function appendTextItems(list, entries, describe) {
-  const fragment = document.createDocumentFragment();
-  for (const entry of entries) {
-    const item = document.createElement("li");
-    item.textContent = describe(entry);
-    fragment.append(item);
-  }
-  list.replaceChildren(fragment);
+/** setField writes plain text into one report instance without relying on document-wide IDs. */
+function setField(report, field, value) {
+  const element = report.querySelector(`[data-field="${field}"]`);
+  if (element) element.textContent = value;
 }
 
-/** renderLiveAssessmentResult presents only facts recorded in the completed run. */
-function renderLiveAssessmentResult(result, configuration) {
-  const evidence = result.evidenceHandoff ?? {};
-  const stopping = result.stoppingPoint ?? evidence.stopping?.point ?? {};
-  const coverage = stopping.coverage ?? evidence.progress?.coverage ?? null;
-  const reporting = evidence.reporting ?? {};
-  const status = String(result.status ?? "INCONCLUSIVE").toUpperCase();
-  const isWholeSite = configuration.scope === "whole-site";
-  const outcomeLabel = status === "COMPLETED"
-    ? "Completed"
-    : status === "BLOCKED"
-      ? "Blocked"
-      : "Inconclusive";
+/** recordedNumber distinguishes a recorded zero from a missing statistic. */
+function recordedNumber(value) {
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
 
-  document.querySelector("#live-result-status").textContent = outcomeLabel;
-  document.querySelector("#live-result-status").dataset.outcome = status.toLowerCase();
-  document.querySelector("#live-outcome-heading").textContent = outcomeLabel;
-  document.querySelector("#live-result-target").textContent = result.targetUrl ?? configuration.targetUrl;
-  document.querySelector("#live-result-scope").textContent = isWholeSite ? "Whole page" : "Goal focused";
-  document.querySelector("#live-result-actions").textContent = `${Number(result.interactionCount) || 0} keyboard actions`;
-  document.querySelector("#live-result-coverage").textContent = coverage
-    && Number.isFinite(coverage.controlsObserved)
-    && Number.isFinite(coverage.controlsExpected)
-    ? `${coverage.controlsObserved} of ${coverage.controlsExpected} controls`
-    : "Not available";
-  document.querySelector("#live-result-success").textContent = isWholeSite
-    ? "Not used for whole-page checks"
-    : stopping.successMatched === true
-      ? "Reached"
-      : stopping.successMatched === false
-        ? "Not reached"
-        : "Not checked";
-  document.querySelector("#live-result-duration").textContent = Number.isFinite(result.durationMs)
-    ? `${(result.durationMs / 1000).toFixed(1)} seconds`
-    : "Not recorded";
-  document.querySelector("#live-result-simulation").textContent = result.simulationMode ? "On" : "Off";
+/** formatRunStatus keeps unfamiliar terminal tokens visible instead of guessing their meaning. */
+function formatRunStatus(status) {
+  if (typeof status !== "string" || status.trim() === "") return "Not recorded";
+  const words = status.replaceAll("_", " ").toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
-  const summary = status === "COMPLETED"
-    ? isWholeSite
-      ? "The run checked the expected page controls by keyboard."
-      : "The run reached the configured success condition by keyboard."
-    : status === "BLOCKED"
-      ? "A repeatable keyboard stopping point blocked the configured task."
-      : "The run ended without enough evidence for a reliable result.";
-  liveAssessmentSummary.textContent = summary;
-  document.querySelector("#live-result-explanation").textContent = (
-    typeof reporting.explanation === "string" && reporting.explanation.trim()
-  ) ? reporting.explanation : summary;
+/** focusDescription uses only the focus fields captured in the supplied run record. */
+function focusDescription(focus) {
+  if (!focus || typeof focus !== "object") return "";
+  const name = focus.accessibleName || focus.stableId || focus.tag;
+  const role = focus.role || focus.tag;
+  if (name && role && name !== role) return `${name} (${role})`;
+  return name || role || "";
+}
 
-  const focus = stopping.focus;
-  document.querySelector("#live-result-stopping").textContent = focus
-    ? `Stopping point: ${focus.accessibleName || focus.stableId || focus.tag || "unknown control"} (${focus.role || focus.tag || "unknown role"}).`
-    : "No stopping point was recorded.";
-  const screenshotRef = evidence.stopping?.screenshotRef ?? result.stoppingScreenshotRef;
-  const screenshotLine = document.querySelector("#live-result-screenshot");
-  screenshotLine.hidden = typeof screenshotRef !== "string" || screenshotRef.length === 0;
-  screenshotLine.textContent = screenshotLine.hidden ? "" : `Stopping screenshot: ${screenshotRef}`;
+/** evidenceLocator accepts only the citation kinds persisted by the review boundary. */
+function evidenceLocator(reference) {
+  if (!reference || typeof reference !== "object") return null;
+  if (["action", "observation", "recovery"].includes(reference.kind)
+    && Number.isInteger(reference.sequence)
+    && reference.sequence > 0) {
+    const locator = `${reference.kind}:${reference.sequence}`;
+    return reference.id === locator ? locator : null;
+  }
+  if (reference.kind === "stopping-screenshot"
+    && reference.id === "stopping-screenshot") {
+    return "stopping-screenshot";
+  }
+  return null;
+}
 
-  const confidence = reporting.confidence;
-  const confidenceLine = document.querySelector("#live-result-confidence");
-  confidenceLine.hidden = typeof confidence !== "string" || confidence.length === 0;
-  confidenceLine.textContent = confidenceLine.hidden ? "" : `Confidence: ${confidence}`;
+/** anchorIdFor namespaces each evidence locator inside its own mounted report. */
+function anchorIdFor(reportToken, locator) {
+  return `${reportToken}-${locator.replaceAll(":", "-")}`;
+}
 
-  const fix = reporting.proposedFix;
-  const fixBlock = document.querySelector("#live-result-fix-block");
-  fixBlock.hidden = typeof fix !== "string" || fix.trim() === "";
-  document.querySelector("#live-result-fix").textContent = fixBlock.hidden ? "" : fix;
+/** actionDescription states the saved key, type count, field, and action status. */
+function actionDescription(action) {
+  const parts = [];
+  if (action.kind === "type") {
+    if (recordedNumber(action.characterCount) !== null) {
+      parts.push(`${action.characterCount} characters typed`);
+    }
+    if (typeof action.field === "string" && action.field) parts.push(`field: ${action.field}`);
+  } else if (typeof action.key === "string" && action.key) {
+    parts.push(`key: ${action.key}`);
+  } else if (typeof action.kind === "string" && action.kind) {
+    parts.push(`action: ${action.kind}`);
+  }
+  if (typeof action.status === "string" && action.status) parts.push(`status: ${action.status}`);
+  const focusBefore = focusDescription(action.focusBefore);
+  if (focusBefore) parts.push(`focus before: ${focusBefore}`);
+  return parts.join(" · ") || JSON.stringify(action);
+}
 
-  const warnings = Array.isArray(result.warnings)
-    ? result.warnings.map((warning) => warning?.message || String(warning?.kind || "Run warning").replaceAll("-", " "))
-    : [];
-  for (const [label, failure] of [["Agent", result.agentFailure], ["Browser", result.browserFailure]]) {
-    if (failure && typeof failure === "object") {
-      const detail = failure.kind || failure.message || "failure recorded";
-      warnings.push(`${label}: ${String(detail).replaceAll("-", " ")}`);
+/** observationDescription reports captured page and focus fields without adding an assessment. */
+function observationDescription(observation) {
+  const parts = [];
+  if (typeof observation.title === "string" && observation.title) parts.push(observation.title);
+  const focus = focusDescription(observation.focus);
+  if (focus) parts.push(`focus: ${focus}`);
+  if (typeof observation.url === "string" && observation.url) parts.push(observation.url);
+  if (observation.success && typeof observation.success.matched === "boolean") {
+    const condition = observation.success.condition || "Success condition";
+    parts.push(`${condition}: ${observation.success.matched ? "matched" : "not matched"}`);
+  }
+  return parts.join(" · ") || JSON.stringify(observation);
+}
+
+/** recoveryDescription presents the sanitized recovery record's recorded checks and actions. */
+function recoveryDescription(recovery) {
+  const parts = [];
+  if (typeof recovery.kind === "string" && recovery.kind) parts.push(recovery.kind);
+  if (Array.isArray(recovery.attemptedActivations) && recovery.attemptedActivations.length) {
+    parts.push(`attempted activations: ${recovery.attemptedActivations.join(", ")}`);
+  }
+  const checks = [
+    ["activationFocusConsistent", "Activation focus consistent"],
+    ["unchangedProgress", "Progress unchanged"],
+    ["sameSubmitFocus", "Submit focus unchanged"],
+    ["localFocusRecovery", "Local focus recovery"],
+    ["wholePageWrapped", "Whole-page traversal wrapped"],
+    ["successMatched", "Success condition matched"],
+  ];
+  for (const [field, label] of checks) {
+    if (typeof recovery[field] === "boolean") parts.push(`${label}: ${recovery[field] ? "yes" : "no"}`);
+  }
+  if (Array.isArray(recovery.actions)) {
+    for (const action of recovery.actions) {
+      const step = [action.key, action.status].filter((value) => typeof value === "string" && value);
+      if (step.length) parts.push(step.join(" · "));
     }
   }
-  const warningBlock = document.querySelector("#live-result-warnings-block");
-  warningBlock.hidden = warnings.length === 0;
-  appendTextItems(document.querySelector("#live-result-warnings"), warnings, (warning) => warning);
+  return parts.join(" · ") || JSON.stringify(recovery);
+}
 
-  const actions = Array.isArray(result.actions) ? result.actions : (evidence.actions ?? []);
-  appendTextItems(document.querySelector("#live-actions-list"), actions, (action) => {
-    const actionText = action.kind === "type"
-      ? `Typed ${action.characterCount ?? 0} characters in ${action.field || "a field"}`
-      : `${action.key || action.kind || "Keyboard action"}`;
-    return `${action.sequence ? `${action.sequence}. ` : ""}${actionText} · ${action.status || "recorded"}`;
-  });
-  const observations = Array.isArray(result.observations) ? result.observations : (evidence.observations ?? []);
-  appendTextItems(document.querySelector("#live-focus-list"), observations, (observation) => {
-    const focusRecord = observation.focus ?? {};
-    const name = focusRecord.accessibleName || focusRecord.stableId || focusRecord.tag || "Page";
-    return `${name} · ${focusRecord.role || focusRecord.tag || "focus not identified"}`;
-  });
-  const recovery = Array.isArray(result.recoveryEvidence) ? result.recoveryEvidence : (evidence.terminal?.recoveryEvidence ?? []);
-  appendTextItems(document.querySelector("#live-recovery-list"), recovery, (item) => (
-    typeof item === "string" ? item : item.message || item.key || item.kind || "Recovery check recorded"
+/** renderRunReport mounts one record into a reusable template and scopes every citation to it. */
+function renderRunReport(record, root) {
+  root.replaceChildren(runReportTemplate.content.cloneNode(true));
+  const report = root.querySelector(".run-report");
+  const evidence = record?.evidenceHandoff ?? {};
+  const stats = evidence.stats ?? {};
+  const assessment = evidence.assessment ?? {};
+  const stopping = evidence.stopping?.point ?? record?.stoppingPoint ?? {};
+  const reporting = evidence.reporting ?? {};
+  const actions = Array.isArray(evidence.actions)
+    ? evidence.actions
+    : Array.isArray(record?.actions) ? record.actions : [];
+  const observations = Array.isArray(evidence.observations)
+    ? evidence.observations
+    : Array.isArray(record?.observations) ? record.observations : [];
+  const recoveries = Array.isArray(evidence.terminal?.recoveryEvidence)
+    ? evidence.terminal.recoveryEvidence
+    : Array.isArray(record?.recoveryEvidence) ? record.recoveryEvidence : [];
+  const warnings = Array.isArray(evidence.terminal?.warnings)
+    ? evidence.terminal.warnings
+    : Array.isArray(record?.warnings) ? record.warnings : [];
+  const status = stats.terminalStatus ?? record?.status;
+  const statusLabel = formatRunStatus(status);
+  const reportToken = `${root.id || "run-report"}-${++reportRenderSequence}`;
+  const anchors = new Map();
+
+  setField(report, "heading", typeof record?.id === "string" && record.id
+    ? `Run ${record.id}`
+    : "Assessment result");
+  setField(report, "status-label", statusLabel);
+  setField(report, "outcome-heading", statusLabel);
+  report.querySelector('[data-field="status"]').dataset.outcome = (
+    typeof status === "string" ? status.toLowerCase() : "unknown"
+  );
+
+  const durationMs = recordedNumber(stats.durationMs ?? record?.durationMs);
+  setField(report, "duration", durationMs === null ? "Not recorded" : `${(durationMs / 1000).toFixed(1)} seconds`);
+  const interactions = recordedNumber(stats.interactionCount ?? record?.interactionCount);
+  setField(report, "interactions", interactions === null ? "Not recorded" : `${interactions} keyboard interactions`);
+  const rawActionCount = Array.isArray(record?.actions) ? record.actions.length : null;
+  const actionCount = recordedNumber(stats.actionCount ?? rawActionCount);
+  setField(report, "action-count", actionCount === null ? "Not recorded" : `${actionCount} actions`);
+
+  const coverage = stats.coverage ?? stopping.coverage ?? evidence.progress?.coverage;
+  const coverageObserved = recordedNumber(coverage?.controlsObserved ?? coverage?.areasObserved);
+  const coverageExpected = recordedNumber(coverage?.controlsExpected ?? coverage?.areasExpected);
+  const coverageUnit = Number.isFinite(coverage?.controlsExpected) || Number.isFinite(coverage?.controlsObserved)
+    ? "controls observed"
+    : "areas observed";
+  const coverageText = coverageObserved !== null && coverageExpected !== null
+    ? `${coverageObserved} of ${coverageExpected} ${coverageUnit}`
+    : typeof coverage?.status === "string" && coverage.status
+      ? `Status: ${coverage.status}`
+      : "Not available";
+  setField(report, "coverage", coverageText);
+
+  const goalProgress = stats.goalProgress ?? stopping.goalProgress ?? evidence.progress?.goal;
+  const completedFields = recordedNumber(goalProgress?.completedFields);
+  const expectedFields = recordedNumber(goalProgress?.expectedFields);
+  const goalProgressText = completedFields !== null && expectedFields !== null
+    ? `${completedFields} of ${expectedFields} goal fields completed`
+    : typeof goalProgress?.status === "string" && goalProgress.status
+      ? `Status: ${goalProgress.status}`
+      : "Not available";
+  setField(report, "goal-progress", goalProgressText);
+
+  const successCondition = stopping.successCondition || assessment.successCondition || record?.successCondition;
+  const successMatched = stopping.successMatched ?? record?.successMatched;
+  const successText = typeof successCondition === "string" && successCondition
+    ? `${successCondition} · ${successMatched === true ? "Reached" : successMatched === false ? "Not reached" : "Result not recorded"}`
+    : "Not configured";
+  setField(report, "success", successText);
+  setField(report, "target", assessment.targetUrl || record?.targetUrl || "Not recorded");
+  setField(report, "goal", assessment.goal || record?.goal || "No goal configured");
+
+  const screenshotRef = evidence.stopping?.screenshotRef ?? record?.stoppingScreenshotRef;
+  if (typeof screenshotRef === "string" && screenshotRef) {
+    const screenshot = report.querySelector('[data-field="screenshot"]');
+    screenshot.hidden = false;
+    screenshot.id = anchorIdFor(reportToken, "stopping-screenshot");
+    screenshot.dataset.evidenceLocator = "stopping-screenshot";
+    screenshot.textContent = `Stopping screenshot reference: ${screenshotRef}`;
+    anchors.set("stopping-screenshot", screenshot);
+  }
+
+  const appendEvidence = (field, records, kind, describe, getSequence) => {
+    const list = report.querySelector(`[data-field="${field}"]`);
+    const fragment = document.createDocumentFragment();
+    records.forEach((entry, index) => {
+      const sequence = getSequence(entry, index);
+      const locator = sequence === null ? null : `${kind}:${sequence}`;
+      const item = document.createElement("li");
+      if (locator) {
+        item.id = anchorIdFor(reportToken, locator);
+        item.dataset.evidenceLocator = locator;
+        anchors.set(locator, item);
+      }
+      item.textContent = `${sequence === null ? "" : `${sequence}. `}${describe(entry)}`;
+      fragment.append(item);
+    });
+    list.replaceChildren(fragment);
+  };
+  appendEvidence("actions", actions, "action", actionDescription, (action) => (
+    Number.isInteger(action.sequence) && action.sequence > 0 ? action.sequence : null
   ));
+  appendEvidence("observations", observations, "observation", observationDescription, (_, index) => index + 1);
+  appendEvidence("recoveries", recoveries, "recovery", recoveryDescription, (recovery) => (
+    Number.isInteger(recovery.sequence) && recovery.sequence > 0 ? recovery.sequence : null
+  ));
+
+  const warningList = report.querySelector('[data-field="warnings"]');
+  const warningItems = document.createDocumentFragment();
+  for (const warning of warnings) {
+    const item = document.createElement("li");
+    item.textContent = typeof warning === "string"
+      ? warning
+      : warning?.message || warning?.kind || JSON.stringify(warning);
+    warningItems.append(item);
+  }
+  warningList.replaceChildren(warningItems);
+  report.querySelector('[data-field="warnings-block"]').hidden = warnings.length === 0;
+
+  const availableReview = reporting.status === "available"
+    && typeof reporting.explanation === "string"
+    && reporting.explanation.trim() !== "";
+  setField(report, "review-status", availableReview
+    ? "Review available"
+    : reporting.status === "pending" ? "Review pending" : "Review unavailable");
+  const explanation = report.querySelector('[data-field="review-explanation"]');
+  explanation.hidden = !availableReview;
+  explanation.textContent = availableReview ? reporting.explanation : "";
+  const confidence = report.querySelector('[data-field="confidence"]');
+  confidence.hidden = !availableReview || !["low", "medium", "high"].includes(reporting.confidence);
+  confidence.textContent = confidence.hidden ? "" : `Confidence: ${reporting.confidence}`;
+
+  const fixBlock = report.querySelector('[data-field="fix-block"]');
+  fixBlock.hidden = !availableReview;
+  if (availableReview) {
+    const proposedFix = typeof reporting.proposedFix === "string" && reporting.proposedFix.trim()
+      ? reporting.proposedFix
+      : "No evidence-supported fix available";
+    setField(report, "fix", proposedFix);
+  }
+
+  const referencesList = report.querySelector('[data-field="review-references"]');
+  const referenceItems = document.createDocumentFragment();
+  const references = availableReview && Array.isArray(reporting.evidenceReferences)
+    ? reporting.evidenceReferences
+    : [];
+  for (const reference of references) {
+    const locator = evidenceLocator(reference);
+    const target = locator ? anchors.get(locator) : null;
+    if (!target) continue;
+    const item = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = `#${target.id}`;
+    link.textContent = locator;
+    link.addEventListener("click", () => {
+      const details = target.closest("details");
+      if (details) details.open = true;
+    });
+    item.append(link);
+    referenceItems.append(item);
+  }
+  referencesList.replaceChildren(referenceItems);
+  referencesList.hidden = referencesList.childElementCount === 0;
 }
 
 /** handleLiveAssessment creates and executes one real run, then exposes its redacted JSON record. */
@@ -625,7 +527,6 @@ async function handleLiveAssessment() {
   terminalLog.replaceChildren();
   setRunStage(25, "Settings checked", "Local target and assessment settings checked.");
   liveAssessmentStatus.textContent = "Creating a fresh local run…";
-  liveAssessmentSummary.textContent = "";
   liveRecordDownload.hidden = true;
   liveRecordDetails.hidden = true;
   liveAssessmentButton.disabled = true;
@@ -662,7 +563,7 @@ async function handleLiveAssessment() {
 
     setRunStage(100, "Result saved", `Run saved with status ${result.status}.`);
     liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
-    renderLiveAssessmentResult(result, configuration);
+    renderRunReport(result, liveRunReport);
     const serialized = JSON.stringify(result, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -673,7 +574,7 @@ async function handleLiveAssessment() {
     liveRecordDetails.hidden = false;
     liveTerminal.hidden = true;
     liveResult.hidden = false;
-    document.querySelector("#live-result-heading").focus({ preventScroll: true });
+    liveRunReport.querySelector('[data-field="heading"]').focus({ preventScroll: true });
   } catch (error) {
     liveAssessmentStatus.textContent = error instanceof Error
       ? error.message
@@ -1375,27 +1276,15 @@ function appendComparisonList(parent, items, textKey, evidenceIds = new Map()) {
   parent.append(list);
 }
 
-/** renderReportSample keeps every visible fact and evidence item sourced from the chosen sample record. */
-function renderReportSample(sample) {
-  renderOrderedActions(sample);
-  renderSampleFacts(sample);
-  renderFocusObservations(sample);
-  renderRecoveryEvidence(sample);
-  renderEvidenceReferences(sample);
-  renderScoreAndMetrics(sample);
-}
-
 /** clearTargetValidationError removes stale feedback once the target input changes. */
 function clearTargetValidationError() {
   setError(targetInput, targetError, "");
-  report.hidden = true;
   comparisonSection.hidden = true;
   if (!activeLiveRunId) liveAssessmentSection.hidden = true;
 }
 
-/** clearStaleSampleReport prevents an old preview from appearing to describe changed simulation settings. */
-function clearStaleSampleReport() {
-  report.hidden = true;
+/** clearStaleViews clears a prior result after assessment settings change. */
+function clearStaleViews() {
   comparisonSection.hidden = true;
   if (!activeLiveRunId) liveAssessmentSection.hidden = true;
 }
@@ -1405,7 +1294,7 @@ function updateConsistencyPreview() {
   const level = consistencyInput.value;
   const runsPerVersion = CONSISTENCY_RUN_COUNTS[level];
   comparisonButton.textContent = `Compare demos · ${formatCount(runsPerVersion, "run")} per version`;
-  clearStaleSampleReport();
+  clearStaleViews();
 }
 
 /** populateConsistencyOptions derives labels and values from the comparison domain contract. */
@@ -1423,18 +1312,10 @@ function populateConsistencyOptions() {
 
 form.addEventListener("submit", handleAssessmentSubmit);
 comparisonButton.addEventListener("click", handleComparisonRequest);
-sampleReportButton.addEventListener("click", () => {
-  const configuration = validateCurrentConfiguration();
-  if (configuration) showSampleReport(configuration);
-});
 navButtons.setup.addEventListener("click", () => {
   if (activeLiveRunId) return;
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
-});
-navButtons.sample.addEventListener("click", () => {
-  const configuration = validateCurrentConfiguration();
-  if (configuration) showSampleReport(configuration);
 });
 navButtons.comparison.addEventListener("click", handleComparisonRequest);
 newAssessmentButton.addEventListener("click", () => {
@@ -1449,14 +1330,13 @@ targetInput.addEventListener("input", () => {
   clearTargetValidationError();
 });
 goalInput.addEventListener("input", updateScopePreview);
-simulationInput.addEventListener("change", clearStaleSampleReport);
+simulationInput.addEventListener("change", clearStaleViews);
 consistencyInput.addEventListener("change", updateConsistencyPreview);
 const defaultTarget = `${window.location.origin}/demo/fixed`;
 targetInput.value = defaultTarget;
 builtInTargetInput.value = "/demo/fixed";
 updateRecognizedTargetLabel();
 
-renderReportSample(WHOLE_SITE_SAMPLE);
 updateScopePreview();
 populateConsistencyOptions();
 updateConsistencyPreview();
