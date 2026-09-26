@@ -6,6 +6,8 @@
 
 **Sources:** W3C's [WCAG 2.2 Recommendation](https://www.w3.org/TR/WCAG22/) supplies the canonical 86 active success criteria. ETSI EN 301 549 V3.2.1 clause 9 maps web requirements to WCAG 2.1; the overlapping criteria remain applicable in WCAG 2.2. Brunel University's scoping review discusses cross-disability barriers and the limits of treating conformance as the whole accessibility picture. The WHO/ITU telehealth toolkit supplies broader service context, including assistive-device compatibility (requirement 1), contrast (requirement 2), captions (requirement 7), and mobility requirements (13–15). Those broader requirements are context, not automatic WCAG mappings.
 
+**Source fallback:** `access_trace/source_references.py` contains canonical, linked source statements. The reviewer can select one only when it cannot select a direct WCAG criterion. `access_trace/report.py` validates the selected source ID, and `access_trace/evidence.py` validates the full source record again before display. The UI labels WHO/ITU as toolkit requirements, ETSI as standard requirements, and Brunel as research findings. The catalog covers the 25 WHO/ITU requirements, ETSI clauses 5.9, 6.4, and 12.1.1, and three Brunel barrier examples; it is not full PDF retrieval.
+
 ## Work items
 
 - [x] Add a static canonical WCAG 2.2 ID, name, and anchor registry in `access_trace/wcag.py`, excluding obsolete 4.1.1.
@@ -13,6 +15,7 @@
 - [x] Preserve safe condition records in `access_trace/evidence.py`. Revalidate names, URLs, statuses, and citations before report projection, while retaining older available reviews that have no condition field.
 - [x] Render each condition and its WCAG correlation in `index.html` and `src/main.mjs`. Use DOM text nodes for model text, link only to canonical WCAG URLs and run-local evidence anchors, and display an explicit conformance limitation.
 - [x] Add focused Python contract tests in `tests/test_report_correlations.py` for mapped and unmapped conditions, citation scope, and malformed data. Check JavaScript syntax and whitespace.
+- [x] Add PDF source IDs, titles, locators, source types, and published links as a fallback for non-WCAG conditions. Validate that WCAG and PDF source IDs are mutually exclusive and that a citation cannot be altered in the handoff.
 
 ## Verification notes
 
