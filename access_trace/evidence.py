@@ -7,6 +7,11 @@ EVIDENCE_SCHEMA = "access-trace.evidence.v1"
 MAX_TEXT_LENGTH = 256
 MAX_MESSAGE_LENGTH = 160
 MAX_CHARACTER_COUNT = 100_000
+REVIEW_UNAVAILABLE_REASON = "Evidence review is unavailable."
+REPORTING_LIMITATION = (
+    "Evidence for the configured keyboard assessment on the controlled local site; "
+    "not a general accessibility or WCAG conformance assessment."
+)
 
 
 def _text(value: Any, limit: int = MAX_TEXT_LENGTH) -> Optional[str]:
@@ -21,6 +26,12 @@ def _character_count(value: Any) -> int:
     except (TypeError, ValueError, OverflowError):
         return 0
     return max(0, min(count, MAX_CHARACTER_COUNT))
+
+
+def _optional_count(value: Any) -> Optional[int]:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return value if value >= 0 else None
 
 
 def _optional_bool(value: Any) -> Optional[bool]:
@@ -93,14 +104,13 @@ def _goal_progress(value: Any) -> Optional[Dict[str, Any]]:
     progress: Dict[str, Any] = {
         "goal": _text(value.get("goal"), 200),
         "status": _text(value.get("status"), 40),
-        "completed": bool(value.get("completed")),
+        "completed": _optional_bool(value.get("completed")),
         "support": _text(value.get("support"), 40),
     }
     for key in ("completedFields", "expectedFields"):
-        if key in value:
-            progress[key] = _character_count(value[key])
+        progress[key] = _optional_count(value.get(key))
     if "submitFocused" in value:
-        progress["submitFocused"] = bool(value["submitFocused"])
+        progress["submitFocused"] = _optional_bool(value["submitFocused"])
     fields = value.get("fields")
     if isinstance(fields, dict):
         progress["fields"] = {
@@ -116,12 +126,12 @@ def _coverage(value: Any) -> Optional[Dict[str, Any]]:
         return None
     coverage: Dict[str, Any] = {
         "status": _text(value.get("status"), 40),
-        "completed": bool(value.get("completed")),
-        "areasObserved": _character_count(value.get("areasObserved", 0)),
-        "areasExpected": _character_count(value.get("areasExpected", 0)),
-        "controlsObserved": _character_count(value.get("controlsObserved", 0)),
-        "controlsExpected": _character_count(value.get("controlsExpected", 0)),
-        "controlsTruncated": bool(value.get("controlsTruncated")),
+        "completed": _optional_bool(value.get("completed")),
+        "areasObserved": _optional_count(value.get("areasObserved")),
+        "areasExpected": _optional_count(value.get("areasExpected")),
+        "controlsObserved": _optional_count(value.get("controlsObserved")),
+        "controlsExpected": _optional_count(value.get("controlsExpected")),
+        "controlsTruncated": _optional_bool(value.get("controlsTruncated")),
     }
     for key in ("visitedControls", "expectedControls"):
         raw_ids = value.get(key)
@@ -129,7 +139,7 @@ def _coverage(value: Any) -> Optional[Dict[str, Any]]:
             _text(stable_id, 80)
             for stable_id in raw_ids[:8]
             if isinstance(stable_id, str)
-        ] if isinstance(raw_ids, list) else []
+        ] if isinstance(raw_ids, list) else None
     return coverage
 
 
@@ -340,6 +350,91 @@ def _references(
     return references
 
 
+def _reporting_reference(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    reference_id = value.get("id")
+    if not isinstance(kind, str) or not isinstance(reference_id, str):
+        return None
+    if kind in {"action", "observation"}:
+        sequence = _optional_count(value.get("sequence"))
+        if sequence is None or sequence == 0:
+            return None
+        if reference_id != "{}:{}".format(kind, sequence):
+            return None
+        return {"id": reference_id, "kind": kind, "sequence": sequence}
+    if kind == "stopping-screenshot":
+        screenshot_ref = _screenshot_ref(value.get("ref"))
+        if reference_id != "stopping-screenshot" or screenshot_ref is None:
+            return None
+        return {
+            "id": reference_id,
+            "kind": kind,
+            "ref": screenshot_ref,
+            "redacted": value.get("redacted") is True,
+        }
+    return None
+
+
+def _reporting(value: Any) -> Dict[str, Any]:
+    """Preserve only the bounded reporting state across handoff refreshes."""
+    pending = {
+        "status": "pending",
+        "explanation": None,
+        "evidenceReferences": [],
+        "confidence": None,
+        "proposedFix": None,
+        "reason": None,
+        "limitation": REPORTING_LIMITATION,
+    }
+    if not isinstance(value, dict):
+        return pending
+    if value.get("status") == "unavailable":
+        return {
+            **pending,
+            "status": "unavailable",
+            "reason": REVIEW_UNAVAILABLE_REASON,
+        }
+    if value.get("status") != "available":
+        return pending
+
+    explanation = value.get("explanation")
+    confidence = value.get("confidence")
+    references = value.get("evidenceReferences")
+    proposed_fix = value.get("proposedFix")
+    if (
+        not isinstance(explanation, str)
+        or not explanation.strip()
+        or len(explanation) > 600
+        or not isinstance(confidence, str)
+        or confidence not in {"low", "medium", "high"}
+        or not isinstance(references, list)
+        or not references
+        or len(references) > 16
+        or (
+            proposed_fix is not None
+            and (
+                not isinstance(proposed_fix, str)
+                or not proposed_fix.strip()
+                or len(proposed_fix) > 500
+            )
+        )
+    ):
+        return pending
+    safe_references = [_reporting_reference(item) for item in references]
+    if any(reference is None for reference in safe_references):
+        return pending
+    return {
+        **pending,
+        "status": "available",
+        "explanation": explanation,
+        "evidenceReferences": safe_references,
+        "confidence": confidence,
+        "proposedFix": proposed_fix,
+    }
+
+
 def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
     """Project a run into the stable contract consumed by report work."""
     assessment = {
@@ -358,6 +453,34 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
     actions = _actions(run.get("actions"), observations)
     screenshot_ref = _screenshot_ref(run.get("stoppingScreenshotRef"))
     final_observation = observations[-1] if observations else {}
+    stopping_point = run.get("stoppingPoint")
+    progress_source = (
+        stopping_point if isinstance(stopping_point, dict) else final_observation
+    )
+    raw_actions = run.get("actions")
+    raw_observations = run.get("observations")
+    raw_recoveries = run.get("recoveryEvidence")
+    run_status = _text(run.get("status"), 40)
+    statistics = {
+        "terminalStatus": (
+            run_status
+            if run_status in {"COMPLETED", "BLOCKED", "INCONCLUSIVE"}
+            else None
+        ),
+        "durationMs": _optional_count(run.get("durationMs")),
+        "interactionCount": _optional_count(run.get("interactionCount")),
+        "goalProgress": _goal_progress(progress_source.get("goalProgress")),
+        "coverage": _coverage(progress_source.get("coverage")),
+        "actionCount": (
+            len(raw_actions) if isinstance(raw_actions, list) else None
+        ),
+        "observationCount": (
+            len(raw_observations) if isinstance(raw_observations, list) else None
+        ),
+        "recoveryCount": (
+            len(raw_recoveries) if isinstance(raw_recoveries, list) else None
+        ),
+    }
     comparison_settings = {
         key: assessment[key]
         for key in (
@@ -413,6 +536,7 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
             "browserFailure": _warning(run.get("browserFailure")),
             "browserSession": _browser_session(run.get("browserSession")),
         },
+        "stats": statistics,
         "evidenceReferences": _references(actions, observations, screenshot_ref),
         "comparison": {
             "settings": comparison_settings,
@@ -422,15 +546,11 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
             },
             "runCount": 1,
         },
-        "reporting": {
-            "explanation": None,
-            "proposedFix": None,
-            "confidence": None,
-            "limitation": (
-                "Evidence for the configured keyboard assessment on the controlled "
-                "local site; not a general accessibility or WCAG conformance assessment."
-            ),
-        },
+        "reporting": _reporting(
+            run.get("evidenceHandoff", {}).get("reporting")
+            if isinstance(run.get("evidenceHandoff"), dict)
+            else None
+        ),
         "privacy": {
             "rawValuesRetained": False,
             "pasteDataRetained": False,

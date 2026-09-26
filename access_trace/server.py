@@ -14,9 +14,10 @@ from urllib.parse import unquote, urlsplit
 
 from .demo import demo_page
 from .domain import CONTROLLED_SCHEME, ValidationError, create_run, utc_now
-from .evidence import attach_evidence_handoff
+from .evidence import REVIEW_UNAVAILABLE_REASON
 from .journey import execute_assessment
 from .planner import CodexPlanner
+from .report import review_evidence
 from .store import RunStore
 
 
@@ -93,6 +94,7 @@ class AccessTraceServer(ThreadingHTTPServer):
         self.site_store = LocalHTMLStore(self.run_store.directory / "sites")
         self.planner_factory = planner_factory or CodexPlanner
         self.active_planners = {}
+        self.active_runs = {}
         self.cancelled_run_ids = set()
         self.active_planners_lock = threading.Lock()
         self.controlled_scheme = CONTROLLED_SCHEME
@@ -249,6 +251,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     )
                     return
                 self.server.active_planners[run_id] = planner
+                self.server.active_runs[run_id] = run
                 registered = True
             completed = execute_assessment(
                 run,
@@ -256,7 +259,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 planner=planner,
             )
             with self.server.active_planners_lock:
-                if run_id in self.server.cancelled_run_ids:
+                cancellation_requested = run_id in self.server.cancelled_run_ids
+                self.server.cancelled_run_ids.discard(run_id)
+                if cancellation_requested:
                     completed["status"] = "INCONCLUSIVE"
                     completed["updatedAt"] = utc_now()
                     completed["completedAt"] = completed["updatedAt"]
@@ -268,8 +273,24 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                         completed.setdefault("warnings", []).append(
                             {"kind": "run-cancelled"}
                         )
-                    attach_evidence_handoff(completed)
                 self.server.run_store.save(completed)
+            try:
+                review = review_evidence(
+                    completed,
+                    self.server.run_store.directory,
+                    planner,
+                )
+            except Exception:
+                completed["evidenceHandoff"]["reporting"] = {
+                    "status": "unavailable",
+                    "reason": REVIEW_UNAVAILABLE_REASON,
+                }
+            else:
+                completed["evidenceHandoff"]["reporting"] = {
+                    "status": "available",
+                    **review,
+                }
+            self.server.run_store.save(completed)
         except ValueError as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
             return
@@ -278,6 +299,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 with self.server.active_planners_lock:
                     if self.server.active_planners.get(run_id) is planner:
                         del self.server.active_planners[run_id]
+                    if self.server.active_runs.get(run_id) is run:
+                        del self.server.active_runs[run_id]
                     self.server.cancelled_run_ids.discard(run_id)
         self.send_json(HTTPStatus.OK, completed)
 
@@ -290,10 +313,13 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
 
         with self.server.active_planners_lock:
             run = self.server.run_store.get(run_id)
+            active_run = self.server.active_runs.get(run_id)
             if run is None:
                 status = HTTPStatus.NOT_FOUND
                 payload = {"error": {"message": "Run not found"}}
-            elif run.get("status") != "IN_PROGRESS":
+            elif (
+                active_run if isinstance(active_run, dict) else run
+            ).get("status") != "IN_PROGRESS":
                 status = HTTPStatus.CONFLICT
                 payload = {"error": {"message": "Run is not active or cancellable"}}
             else:
