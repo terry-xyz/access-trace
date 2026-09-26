@@ -788,7 +788,20 @@ function renderRunReport(record, root) {
     ? evidence.terminal.warnings
     : Array.isArray(record?.warnings) ? record.warnings : [];
   const status = stats.terminalStatus ?? record?.status;
-  const statusLabel = formatRunStatus(status);
+  const coverage = stats.coverage ?? stopping.coverage ?? evidence.progress?.coverage;
+  const assessmentScope = assessment.assessmentScope ?? record?.assessmentScope;
+  const coverageObserved = recordedNumber(coverage?.controlsObserved ?? coverage?.areasObserved);
+  const coverageExpected = recordedNumber(coverage?.controlsExpected ?? coverage?.areasExpected);
+  const coverageScore = recordedNumber(coverage?.scorePercentage)
+    ?? (coverageObserved !== null && coverageExpected !== null && coverageExpected > 0
+      ? Math.round((coverageObserved / coverageExpected) * 100)
+      : null);
+  const hasPartialScore = assessmentScope === "whole-site"
+    && coverageScore !== null
+    && coverageScore < 100;
+  const statusLabel = status === "COMPLETED" && hasPartialScore
+    ? "Completed · partial coverage"
+    : formatRunStatus(status);
   const reportToken = `${root.id || "run-report"}-${++reportRenderSequence}`;
   const anchors = new Map();
 
@@ -809,9 +822,6 @@ function renderRunReport(record, root) {
   const actionCount = recordedNumber(stats.actionCount ?? rawActionCount);
   setField(report, "action-count", actionCount === null ? "Not recorded" : `${actionCount} actions`);
 
-  const coverage = stats.coverage ?? stopping.coverage ?? evidence.progress?.coverage;
-  const coverageObserved = recordedNumber(coverage?.controlsObserved ?? coverage?.areasObserved);
-  const coverageExpected = recordedNumber(coverage?.controlsExpected ?? coverage?.areasExpected);
   const coverageUnit = Number.isFinite(coverage?.controlsExpected) || Number.isFinite(coverage?.controlsObserved)
     ? "controls observed"
     : "areas observed";
@@ -821,15 +831,25 @@ function renderRunReport(record, root) {
       ? `Status: ${coverage.status}`
       : "Not available";
   setField(report, "coverage", coverageText);
+  const showCoverageScore = assessmentScope === "whole-site" && coverageScore !== null;
+  setField(report, "coverage-score", showCoverageScore ? `${coverageScore} / 100` : "Not available");
+  report.querySelector('[data-field="coverage-score-note"]').hidden = !showCoverageScore;
 
   const goalProgress = stats.goalProgress ?? stopping.goalProgress ?? evidence.progress?.goal;
   const completedFields = recordedNumber(goalProgress?.completedFields);
   const expectedFields = recordedNumber(goalProgress?.expectedFields);
-  const goalProgressText = completedFields !== null && expectedFields !== null
-    ? `${completedFields} of ${expectedFields} goal fields completed`
-    : typeof goalProgress?.status === "string" && goalProgress.status
-      ? `Status: ${goalProgress.status}`
-      : "Not available";
+  let goalProgressText = "Not available";
+  if (completedFields !== null && expectedFields !== null) {
+    goalProgressText = `${completedFields} of ${expectedFields} goal fields completed`;
+  } else if (goalProgress?.status === "not-possible") {
+    goalProgressText = `Not possible: ${goalProgress.reason || "the agent could not complete this goal."}`;
+  } else if (goalProgress?.status === "completed") {
+    goalProgressText = "The agent reports that the goal was completed.";
+  } else if (goalProgress?.status === "not-accessibility-related") {
+    goalProgressText = `Rejected: ${goalProgress.reason || "the goal is unrelated to website accessibility."}`;
+  } else if (typeof goalProgress?.status === "string" && goalProgress.status) {
+    goalProgressText = `Status: ${goalProgress.status}`;
+  }
   setField(report, "goal-progress", goalProgressText);
 
   const successCondition = stopping.successCondition || assessment.successCondition || record?.successCondition;
@@ -837,7 +857,13 @@ function renderRunReport(record, root) {
   const hasGoal = Boolean(assessment.goal || record?.goal);
   const successText = typeof successCondition === "string" && successCondition
     ? `${successCondition} · ${successMatched === true ? "Reached" : successMatched === false ? "Not reached" : "Result not recorded"}`
-    : hasGoal ? "Not configured" : "Not applicable for a whole-page check";
+    : goalProgress?.status === "completed"
+      ? "Agent reports goal completed"
+      : goalProgress?.status === "not-possible"
+        ? "Goal not possible"
+        : goalProgress?.status === "not-accessibility-related"
+          ? "Goal unrelated to accessibility"
+        : hasGoal ? "Agent assessing goal" : "Not applicable for a whole-page check";
   setField(report, "success", successText);
   setField(report, "target", assessment.targetUrl || record?.targetUrl || "Not recorded");
   setField(report, "goal", assessment.goal || record?.goal || "No goal configured");

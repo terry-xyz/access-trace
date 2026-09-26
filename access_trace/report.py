@@ -18,7 +18,6 @@ MAX_REVIEW_PROMPT = 12_000
 MAX_REVIEW_ACTIONS = 24
 MAX_REVIEW_OBSERVATIONS = 20
 MAX_REVIEW_RECOVERIES = 8
-MAX_HANDOFF_REFERENCES = 128
 MAX_REFERENCE_SEQUENCE = 100_000
 MAX_SCREENSHOT_REFERENCE_LENGTH = 128
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -104,10 +103,7 @@ def _reference_id(reference: Any) -> Optional[str]:
 
 def _allowed_references(evidence_handoff: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     raw_references = evidence_handoff.get("evidenceReferences")
-    if (
-        not isinstance(raw_references, list)
-        or len(raw_references) > MAX_HANDOFF_REFERENCES
-    ):
+    if not isinstance(raw_references, list):
         raise ReviewError("Run evidence references are unavailable")
     allowed: Dict[str, Dict[str, Any]] = {}
     for reference in raw_references:

@@ -78,8 +78,8 @@ def normalize_goal(goal: Any) -> Optional[str]:
     normalized = goal.strip()
     if not normalized:
         return None
-    if len(normalized) > 200:
-        raise ValidationError("goal must be 200 characters or fewer")
+    if len(normalized) > 500:
+        raise ValidationError("goal must be 500 characters or fewer")
     return normalized
 
 
@@ -210,16 +210,12 @@ def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
         }
         observation["goalProgress"] = {
             "goal": goal,
-            "status": (
-                "not-started"
-                if supports_contact_goal and goal == SUPPORTED_GOAL
-                else "unsupported"
-            ),
+            "status": "not-started",
             "completed": False,
             "support": (
                 "supported"
                 if supports_contact_goal and goal == SUPPORTED_GOAL
-                else "unsupported"
+                else "agent-evaluates"
             ),
         }
         observation["coverage"] = None
@@ -262,16 +258,7 @@ def create_run(
         "interactionCount": 0,
         "actions": [],
         "observations": [observation],
-        "warnings": (
-            [
-                {
-                    "kind": "unsupported-goal",
-                    "message": "Goal-focused runs are not supported for uploaded local pages; use whole-site scope.",
-                }
-            ]
-            if run_request["targetVersion"] == "local" and run_request["goal"] is not None
-            else []
-        ),
+        "warnings": [],
         "recoveryEvidence": [],
         "stoppingPoint": None,
         "stoppingScreenshotRef": None,

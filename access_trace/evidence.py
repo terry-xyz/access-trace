@@ -10,7 +10,7 @@ MAX_CHARACTER_COUNT = 100_000
 MAX_RECOVERY_EVIDENCE = 32
 REVIEW_UNAVAILABLE_REASON = "Evidence review is unavailable."
 REPORTING_LIMITATION = (
-    "Evidence for the configured keyboard assessment on the controlled local site; "
+    "Evidence for the configured keyboard assessment on the selected site; "
     "not a general accessibility or WCAG conformance assessment."
 )
 
@@ -103,11 +103,13 @@ def _goal_progress(value: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(value, dict):
         return None
     progress: Dict[str, Any] = {
-        "goal": _text(value.get("goal"), 200),
+        "goal": _text(value.get("goal"), 500),
         "status": _text(value.get("status"), 40),
         "completed": _optional_bool(value.get("completed")),
         "support": _text(value.get("support"), 40),
     }
+    if isinstance(value.get("reason"), str):
+        progress["reason"] = _text(value["reason"], 240)
     for key in ("completedFields", "expectedFields"):
         progress[key] = _optional_count(value.get(key))
     if "submitFocused" in value:
@@ -132,6 +134,7 @@ def _coverage(value: Any) -> Optional[Dict[str, Any]]:
         "areasExpected": _optional_count(value.get("areasExpected")),
         "controlsObserved": _optional_count(value.get("controlsObserved")),
         "controlsExpected": _optional_count(value.get("controlsExpected")),
+        "scorePercentage": _optional_count(value.get("scorePercentage")),
         "controlsTruncated": _optional_bool(value.get("controlsTruncated")),
     }
     for key in ("visitedControls", "expectedControls"):
@@ -160,6 +163,10 @@ def _lifecycle(value: Any) -> Dict[str, Any]:
         )
     }
     result["evidence"] = _text(source.get("evidence"), 40)
+    result["browserLoadError"] = _optional_bool(source.get("browserLoadError"))
+    result["wwwHostFallback"] = _optional_bool(source.get("wwwHostFallback"))
+    result["pageContentVisible"] = _optional_bool(source.get("pageContentVisible"))
+    result["headfulFallback"] = _optional_bool(source.get("headfulFallback"))
     return result
 
 
@@ -499,14 +506,14 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
         "targetUrl": _text(run.get("targetUrl")),
         "targetVersion": _text(run.get("targetVersion"), 40),
         "assessmentScope": _text(run.get("assessmentScope"), 40),
-        "goal": _text(run.get("goal"), 200),
+        "goal": _text(run.get("goal"), 500),
         "successCondition": _text(run.get("successCondition"), 80),
         "simulationMode": bool(run.get("simulationMode")),
         "interactionProfile": _text(run.get("interactionProfile"), 40),
     }
     observations = [
         _observation(item)
-        for item in run.get("observations", [])[:64]
+        for item in run.get("observations", [])
     ] if isinstance(run.get("observations"), list) else []
     actions = _actions(run.get("actions"), observations)
     screenshot_ref = _screenshot_ref(run.get("stoppingScreenshotRef"))

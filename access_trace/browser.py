@@ -23,7 +23,9 @@ import urllib.request
 import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
+
+from .url_policy import is_browser_error_url, same_web_origin
 
 
 class BrowserError(RuntimeError):
@@ -80,11 +82,20 @@ OBSERVATION_SCRIPT = r"""
     if (!node) return null;
     const aria = node.getAttribute("aria-label");
     if (aria) return compact(aria);
+    const labelledBy = node.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      const root = node.getRootNode();
+      const names = labelledBy.split(/\s+/).map((id) => root.getElementById?.(id)?.textContent || "");
+      const name = compact(names.join(" "));
+      if (name) return name;
+    }
     if (node.id) {
-      for (const label of document.querySelectorAll("label")) {
+      const root = node.getRootNode();
+      for (const label of root.querySelectorAll?.("label") || []) {
         if (label.htmlFor === node.id) return compact(label.textContent);
       }
     }
+    if (node.labels?.length) return compact(Array.from(node.labels).map((label) => label.textContent).join(" "));
     if (node.tagName === "BUTTON") return compact(node.textContent);
     return null;
   };
@@ -133,14 +144,39 @@ OBSERVATION_SCRIPT = r"""
     if (node.tagName === "A" && !node.hasAttribute("href")) return false;
     return node.tabIndex >= 0;
   };
-  const allControls = Array.from(document.querySelectorAll(
-    'a[href], button, input, textarea, select, '
-    + '[tabindex]:not([tabindex="-1"])'
-  )).filter(keyboardFocusable);
+  const focusableSelector = 'a[href], button, input, textarea, select, [tabindex]:not([tabindex="-1"])';
+  const composedElements = [];
+  const visited = new Set();
+  const pending = Array.from(document.childNodes).reverse();
+  let traversalTruncated = false;
+  while (pending.length) {
+    const node = pending.pop();
+    if (!node || node.nodeType !== Node.ELEMENT_NODE || visited.has(node)) continue;
+    visited.add(node);
+    if (visited.size > 50000) {
+      traversalTruncated = true;
+      break;
+    }
+    composedElements.push(node);
+    let children;
+    if (node.tagName === "SLOT") {
+      const assigned = node.assignedElements({ flatten: true });
+      children = assigned.length ? assigned : Array.from(node.children);
+    } else if (node.shadowRoot) {
+      children = Array.from(node.shadowRoot.children);
+    } else {
+      children = Array.from(node.children);
+    }
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]);
+  }
+  const allControls = composedElements.filter(
+    (node) => node.matches(focusableSelector) && keyboardFocusable(node)
+  );
   const controls = allControls.slice(0, 8).map(control);
-  const active = document.activeElement || document.body;
-  const statuses = Array.from(document.querySelectorAll('[role="status"]'));
-  const dialogOpen = Array.from(document.querySelectorAll(
+  let active = document.activeElement || document.body;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  const statuses = composedElements.filter((node) => node.matches('[role="status"]'));
+  const dialogOpen = composedElements.filter((node) => node.matches(
     'dialog[open], [role="dialog"], [aria-modal="true"], [data-overlay], '
     + '[data-modal], .overlay, .modal, [class*="overlay"], [class*="modal"]'
   )).some(visible);
@@ -153,7 +189,14 @@ OBSERVATION_SCRIPT = r"""
     focus: control(active),
     controls,
     controlCount: allControls.length,
-    controlsTruncated: allControls.length > controls.length,
+    controlsTruncated: traversalTruncated || allControls.length > controls.length,
+    pageContentVisible: Boolean(
+      (document.body && document.body.innerText.trim())
+      || allControls.length
+      || composedElements.some((node) =>
+        node.matches("img, svg, canvas, video") && visible(node)
+      )
+    ),
     successMatched,
     lifecycle: {
       dialogOpen,
@@ -282,6 +325,7 @@ class _WebSocket:
             raise BrowserError("browser returned an invalid debugging endpoint")
         self.socket = socket.create_connection((parsed.hostname, parsed.port), timeout=timeout)
         self.socket.settimeout(timeout)
+        self.timeout = timeout
         key = base64.b64encode(os.urandom(16)).decode("ascii")
         path = parsed.path or "/"
         if parsed.query:
@@ -365,6 +409,19 @@ class _WebSocket:
                             "params": {"frameId": frame_id, "url": url[:4096]},
                         }
                     )
+        elif method == "Network.loadingFailed" and params.get("type") == "Document":
+            frame_id = params.get("frameId")
+            error_text = params.get("errorText")
+            if isinstance(frame_id, str) and isinstance(error_text, str):
+                self._append_event(
+                    {
+                        "method": method,
+                        "params": {
+                            "frameId": frame_id,
+                            "errorText": error_text[:80],
+                        },
+                    }
+                )
 
     def _append_event(self, event: Dict[str, Any]) -> None:
         if len(self._events) == self._events.maxlen:
@@ -674,7 +731,12 @@ class _UploadedPageRequestPolicy:
 class IsolatedKeyboardBrowser:
     """A fresh, keyboard-only Chrome session with bounded observations."""
 
-    def __init__(self, target_url: str, restrict_network: bool = False):
+    def __init__(
+        self,
+        target_url: str,
+        restrict_network: bool = False,
+        headless: bool = True,
+    ):
         chrome_command = _find_chrome()
         if chrome_command is None:
             raise BrowserError(
@@ -686,6 +748,12 @@ class IsolatedKeyboardBrowser:
         self.connection: Optional[_WebSocket] = None
         self.browser_connection: Optional[_WebSocket] = None
         self.target_url = target_url
+        self.headless = headless
+        self._www_host_fallback = False
+        navigation_url = target_url
+        if not restrict_network:
+            navigation_url = self._www_fallback_after_dns_failure(target_url)
+            self._www_host_fallback = navigation_url != target_url
         self.restrict_network = restrict_network
         self.request_policy: Optional[_UploadedPageRequestPolicy] = None
         self.target_id: Optional[str] = None
@@ -700,12 +768,18 @@ class IsolatedKeyboardBrowser:
         self._dialog_observed: Optional[bool] = None
         self._off_loopback_redirect_observed: Optional[bool] = None
         self._navigation_redirect_observed: Optional[bool] = None
+        self._browser_load_error_observed: Optional[bool] = None
         self._main_frame_url: Optional[str] = None
         self._navigation_started = False
+        self._page_content_visible: Optional[bool] = None
+        self._accessibility_tree_nodes: Optional[int] = None
+        self._observation_sequence = 0
+        self._focus_observation_count = 0
+        self._page_title = ""
+        self._accessibility_snapshot_cache: Optional[Dict[str, Any]] = None
         self.debug_port = self._free_port()
         try:
             chrome_options = [
-                "--headless=new",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
                 "--no-first-run",
@@ -717,6 +791,8 @@ class IsolatedKeyboardBrowser:
                 "--force-device-scale-factor=1",
                 "--window-size=1280,900",
             ]
+            if headless:
+                chrome_options.insert(0, "--headless=new")
             if self.restrict_network:
                 chrome_options.extend(
                     ["--dns-prefetch-disable", "--disable-preconnect"]
@@ -730,13 +806,16 @@ class IsolatedKeyboardBrowser:
             )
 
             browser_websocket_url = self._wait_for_browser()
-            self.browser_connection = _WebSocket(browser_websocket_url)
+            websocket_timeout = 10.0
+            self.browser_connection = _WebSocket(
+                browser_websocket_url, timeout=websocket_timeout
+            )
             self.browser_connection.call(
                 "Target.setDiscoverTargets", {"discover": True}
             )
             target_id, websocket_url = self._wait_for_page()
             self.target_id = target_id
-            self.connection = _WebSocket(websocket_url)
+            self.connection = _WebSocket(websocket_url, timeout=websocket_timeout)
             self.connection.call("Page.enable")
             self.connection.call("Runtime.enable")
             self.connection.call("Inspector.enable")
@@ -763,8 +842,10 @@ class IsolatedKeyboardBrowser:
             self._crashed = False
             self._refresh_target_state()
             self._navigation_started = True
-            self.connection.call("Page.navigate", {"url": target_url})
-            self._wait_for_target()
+            self.connection.call("Page.navigate", {"url": navigation_url})
+            self._wait_for_target(timeout=12.0 if not headless else 8.0)
+            if not headless:
+                self._wait_for_rendered_content(timeout=10.0)
         except Exception as error:
             try:
                 self.close()
@@ -772,7 +853,11 @@ class IsolatedKeyboardBrowser:
                 raise BrowserCleanupError(
                     "isolated browser startup cleanup could not be verified"
                 ) from cleanup_error
-            raise BrowserError("unable to start the isolated browser") from error
+            detail = str(error).strip()
+            message = "unable to start the isolated browser"
+            if detail:
+                message += ": " + detail[:160]
+            raise BrowserError(message) from error
 
     def _install_uploaded_page_webrtc_lockdown(self) -> None:
         if self.connection is None:
@@ -853,18 +938,72 @@ class IsolatedKeyboardBrowser:
     def _wait_for_settled_input(self) -> None:
         time.sleep(0.05)
 
-    def _wait_for_target(self) -> None:
+    def _wait_for_rendered_content(self, timeout: float = 10.0) -> None:
+        """Give headed pages up to ten seconds to expose rendered content."""
+        if self.connection is None:
+            raise BrowserError("browser is not connected")
+        deadline = time.monotonic() + max(0.1, min(timeout, 10.0))
+        expression = """(() => {
+          const visible = (element) => {
+            if (!element || element.getClientRects().length === 0) return false;
+            const style = getComputedStyle(element);
+            return style.display !== 'none' && style.visibility !== 'hidden'
+              && Number(style.opacity) !== 0;
+          };
+          const text = (document.body && document.body.innerText || '').trim();
+          const controls = document.querySelectorAll(
+            'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          const media = document.querySelectorAll('img, svg, canvas, video');
+          return Boolean(text || Array.from(controls).some(visible)
+            || Array.from(media).some(visible));
+        })()"""
+        while time.monotonic() < deadline:
+            remaining = max(0.1, deadline - time.monotonic())
+            try:
+                self.connection.socket.settimeout(min(1.0, remaining))
+                result = self.connection.call(
+                    "Runtime.evaluate",
+                    {
+                        "expression": expression,
+                        "returnByValue": True,
+                        "timeout": min(800.0, remaining * 1000),
+                    },
+                )
+                value = (
+                    result.get("result", {}).get("value")
+                    if isinstance(result, dict)
+                    else None
+                )
+                if value is True:
+                    return
+            except BrowserError:
+                self._refresh_target_state()
+                if self._page_open is False or self._crashed is True:
+                    return
+            finally:
+                self.connection.socket.settimeout(self.connection.timeout)
+            self._collect_page_events()
+            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+
+    def _wait_for_target(self, timeout: float = 8.0) -> None:
         if self.connection is None:
             raise BrowserError("browser is not connected")
         expected_url = self.target_url.rstrip("/")
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + max(0.5, min(timeout, 20.0))
         previous_url = None
         stable_observations = 0
         while time.monotonic() < deadline:
             try:
+                remaining = max(0.1, deadline - time.monotonic())
+                self.connection.socket.settimeout(min(2.0, remaining))
                 result = self.connection.call(
                     "Runtime.evaluate",
-                    {"expression": "String(window.location.href)", "returnByValue": True},
+                    {
+                        "expression": "({url: String(window.location.href), readyState: document.readyState})",
+                        "returnByValue": True,
+                        "timeout": min(1500.0, remaining * 1000),
+                    },
                 )
             except BrowserError:
                 self._refresh_target_state()
@@ -872,14 +1011,24 @@ class IsolatedKeyboardBrowser:
                     return
                 time.sleep(0.05)
                 continue
-            current_url = (
-                result.get("result", {}).get("value") if isinstance(result, dict) else None
-            )
+            finally:
+                self.connection.socket.settimeout(self.connection.timeout)
+            state = result.get("result", {}).get("value") if isinstance(result, dict) else None
+            current_url = state.get("url") if isinstance(state, dict) else None
+            ready_state = state.get("readyState") if isinstance(state, dict) else None
             self._collect_page_events()
-            if isinstance(current_url, str) and current_url.rstrip("/") == expected_url:
+            if (
+                isinstance(current_url, str)
+                and current_url.rstrip("/") == expected_url
+                and ready_state in {"interactive", "complete"}
+            ):
                 self._wait_for_settled_input()
                 return
-            if isinstance(current_url, str) and current_url not in {"", "about:blank"}:
+            if (
+                isinstance(current_url, str)
+                and current_url not in {"", "about:blank"}
+                and ready_state in {"interactive", "complete"}
+            ):
                 stable_observations = (
                     stable_observations + 1 if current_url == previous_url else 1
                 )
@@ -918,6 +1067,16 @@ class IsolatedKeyboardBrowser:
                 self._native_dialog_open = False
             elif method == "Page.windowOpen":
                 self._popup_attempted = True
+            elif method == "Network.loadingFailed":
+                error_text = params.get("errorText") if isinstance(params, dict) else None
+                if (
+                    isinstance(params, dict)
+                    and params.get("frameId") in main_frame_ids
+                    and isinstance(error_text, str)
+                    and error_text.startswith("net::ERR_")
+                    and error_text != "net::ERR_ABORTED"
+                ):
+                    self._browser_load_error_observed = True
             elif method in {
                 "Page.frameNavigated",
                 "Page.navigatedWithinDocument",
@@ -954,6 +1113,11 @@ class IsolatedKeyboardBrowser:
         self._main_frame_url = url[:4096]
         if not self._navigation_started or url == "about:blank":
             return
+        if is_browser_error_url(url):
+            self._browser_load_error_observed = True
+            return
+        if self._browser_load_error_observed is not True:
+            self._browser_load_error_observed = False
         if self._off_loopback_redirect(url) is True:
             self._off_loopback_redirect_observed = True
         elif not self._same_target_route(url):
@@ -968,9 +1132,7 @@ class IsolatedKeyboardBrowser:
         except ValueError:
             return False
         same_origin = (
-            observed.scheme == target.scheme
-            and observed.hostname == target.hostname
-            and observed_port == target_port
+            same_web_origin(target, observed)
             and not observed.username
             and not observed.password
         )
@@ -1075,6 +1237,8 @@ class IsolatedKeyboardBrowser:
     def _off_loopback_redirect(self, url: Any) -> Optional[bool]:
         if not isinstance(url, str):
             return None
+        if is_browser_error_url(url):
+            return False
         try:
             observed = urlsplit(url[:4096])
         except ValueError:
@@ -1087,14 +1251,15 @@ class IsolatedKeyboardBrowser:
             target_port = target.port or (443 if target.scheme == "https" else 80)
         except ValueError:
             return True
-        return not (
-            observed.scheme in {"http", "https"}
-            and observed.scheme == target.scheme
-            and observed.hostname == target.hostname
-            and observed_port == target_port
-            and not observed.username
-            and not observed.password
-        )
+        if target.hostname in LOOPBACK_HOSTS:
+            same_origin = (
+                observed.scheme == target.scheme
+                and observed.hostname in LOOPBACK_HOSTS
+                and observed_port == target_port
+            )
+        else:
+            same_origin = same_web_origin(target, observed)
+        return not (same_origin and not observed.username and not observed.password)
 
     def _lifecycle(self, url: Any = None, dialog_open: Optional[bool] = None) -> Dict[str, Any]:
         if self._native_dialog_open is True or dialog_open is True:
@@ -1113,6 +1278,11 @@ class IsolatedKeyboardBrowser:
             and not page_events_overflowed
         ):
             dialog_observed = False
+        browser_load_error = (
+            self._browser_load_error_observed is True or is_browser_error_url(url)
+        )
+        if browser_load_error:
+            self._browser_load_error_observed = True
         off_loopback_redirect = self._off_loopback_redirect_observed
         if isinstance(url, str) and self._off_loopback_redirect(url) is True:
             off_loopback_redirect = True
@@ -1147,6 +1317,9 @@ class IsolatedKeyboardBrowser:
             and not page_events_overflowed
         ):
             navigation_redirect = not self._same_target_route(self._main_frame_url)
+        if browser_load_error:
+            off_loopback_redirect = False
+            navigation_redirect = False
         return {
             "pageOpen": self._page_open,
             "dialogOpen": observed_dialog,
@@ -1156,7 +1329,43 @@ class IsolatedKeyboardBrowser:
             "crashed": self._crashed,
             "offLoopbackRedirect": off_loopback_redirect,
             "navigationRedirect": navigation_redirect,
+            "browserLoadError": browser_load_error,
+            "wwwHostFallback": self._www_host_fallback,
+            "pageContentVisible": self._page_content_visible,
+            "headfulFallback": not self.headless,
         }
+
+    @staticmethod
+    def _www_fallback_after_dns_failure(target_url: str) -> str:
+        """Try a www alias only when the submitted hostname itself fails DNS."""
+        try:
+            target = urlsplit(target_url)
+            host = target.hostname
+            if (
+                target.scheme not in {"http", "https"}
+                or not host
+                or host.lower().startswith("www.")
+                or host in LOOPBACK_HOSTS
+                or target.username
+                or target.password
+            ):
+                return target_url
+            port = target.port or (443 if target.scheme == "https" else 80)
+            socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            return target_url
+        except socket.gaierror:
+            pass
+        except (ValueError, OSError):
+            return target_url
+        fallback_host = "www." + host
+        try:
+            socket.getaddrinfo(fallback_host, port, type=socket.SOCK_STREAM)
+        except (socket.gaierror, OSError):
+            return target_url
+        netloc = fallback_host
+        if target.port is not None:
+            netloc += ":" + str(target.port)
+        return urlunsplit((target.scheme, netloc, target.path, target.query, target.fragment))
 
     def _unobservable_observation(self) -> Dict[str, Any]:
         self._collect_page_events()
@@ -1169,6 +1378,143 @@ class IsolatedKeyboardBrowser:
             "successMatched": False,
             "lifecycle": self._lifecycle(),
         }
+
+    def _accessibility_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Extract a bounded focusable-control view from Chrome's AX tree."""
+        if self.connection is None:
+            return None
+        try:
+            result = self.connection.call(
+                "Accessibility.getFullAXTree", {"depth": 24}
+            )
+        except BrowserError:
+            return None
+        nodes = result.get("nodes") if isinstance(result, dict) else None
+        if not isinstance(nodes, list):
+            return None
+        self._accessibility_tree_nodes = len(nodes)
+        focusable_nodes = []
+        focused_node = None
+        content_visible = False
+        for node in nodes[:20_000]:
+            if not isinstance(node, dict):
+                continue
+            role = node.get("role", {}).get("value") if isinstance(node.get("role"), dict) else None
+            name = node.get("name", {}).get("value") if isinstance(node.get("name"), dict) else None
+            role = role[:80] if isinstance(role, str) else None
+            name = name[:80] if isinstance(name, str) else None
+            properties = node.get("properties", [])
+            prop_map = {
+                item.get("name"): item.get("value", {}).get("value")
+                for item in properties
+                if isinstance(item, dict) and isinstance(item.get("value"), dict)
+            } if isinstance(properties, list) else {}
+            # Landmarks (and the document title copied onto RootWebArea) can
+            # survive in Chrome's AX tree even when the rendered page is
+            # completely empty. Count actual text or user-operable content,
+            # rather than any named AX node, as page content.
+            if (
+                node.get("ignored") is not True
+                and name
+                and role in {
+                    "heading", "staticText", "text", "paragraph", "link",
+                    "button", "checkbox", "radioButton", "textbox",
+                    "searchBox", "menuItem", "tab", "listMarker", "cell",
+                }
+            ):
+                content_visible = True
+            backend_id = node.get("backendDOMNodeId")
+            stable_id = (
+                "ax-dom-" + str(backend_id)
+                if isinstance(backend_id, int) and not isinstance(backend_id, bool)
+                else None
+            )
+            if (
+                prop_map.get("focused") is True
+                and stable_id
+                and role not in {None, "none", "RootWebArea", "WebArea"}
+            ):
+                focused_node = (backend_id, stable_id, role, name)
+            if (
+                prop_map.get("focusable") is not True
+                or not stable_id
+                or role in {None, "none", "RootWebArea", "WebArea"}
+                or node.get("ignored") is True
+            ):
+                continue
+            focusable_nodes.append((backend_id, stable_id, role, name))
+            if len(focusable_nodes) >= 10_000:
+                break
+
+        def describe_tag(backend_id):
+            original_timeout = self.connection.timeout
+            try:
+                self.connection.socket.settimeout(min(1.0, original_timeout))
+                described = self.connection.call(
+                    "DOM.describeNode",
+                    {"backendNodeId": backend_id, "depth": 0, "pierce": True},
+                )
+                dom_node = described.get("node") if isinstance(described, dict) else None
+                tag = dom_node.get("nodeName") if isinstance(dom_node, dict) else None
+                return tag.lower() if isinstance(tag, str) else "generic"
+            except BrowserError:
+                return "generic"
+            finally:
+                self.connection.socket.settimeout(original_timeout)
+
+        controls = []
+        for backend_id, stable_id, role, name in focusable_nodes[:8]:
+            tag = describe_tag(backend_id)
+            control = {
+                "role": role,
+                "accessibleName": name,
+                "tag": tag,
+                "stableId": stable_id,
+                "isStable": True,
+                "focusable": True,
+            }
+            if role == "textbox" and tag in {"input", "textarea"}:
+                control.update(
+                    characterCount=0,
+                    acceptedInput=None,
+                    validationState="not-observed",
+                )
+            controls.append(control)
+        focused = None
+        if focused_node is not None:
+            backend_id, stable_id, role, name = focused_node
+            tag = next(
+                (item["tag"] for item in controls if item["stableId"] == stable_id),
+                describe_tag(backend_id),
+            )
+            focused = {
+                "role": role,
+                "accessibleName": name,
+                "tag": tag,
+                "stableId": stable_id,
+                "isStable": True,
+                "focusable": True,
+                "characterCount": 0,
+                "acceptedInput": None,
+                "validationState": "not-observed",
+            }
+            if role == "textbox" and tag in {"input", "textarea"}:
+                focused["characterCount"] = 0
+        return {
+            "controls": controls,
+            "controlCount": len(focusable_nodes),
+            "controlsTruncated": len(focusable_nodes) > 8,
+            "focus": focused,
+            "pageContentVisible": content_visible or bool(controls),
+            "treeNodeCount": len(nodes),
+        }
+
+    def needs_headful_retry(self) -> bool:
+        """Detect a publicly loaded page that headless Chrome barely rendered."""
+        return self._page_content_visible is False or (
+            self._accessibility_tree_nodes is not None
+            and self._accessibility_tree_nodes <= 2
+        )
 
     def observe(self) -> Dict[str, Any]:
         if self.connection is None:
@@ -1188,7 +1534,41 @@ class IsolatedKeyboardBrowser:
         value = result.get("result", {}).get("value") if isinstance(result, dict) else None
         if not isinstance(value, dict):
             return self._unobservable_observation()
+        self._page_title = value.get("title", "") if isinstance(value.get("title"), str) else ""
         raw_lifecycle = value.get("lifecycle")
+        self._observation_sequence += 1
+        refresh_accessibility = self._accessibility_snapshot_cache is None
+        if refresh_accessibility:
+            accessibility = self._accessibility_snapshot()
+            if accessibility is not None:
+                self._accessibility_snapshot_cache = {
+                    **accessibility,
+                    "focus": None,
+                }
+        else:
+            accessibility = {
+                **self._accessibility_snapshot_cache,
+                "focus": None,
+                "pageContentVisible": False,
+            }
+        self._page_content_visible = (
+            value.get("pageContentVisible")
+            if isinstance(value.get("pageContentVisible"), bool)
+            else None
+        )
+        if accessibility is not None:
+            if accessibility["controls"]:
+                value["controls"] = accessibility["controls"][:8]
+                value["controlCount"] = accessibility["controlCount"]
+                value["controlsTruncated"] = accessibility["controlsTruncated"]
+            if accessibility["focus"] is not None:
+                value["focus"] = accessibility["focus"]
+            if accessibility["pageContentVisible"]:
+                value["pageContentVisible"] = True
+                self._page_content_visible = True
+        value["accessibilityTreeNodeCount"] = (
+            accessibility.get("treeNodeCount") if accessibility is not None else None
+        )
         dialog_open = (
             raw_lifecycle.get("dialogOpen")
             if isinstance(raw_lifecycle, dict)
@@ -1204,6 +1584,98 @@ class IsolatedKeyboardBrowser:
             self._dialog_observed = True
         value["lifecycle"] = self._lifecycle(value.get("url"), dialog_open)
         return value
+
+    def observe_focus(self) -> Dict[str, Any]:
+        """Read the active AX node cheaply after a whole-site Tab action."""
+        if self.connection is None:
+            raise BrowserError("browser is not connected")
+        self._focus_observation_count += 1
+        if self._accessibility_snapshot_cache is None:
+            return self.observe()
+
+        self._collect_page_events()
+        self._collect_target_events()
+        try:
+            evaluated = self.connection.call(
+                "Runtime.evaluate",
+                {
+                    "expression": "(() => { let node = document.activeElement; while (node && node.shadowRoot && node.shadowRoot.activeElement) node = node.shadowRoot.activeElement; return node; })()",
+                    "returnByValue": False,
+                },
+            )
+            result = evaluated.get("result", {}) if isinstance(evaluated, dict) else {}
+            object_id = result.get("objectId") if isinstance(result, dict) else None
+            if not isinstance(object_id, str):
+                raise BrowserError("focused page node was unavailable")
+            try:
+                partial = self.connection.call(
+                    "Accessibility.getPartialAXTree",
+                    {"objectId": object_id, "fetchRelatives": False},
+                )
+            finally:
+                try:
+                    self.connection.call("Runtime.releaseObject", {"objectId": object_id})
+                except BrowserError:
+                    pass
+        except BrowserError:
+            return self.observe()
+
+        nodes = partial.get("nodes") if isinstance(partial, dict) else None
+        ax_node = next(
+            (
+                node for node in nodes or []
+                if isinstance(node, dict) and node.get("ignored") is not True
+            ),
+            None,
+        )
+        role_data = ax_node.get("role") if isinstance(ax_node, dict) else None
+        name_data = ax_node.get("name") if isinstance(ax_node, dict) else None
+        role = role_data.get("value") if isinstance(role_data, dict) else None
+        name = name_data.get("value") if isinstance(name_data, dict) else None
+        backend_id = ax_node.get("backendDOMNodeId") if isinstance(ax_node, dict) else None
+        if role == "RootWebArea" or role in {None, "none"}:
+            focus = {
+                "role": "document",
+                "accessibleName": None,
+                "tag": "body",
+                "stableId": "document",
+                "isStable": True,
+            }
+        else:
+            stable_id = (
+                "ax-dom-" + str(backend_id)
+                if isinstance(backend_id, int) and not isinstance(backend_id, bool)
+                else "document"
+            )
+            focus = {
+                "role": role[:80] if isinstance(role, str) else "generic",
+                "accessibleName": name[:80] if isinstance(name, str) else None,
+                "tag": "generic",
+                "stableId": stable_id,
+                "isStable": isinstance(backend_id, int) and not isinstance(backend_id, bool),
+                "focusable": True,
+            }
+            if focus["role"] == "textbox":
+                focus.update(
+                    characterCount=0,
+                    acceptedInput=None,
+                    validationState="not-observed",
+                )
+
+        cache = self._accessibility_snapshot_cache
+        page_url = self._main_frame_url or self.target_url
+        return {
+            "url": page_url,
+            "title": self._page_title,
+            "focus": focus,
+            "controls": cache.get("controls", []),
+            "controlCount": cache.get("controlCount", len(cache.get("controls", []))),
+            "controlsTruncated": cache.get("controlsTruncated", False),
+            "pageContentVisible": self._page_content_visible is not False,
+            "accessibilityTreeNodeCount": cache.get("treeNodeCount"),
+            "successMatched": False,
+            "lifecycle": self._lifecycle(page_url, self._dom_dialog_open),
+        }
 
     def _mark_page_monitor_unavailable(self) -> None:
         self._page_monitor_active = False
@@ -1601,7 +2073,6 @@ class IsolatedKeyboardBrowser:
             raise BrowserActionError("controlled page URL was unavailable before input")
         self._record_main_frame_url(current_url)
         self._collect_page_events()
-        self._refresh_target_state()
         lifecycle = self._lifecycle(current_url, self._dom_dialog_open)
         if any(
             lifecycle.get(field) is None

@@ -82,15 +82,16 @@
 
           <div class="assessment-fields">
           <div class="field-group">
-            <div class="field-label-row"><label for="assessment-goal">Goal <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About assessment goals" aria-describedby="tip-goal"><span aria-hidden="true">?</span><span id="tip-goal" class="tooltip" role="tooltip">Leave blank to check the whole page. For a goal, name a button or field and say what to do with the keyboard. Not supported: goals without a recognizable action on a named control, security or privacy evaluations, visual checks, or requests to override safeguards or run code.</span></button></div>
+            <div class="field-label-row"><label for="assessment-goal">Goal <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About assessment goals" aria-describedby="tip-goal"><span aria-hidden="true">?</span><span id="tip-goal" class="tooltip" role="tooltip">Describe the outcome you want. The agent will use the available browser evidence and keyboard controls, or explain why it cannot complete the goal. It cannot use credentials, run code, or perform unsafe side effects.</span></button></div>
             <textarea
               id="assessment-goal"
               name="goal"
               rows="2"
+              maxlength="500"
               aria-describedby="goal-hint scope-status goal-error"
-              placeholder="Leave blank for a whole-page check"
+              placeholder="Describe what you want to accomplish"
             ></textarea>
-            <p id="goal-hint" class="field-hint">Leave blank for a whole-page check.</p>
+            <p id="goal-hint" class="field-hint">Leave blank for a whole-page check, or describe any goal for the agent to assess.</p>
             <p id="scope-status" class="scope-status" role="status" aria-live="polite">Whole page</p>
             <p id="goal-error" class="field-error" hidden></p>
           </div>
@@ -235,11 +236,15 @@
                 <div><dt>Keyboard interactions</dt><dd data-field="interactions">Not recorded</dd></div>
                 <div><dt>Ordered actions</dt><dd data-field="action-count">Not recorded</dd></div>
                 <div><dt>Coverage</dt><dd data-field="coverage">Not available</dd></div>
+                <div><dt>Coverage score</dt><dd data-field="coverage-score">Not available</dd></div>
                 <div><dt>Goal progress</dt><dd data-field="goal-progress">Not available</dd></div>
                 <div><dt>Success condition</dt><dd data-field="success">Not recorded</dd></div>
                 <div><dt>Target</dt><dd data-field="target">Not recorded</dd></div>
                 <div><dt>Goal</dt><dd data-field="goal">None recorded</dd></div>
               </dl>
+              <p class="run-report-score-note" data-field="coverage-score-note" hidden>
+                Share of detected controls observed; this is not an accessibility conformance rating.
+              </p>
             </section>
             <section class="live-evidence-card" aria-label="Evidence review">
               <p class="card-kicker">EVIDENCE REVIEW</p>

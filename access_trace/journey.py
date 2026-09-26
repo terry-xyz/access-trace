@@ -19,9 +19,9 @@ from .browser import (
 from .domain import DEMO_TITLE, LOOPBACK_HOSTS, SUPPORTED_GOAL, utc_now
 from .evidence import attach_evidence_handoff
 from .planner import CodexPlanner, PlannerError, validate_action
+from .url_policy import is_browser_error_url, same_web_origin
 
 
-MAX_INTERACTIONS = 64
 BROWSER_RUN_LOCK = threading.Lock()
 _TERMINAL_COORDINATION = ContextVar(
     "access_trace_terminal_coordination", default=None
@@ -65,6 +65,26 @@ def _append_warning(target: list, warning: Dict[str, Any]) -> None:
 
 def _lifecycle_warnings(raw_lifecycle: Dict[str, Any]) -> list:
     warnings = []
+    if raw_lifecycle.get("headfulFallback"):
+        warnings.append({
+            "kind": "headful-browser-fallback",
+            "message": "Headless Chrome exposed an empty page, so the assessment retried once in a separate isolated Chrome session.",
+        })
+    if raw_lifecycle.get("pageContentVisible") is False:
+        warnings.append({
+            "kind": "page-content-unavailable",
+            "message": "The selected URL loaded, but the isolated browser exposed no visible text, focusable controls, or media.",
+        })
+    if raw_lifecycle.get("wwwHostFallback"):
+        warnings.append({
+            "kind": "www-host-fallback",
+            "message": "The submitted hostname did not resolve; assessment continued on its www hostname.",
+        })
+    if raw_lifecycle.get("browserLoadError"):
+        warnings.append({
+            "kind": "page-load-failed",
+            "message": "The browser displayed a network error page instead of loading the selected website.",
+        })
     if raw_lifecycle.get("dialogOpen"):
         warnings.append({"kind": "dialog-open"})
     if raw_lifecycle.get("dialogObserved"):
@@ -136,9 +156,9 @@ def _goal_progress(
     if goal != SUPPORTED_GOAL:
         return {
             "goal": goal,
-            "status": "unsupported",
+            "status": "not-started",
             "completed": False,
-            "support": "unsupported",
+            "support": "agent-evaluates",
         }
     controls = observation.get("controls", [])
     if not isinstance(controls, list):
@@ -184,6 +204,20 @@ def _goal_progress(
     }
 
 
+def _agent_goal_progress(
+    goal: str, status: str, reason: Optional[str] = None
+) -> Dict[str, Any]:
+    progress = {
+        "goal": goal,
+        "status": status,
+        "completed": status == "completed",
+        "support": "agent-evaluates",
+    }
+    if isinstance(reason, str) and reason.strip():
+        progress["reason"] = reason.strip()[:240]
+    return progress
+
+
 def _coverage_progress(
     raw: Dict[str, Any], covered_focus_ids: Optional[set] = None
 ) -> Dict[str, Any]:
@@ -191,8 +225,10 @@ def _coverage_progress(
     raw_lifecycle = raw.get("lifecycle", {})
     if not isinstance(raw_lifecycle, dict):
         raw_lifecycle = {}
-    page_observed = bool(raw_lifecycle.get("pageOpen")) and isinstance(
-        raw.get("url"), str
+    page_observed = (
+        bool(raw_lifecycle.get("pageOpen"))
+        and isinstance(raw.get("url"), str)
+        and raw_lifecycle.get("pageContentVisible") is not False
     )
     focus = raw.get("focus", {})
     if isinstance(focus, dict):
@@ -226,6 +262,11 @@ def _coverage_progress(
     visited_focus_ids = sorted(set(expected_focus_ids).intersection(covered_focus_ids))
     visited_count = min(control_count, len(covered_focus_ids))
     complete = page_observed and visited_count >= control_count
+    score_percentage = (
+        round((visited_count / control_count) * 100)
+        if control_count > 0 and page_observed
+        else None
+    )
     return {
         "status": (
             "completed"
@@ -237,6 +278,7 @@ def _coverage_progress(
         "areasExpected": 1,
         "controlsObserved": visited_count,
         "controlsExpected": control_count,
+        "scorePercentage": score_percentage,
         "visitedControls": visited_focus_ids,
         "expectedControls": expected_focus_ids,
         "controlsTruncated": bool(raw.get("controlsTruncated")),
@@ -247,6 +289,8 @@ def _redacted_url(
     raw_url: Any, target_url: str, sensitive_values: Iterable[str]
 ) -> Tuple[Optional[str], Optional[str]]:
     if not isinstance(raw_url, str):
+        return None, None
+    if is_browser_error_url(raw_url):
         return None, None
     try:
         observed = urlsplit(raw_url[:4096])
@@ -261,18 +305,16 @@ def _redacted_url(
     observed_is_loopback = observed.hostname in LOOPBACK_HOSTS
     same_target_origin = (
         (
-            not target_is_loopback
-            and observed.hostname == target.hostname
-            and observed.scheme in {"http", "https"}
-            and target.scheme in {"http", "https"}
-            and observed_port in {80, 443}
-            and target_port in {80, 443}
-        )
-        or (
             target_is_loopback
             and observed_is_loopback
             and observed.scheme == target.scheme
             and observed_port == target_port
+        )
+        or (
+            not target_is_loopback
+            and observed_port in {80, 443}
+            and target_port in {80, 443}
+            and same_web_origin(target, observed)
         )
     )
     if not same_target_origin:
@@ -356,10 +398,17 @@ def redacted_observation(
             lifecycle_evidence = "invalid"
         elif value is None and lifecycle_evidence == "observed":
             lifecycle_evidence = "incomplete"
+    if raw_lifecycle.get("browserLoadError") is True:
+        bounded_url = None
+        navigation_warning = None
     lifecycle = {
         key: raw_lifecycle.get(key)
         for key in LIFECYCLE_FIELDS + ("popupAttempted",)
     }
+    lifecycle["browserLoadError"] = raw_lifecycle.get("browserLoadError")
+    lifecycle["wwwHostFallback"] = raw_lifecycle.get("wwwHostFallback")
+    lifecycle["pageContentVisible"] = raw_lifecycle.get("pageContentVisible")
+    lifecycle["headfulFallback"] = raw_lifecycle.get("headfulFallback")
     for key, value in lifecycle.items():
         if value is not None and not isinstance(value, bool):
             lifecycle[key] = None
@@ -530,6 +579,20 @@ def _observation_progress_signature(
     )
 
 
+def _tab_scan_signature(observation: Dict[str, Any]) -> Tuple[Any, Any, Any]:
+    focus = observation.get("focus")
+    if not isinstance(focus, dict):
+        focus = {}
+    coverage = observation.get("coverage")
+    if not isinstance(coverage, dict):
+        coverage = {}
+    return (
+        focus.get("stableId") or focus.get("role") or focus.get("tag"),
+        coverage.get("controlsObserved"),
+        coverage.get("controlsExpected"),
+    )
+
+
 def _lifecycle_failure(observation: Dict[str, Any]) -> Optional[str]:
     lifecycle = observation.get("lifecycle", {})
     if not isinstance(lifecycle, dict):
@@ -540,6 +603,14 @@ def _lifecycle_failure(observation: Dict[str, Any]) -> Optional[str]:
         )
     if lifecycle.get("crashed"):
         return "browser page crashed"
+    if lifecycle.get("browserLoadError"):
+        return "the browser displayed a network error page instead of loading the selected website"
+    if lifecycle.get("pageContentVisible") is False:
+        return (
+            "both isolated headless and headed Chrome sessions exposed an empty page"
+            if lifecycle.get("headfulFallback")
+            else "the page loaded without exposing visible content to the isolated browser"
+        )
     if {"kind": "page-closed"} in observation.get("warnings", []):
         return "browser page closed"
     if lifecycle.get("offLoopbackRedirect"):
@@ -649,8 +720,16 @@ def _settle_action(
             "permitted keyboard action could not be delivered", current
         )
     _append_action(run, action, before, "delivered")
+    observe_after_action = getattr(browser, "observe_focus", None)
+    if not (
+        run.get("assessmentScope") == "whole-site"
+        and action.get("kind") == "key"
+        and action.get("key") == "Tab"
+        and callable(observe_after_action)
+    ):
+        observe_after_action = browser.observe
     current = _redacted_observation(
-        browser.observe(),
+        observe_after_action(),
         run["targetUrl"],
         typed_values.values(),
         run.get("assessmentScope", "goal-focused"),
@@ -950,7 +1029,18 @@ def _complete_with_screenshot(
     browser: IsolatedKeyboardBrowser,
     evidence_directory: Optional[Path],
 ) -> bool:
-    _persist_stopping_screenshot(run, browser, evidence_directory)
+    try:
+        _persist_stopping_screenshot(run, browser, evidence_directory)
+    except BrowserCleanupError:
+        raise
+    except BrowserError:
+        _append_warning(
+            run["warnings"],
+            {
+                "kind": "stopping-screenshot-unavailable",
+                "message": "The run completed, but a redacted stopping screenshot could not be captured safely.",
+            },
+        )
     _set_terminal_state(run, "COMPLETED", observation, started)
     return True
 
@@ -1041,29 +1131,6 @@ def _execute_assessment(
     run["browserSession"]["startedAt"] = run["startedAt"]
     run["agentFailure"] = None
     run["browserFailure"] = None
-    if (
-        run.get("assessmentScope") == "goal-focused"
-        and run.get("goal") != SUPPORTED_GOAL
-    ):
-        run["warnings"].append({"kind": "unsupported-goal"})
-    if (
-        run.get("targetVersion") == "local"
-        and run.get("assessmentScope") == "goal-focused"
-    ):
-        # Uploaded pages have no trusted, target-specific success predicate yet.
-        # Do not let a page imitate the controlled demo's "Message sent" signal.
-        warning = {
-            "kind": "unsupported-goal",
-            "message": "Goal-focused runs are not supported for uploaded local pages; use whole-site scope.",
-        }
-        _append_warning(run["warnings"], warning)
-        run["browserSession"]["cleanup"] = {
-            "status": "not-started",
-            "profileRemoved": True,
-        }
-        run["browserSession"]["closedAt"] = utc_now()
-        _set_terminal_state(run, "INCONCLUSIVE", run["observations"][0], started)
-        return run
     if evidence_directory is None:
         run["warnings"].append({"kind": "missing-evidence-directory"})
         run["browserSession"]["cleanup"] = {
@@ -1084,6 +1151,45 @@ def _execute_assessment(
         else:
             browser = IsolatedKeyboardBrowser(run["targetUrl"])
         current_raw = browser.observe()
+        if (
+            run.get("targetVersion") == "web"
+            and current_raw.get("lifecycle", {}).get("browserLoadError") is not True
+            and browser.needs_headful_retry()
+        ):
+            headless_observation = _redacted_observation(
+                current_raw,
+                run["targetUrl"],
+                typed_values.values(),
+                run["assessmentScope"],
+                run.get("goal"),
+                covered_focus_ids,
+                run.get("successCondition"),
+            )
+            run["observations"] = [headless_observation]
+            headless_browser = browser
+            browser = None
+            headless_browser.close()
+            try:
+                browser = IsolatedKeyboardBrowser(
+                    run["targetUrl"], headless=False
+                )
+                current_raw = browser.observe()
+            except BrowserError as error:
+                reason = (
+                    "Headless Chrome exposed an empty page, and the isolated headed Chrome retry "
+                    "could not finish navigation and page readiness within its bounded wait."
+                )
+                failure = {"kind": "headful-retry-failed", "message": reason[:160]}
+                _append_warning(run["warnings"], failure)
+                run["browserFailure"] = failure
+                if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+                    headless_observation["goalProgress"] = _agent_goal_progress(
+                        run["goal"], "not-possible", reason
+                    )
+                _set_terminal_state(
+                    run, "INCONCLUSIVE", headless_observation, started
+                )
+                return run
         current = _redacted_observation(
             current_raw,
             run["targetUrl"],
@@ -1100,7 +1206,63 @@ def _execute_assessment(
             raise BrowserError(lifecycle_failure)
 
         consecutive_action_failures = 0
-        for _ in range(MAX_INTERACTIONS):
+        tab_scan_states = set()
+        while True:
+            if run.get("assessmentScope") == "whole-site":
+                coverage = current.get("coverage")
+                if isinstance(coverage, dict) and coverage.get("completed") is True:
+                    _complete_with_screenshot(
+                        run, current, started, browser, evidence_directory
+                    )
+                    return run
+                scan_state = _tab_scan_signature(current)
+                if scan_state in tab_scan_states:
+                    coverage = current.get("coverage")
+                    if isinstance(coverage, dict):
+                        coverage["status"] = "partial"
+                    _append_warning(
+                        run["warnings"],
+                        {
+                            "kind": "incomplete-coverage",
+                            "message": (
+                                "Keyboard focus traversal repeated before every detected control "
+                                "was observed. The coverage score reflects the controls reached."
+                            ),
+                        },
+                    )
+                    _complete_with_screenshot(
+                        run, current, started, browser, evidence_directory
+                    )
+                    return run
+                tab_scan_states.add(scan_state)
+                try:
+                    current = _settle_action(
+                        run,
+                        browser,
+                        {"kind": "key", "key": "Tab"},
+                        current,
+                        typed_values,
+                        covered_focus_ids,
+                    )
+                    consecutive_action_failures = 0
+                except ActionDeliveryFailure as error:
+                    tab_scan_states.discard(scan_state)
+                    consecutive_action_failures += 1
+                    current = error.observation or current
+                    lifecycle_failure = _lifecycle_failure(current)
+                    if lifecycle_failure is not None or consecutive_action_failures >= 2:
+                        reason = lifecycle_failure or "The browser could not deliver consecutive Tab actions."
+                        failure = {
+                            "kind": "action-delivery-failure",
+                            "message": reason[:240],
+                            "attempts": consecutive_action_failures,
+                        }
+                        _append_warning(run["warnings"], failure)
+                        run["browserFailure"] = failure
+                        _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                        return run
+                continue
+
             if (
                 run.get("assessmentScope") == "goal-focused"
                 and run.get("goal") == SUPPORTED_GOAL
@@ -1118,25 +1280,6 @@ def _execute_assessment(
                 )
                 if barrier_status in {"blocked", "completed", "inconclusive"}:
                     return run
-
-            if (
-                run.get("assessmentScope") == "whole-site"
-                and isinstance(current.get("coverage"), dict)
-                and current["coverage"].get("completed") is not True
-            ):
-                current = _settle_action(
-                    run,
-                    browser,
-                    {"kind": "key", "key": "Tab"},
-                    current,
-                    typed_values,
-                    covered_focus_ids,
-                )
-                if _complete_whole_site_if_verified(
-                    run, current, started, browser, evidence_directory
-                ):
-                    return run
-                continue
 
             screenshot_data_url = None
             capture_planner_screenshot = getattr(
@@ -1230,48 +1373,81 @@ def _execute_assessment(
                 if lifecycle_failure is not None:
                     raise BrowserError(lifecycle_failure)
                 if run.get("assessmentScope") == "whole-site":
-                    if _complete_whole_site_if_verified(
-                        run, current, started, browser, evidence_directory
-                    ):
-                        return run
-                    # A planner can stop before JavaScript finishes rendering or
-                    # before the keyboard traversal reaches the page controls.
-                    # Keep scanning with Tab until every discovered control has
-                    # been visited or the bounded journey limit is reached.
-                    if (
-                        isinstance(current.get("coverage"), dict)
-                        and current["coverage"].get("completed") is not True
-                    ):
-                        current = _settle_action(
-                            run,
-                            browser,
-                            {"kind": "key", "key": "Tab"},
-                            current,
-                            typed_values,
-                            covered_focus_ids,
+                    coverage = current.get("coverage")
+                    if isinstance(coverage, dict):
+                        coverage["status"] = "partial"
+                        _append_warning(
+                            run["warnings"],
+                            {
+                                "kind": "incomplete-coverage",
+                                "message": "The keyboard run completed with partial coverage; the score reports detected controls reached.",
+                            },
                         )
-                        if _complete_whole_site_if_verified(
+                        _complete_with_screenshot(
                             run, current, started, browser, evidence_directory
-                        ):
-                            return run
-                        continue
-                    run["warnings"].append({"kind": "incomplete-coverage"})
+                        )
+                        return run
+                    _append_warning(run["warnings"], {"kind": "incomplete-coverage"})
                     _set_terminal_state(run, "INCONCLUSIVE", current, started)
                     return run
-                if run.get("goal") != SUPPORTED_GOAL:
-                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                goal = run.get("goal")
+                goal_status = action.get("goalStatus")
+                goal_reason = action.get("goalReason")
+                if goal is not None and goal != SUPPORTED_GOAL:
+                    if goal_status == "completed":
+                        current["goalProgress"] = _agent_goal_progress(
+                            goal, "completed"
+                        )
+                        _complete_with_screenshot(
+                            run, current, started, browser, evidence_directory
+                        )
+                    elif goal_status == "not-accessibility-related":
+                        reason = goal_reason or "This goal is unrelated to website accessibility."
+                        current["goalProgress"] = _agent_goal_progress(
+                            goal, "not-accessibility-related", reason
+                        )
+                        _append_warning(
+                            run["warnings"],
+                            {"kind": "unrelated-goal", "message": reason[:240]},
+                        )
+                        _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                    else:
+                        reason = goal_reason or (
+                            "The agent could not complete this goal with the available browser actions."
+                        )
+                        current["goalProgress"] = _agent_goal_progress(
+                            goal, "not-possible", reason
+                        )
+                        _append_warning(
+                            run["warnings"],
+                            {"kind": "goal-not-possible", "message": reason[:240]},
+                        )
+                        _set_terminal_state(run, "INCONCLUSIVE", current, started)
                     return run
                 if _complete_if_verified(
                     run, current, started, browser, evidence_directory
                 ):
                     return run
+                if goal_status == "not-possible":
+                    reason = goal_reason or "The agent could not complete the requested goal."
+                    current["goalProgress"] = _agent_goal_progress(
+                        goal or SUPPORTED_GOAL, "not-possible", reason
+                    )
+                    _append_warning(
+                        run["warnings"],
+                        {"kind": "goal-not-possible", "message": reason[:240]},
+                    )
+                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                    return run
+                if goal_status == "completed":
+                    current["goalProgress"] = _agent_goal_progress(
+                        goal or SUPPORTED_GOAL,
+                        "not-possible",
+                        "The page did not show the expected success condition.",
+                    )
+                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                    return run
                 raise PlannerError("planner stopped without locally verified success")
-            if (
-                run.get("assessmentScope") == "goal-focused"
-                and run.get("goal") != SUPPORTED_GOAL
-            ):
-                _set_terminal_state(run, "INCONCLUSIVE", current, started)
-                return run
             try:
                 current = _settle_action(
                     run,
@@ -1281,14 +1457,36 @@ def _execute_assessment(
                     typed_values,
                     covered_focus_ids,
                 )
+                if (
+                    run.get("goal") is not None
+                    and run.get("goal") != SUPPORTED_GOAL
+                ):
+                    current["goalProgress"] = _agent_goal_progress(
+                        run["goal"],
+                        action.get("goalStatus") or "in-progress",
+                        action.get("goalReason"),
+                    )
             except ActionDeliveryFailure as error:
                 consecutive_action_failures += 1
                 current = error.observation or current
                 lifecycle_failure = _lifecycle_failure(current)
                 if lifecycle_failure is not None:
-                    failure = {"kind": "browser-failure"}
+                    failure = {
+                        "kind": "page-content-unavailable"
+                        if current.get("lifecycle", {}).get("pageContentVisible") is False
+                        else "browser-failure",
+                        "message": lifecycle_failure[:240],
+                    }
                     _append_warning(run["warnings"], failure)
                     run["browserFailure"] = failure
+                    if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+                        current["goalProgress"] = _agent_goal_progress(
+                            run["goal"], "not-possible", lifecycle_failure
+                        )
+                        _append_warning(
+                            run["warnings"],
+                            {"kind": "goal-not-possible", "message": lifecycle_failure},
+                        )
                     _set_terminal_state(run, "INCONCLUSIVE", current, started)
                     return run
                 if consecutive_action_failures >= 2:
@@ -1298,6 +1496,15 @@ def _execute_assessment(
                     }
                     _append_warning(run["warnings"], failure)
                     run["browserFailure"] = failure
+                    if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+                        reason = "The browser could not complete the requested goal action after two delivery attempts."
+                        current["goalProgress"] = _agent_goal_progress(
+                            run["goal"], "not-possible", reason
+                        )
+                        _append_warning(
+                            run["warnings"],
+                            {"kind": "goal-not-possible", "message": reason},
+                        )
                     _set_terminal_state(run, "INCONCLUSIVE", current, started)
                     return run
                 continue
@@ -1313,16 +1520,20 @@ def _execute_assessment(
             ):
                 return run
 
-        if run.get("assessmentScope") == "whole-site":
-            _append_warning(run["warnings"], {"kind": "incomplete-coverage"})
-            _set_terminal_state(run, "INCONCLUSIVE", run["observations"][-1], started)
-            return run
-        raise BrowserError("keyboard journey exceeded its bounded interaction limit")
     except PlannerError as error:
         planner_failure = _planner_failure_evidence(error)
         _append_warning(run["warnings"], planner_failure)
         run["agentFailure"] = planner_failure
         fallback = run["observations"][-1]
+        if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+            reason = "The agent could not evaluate this goal because it did not return a usable action."
+            fallback["goalProgress"] = _agent_goal_progress(
+                run["goal"], "not-possible", reason
+            )
+            _append_warning(
+                run["warnings"],
+                {"kind": "goal-not-possible", "message": reason},
+            )
         _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
         return run
     except ActionDeliveryFailure as error:
@@ -1333,15 +1544,32 @@ def _execute_assessment(
         _append_warning(run["warnings"], failure)
         run["browserFailure"] = failure
         fallback = error.observation or run["observations"][-1]
+        if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+            reason = "The browser could not complete the requested goal action."
+            fallback["goalProgress"] = _agent_goal_progress(
+                run["goal"], "not-possible", reason
+            )
+            _append_warning(
+                run["warnings"],
+                {"kind": "goal-not-possible", "message": reason},
+            )
         _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
         return run
     except (BrowserError, BrowserActionError) as error:
-        failure = {"kind": "browser-failure"}
         message = str(error).strip()
+        page_content_unavailable = (
+            "empty page" in message
+            or "without exposing visible content" in message
+        )
+        failure = {
+            "kind": "page-content-unavailable"
+            if page_content_unavailable
+            else "browser-failure"
+        }
         if message:
-            failure["message"] = message[:160]
+            failure["message"] = message[:240]
         _append_warning(run["warnings"], failure)
-        run["browserFailure"] = {"kind": "browser-failure"}
+        run["browserFailure"] = dict(failure)
         if isinstance(error, BrowserCleanupError):
             run["browserFailure"] = {"kind": "cleanup-failure"}
             run["browserSession"]["cleanup"] = {
@@ -1365,9 +1593,9 @@ def _execute_assessment(
                 if run.get("assessmentScope") == "whole-site"
                 else {
                     "goal": run.get("goal"),
-                    "status": "unsupported",
+                    "status": "not-started",
                     "completed": False,
-                    "support": "unsupported",
+                    "support": "agent-evaluates",
                 }
                 if run.get("goal") != SUPPORTED_GOAL
                 else {}
@@ -1375,6 +1603,15 @@ def _execute_assessment(
             "coverage": None,
             "observedAt": utc_now(),
         }
+        if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+            reason = (
+                "The browser showed a network error page instead of the selected website."
+                if fallback.get("lifecycle", {}).get("browserLoadError")
+                else "The browser stopped before the agent could complete the goal."
+            )
+            fallback["goalProgress"] = _agent_goal_progress(
+                run["goal"], "not-possible", reason
+            )
         _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
         return run
     finally:
