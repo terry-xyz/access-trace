@@ -479,19 +479,34 @@ class _WebSocket:
         call_id = self._next_call_id
         self._next_call_id += 1
         self.send({"id": call_id, "method": method, "params": params or {}})
-        while True:
-            message = self.receive()
-            if isinstance(message.get("method"), str):
-                if callable(self.event_handler):
-                    self.event_handler(message)
-                self._remember_event(message)
-                continue
-            if message.get("id") != call_id:
-                self._consume_checked_response(message)
-                continue
-            if "error" in message:
-                raise BrowserError("browser rejected the requested operation")
-            return message.get("result")
+        previous_socket_timeout = self.socket.gettimeout()
+        total_timeout = self.timeout
+        if previous_socket_timeout is not None:
+            total_timeout = min(total_timeout, previous_socket_timeout)
+        deadline = time.monotonic() + max(0.1, total_timeout)
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BrowserError("browser command timed out")
+                # Treat timeout as a total command budget. A noisy page may
+                # emit CDP events continuously, so an inactivity timeout alone
+                # can otherwise leave a command waiting forever.
+                self.socket.settimeout(remaining)
+                message = self.receive()
+                if isinstance(message.get("method"), str):
+                    if callable(self.event_handler):
+                        self.event_handler(message)
+                    self._remember_event(message)
+                    continue
+                if message.get("id") != call_id:
+                    self._consume_checked_response(message)
+                    continue
+                if "error" in message:
+                    raise BrowserError("browser rejected the requested operation")
+                return message.get("result")
+        finally:
+            self.socket.settimeout(previous_socket_timeout)
 
     def send_call(self, method: str, params: Optional[Dict[str, Any]] = None) -> int:
         call_id = self._next_call_id
@@ -1608,7 +1623,7 @@ class IsolatedKeyboardBrowser:
                 links.append(safe_url)
         return links
 
-    def crawl_site_pages(self) -> Dict[str, Any]:
+    def crawl_site_pages(self, max_pages: int = MAX_SITE_DISCOVERY_PAGES) -> Dict[str, Any]:
         """Discover same-origin pages before any keyboard audit begins.
 
         Prefer robots.txt and sitemap files for fast complete discovery, then
@@ -1618,6 +1633,11 @@ class IsolatedKeyboardBrowser:
         """
         if self.connection is None:
             raise BrowserError("browser is not connected")
+        try:
+            bounded_page_limit = int(max_pages)
+        except (TypeError, ValueError, OverflowError):
+            bounded_page_limit = MAX_SITE_DISCOVERY_PAGES
+        bounded_page_limit = max(1, min(bounded_page_limit, MAX_SITE_DISCOVERY_PAGES))
         result = self.connection.call(
             "Runtime.evaluate",
             {
@@ -1737,10 +1757,11 @@ class IsolatedKeyboardBrowser:
                   };
                 })()""".replace(
                     "const maxPages = 10000;",
-                    "const maxPages = {0};".format(MAX_SITE_DISCOVERY_PAGES),
+                    "const maxPages = {0};".format(bounded_page_limit),
                 ),
                 "returnByValue": True,
                 "awaitPromise": True,
+                "timeout": 8_000,
             },
         )
         value = result.get("result", {}).get("value") if isinstance(result, dict) else None
@@ -1770,7 +1791,12 @@ class IsolatedKeyboardBrowser:
         return {
             "pages": pages,
             "source": value.get("source") if value.get("source") in {"sitemap", "page-links"} else "page-links",
-            "truncated": value.get("truncated") is True,
+            # Reaching the developer's configured cap is intentional; report
+            # truncation only when the independent all-pages safety cap wins.
+            "truncated": (
+                value.get("truncated") is True
+                and bounded_page_limit >= MAX_SITE_DISCOVERY_PAGES
+            ),
         }
 
     def navigate_to(self, url: str) -> None:

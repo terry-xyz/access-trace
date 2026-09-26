@@ -14,6 +14,7 @@ from .browser import (
     BrowserCleanupError,
     BrowserError,
     IsolatedKeyboardBrowser,
+    MAX_SITE_DISCOVERY_PAGES,
     MAX_PLANNER_SCREENSHOT_BYTES,
 )
 from .domain import (
@@ -63,6 +64,10 @@ class ActionDeliveryFailure(BrowserActionError):
         super().__init__(message)
         self.observation = observation
         self.attempts = attempts
+
+
+class RunCancelled(Exception):
+    """Internal signal used to unwind browser work after a stop request."""
 
 
 def _append_warning(target: list, warning: Dict[str, Any]) -> None:
@@ -1195,16 +1200,62 @@ def execute_assessment(
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """Execute a bounded whole-site or goal-focused keyboard assessment."""
-    with BROWSER_RUN_LOCK:
-        token = _TERMINAL_COORDINATION.set(
-            (lifecycle_lock, cancellation_requested)
+    token = _TERMINAL_COORDINATION.set((lifecycle_lock, cancellation_requested))
+    progress_token = _PROGRESS_CALLBACK.set(progress_callback)
+    acquired = False
+    try:
+        if not BROWSER_RUN_LOCK.acquire(blocking=False):
+            _report_run_progress("Waiting for another isolated browser run to finish.")
+            while not BROWSER_RUN_LOCK.acquire(timeout=0.2):
+                _raise_if_run_cancelled()
+        acquired = True
+        _raise_if_run_cancelled()
+        return _execute_assessment(run, evidence_directory, planner)
+    except RunCancelled:
+        started = time.monotonic()
+        now = utc_now()
+        run["startedAt"] = now
+        run.setdefault("browserSession", {})["startedAt"] = now
+        run["browserSession"]["isolation"] = "fresh"
+        run["browserSession"]["cleanup"] = {
+            "status": "not-started",
+            "profileRemoved": True,
+        }
+        _set_terminal_state(
+            run,
+            "INCONCLUSIVE",
+            run.get("observations", [{}])[0],
+            started,
         )
-        progress_token = _PROGRESS_CALLBACK.set(progress_callback)
+        run["browserSession"]["closedAt"] = utc_now()
+        return run
+    finally:
+        if acquired:
+            BROWSER_RUN_LOCK.release()
+        _PROGRESS_CALLBACK.reset(progress_token)
+        _TERMINAL_COORDINATION.reset(token)
+
+
+def _report_run_progress(message: str) -> None:
+    callback = _PROGRESS_CALLBACK.get()
+    if callback is not None:
         try:
-            return _execute_assessment(run, evidence_directory, planner)
-        finally:
-            _PROGRESS_CALLBACK.reset(progress_token)
-            _TERMINAL_COORDINATION.reset(token)
+            callback({"kind": "status", "message": message})
+        except Exception:
+            pass
+
+
+def _run_cancellation_requested() -> bool:
+    coordination = _TERMINAL_COORDINATION.get()
+    if not isinstance(coordination, tuple) or len(coordination) != 2:
+        return False
+    cancellation_requested = coordination[1]
+    return bool(cancellation_requested and cancellation_requested())
+
+
+def _raise_if_run_cancelled() -> None:
+    if _run_cancellation_requested():
+        raise RunCancelled()
 
 
 def execute_contact_goal(
@@ -1265,6 +1316,8 @@ def _execute_assessment(
     site_discovery_complete = False
     site_page_limit = run.get("sitePageLimit", configured_site_page_limit())
     try:
+        _raise_if_run_cancelled()
+        _report_run_progress("Starting the isolated browser session.")
         if run.get("targetVersion") == "local":
             browser = IsolatedKeyboardBrowser(
                 run["targetUrl"],
@@ -1273,7 +1326,9 @@ def _execute_assessment(
             )
         else:
             browser = IsolatedKeyboardBrowser(run["targetUrl"])
+        _raise_if_run_cancelled()
         current_raw = browser.observe()
+        _raise_if_run_cancelled()
         if (
             run.get("targetVersion") == "web"
             and current_raw.get("lifecycle", {}).get("browserLoadError") is not True
@@ -1296,6 +1351,7 @@ def _execute_assessment(
                 browser = IsolatedKeyboardBrowser(
                     run["targetUrl"], headless=False
                 )
+                _raise_if_run_cancelled()
                 current_raw = browser.observe()
             except BrowserError as error:
                 reason = (
@@ -1334,8 +1390,19 @@ def _execute_assessment(
         ):
             crawl_site_pages = getattr(browser, "crawl_site_pages", None)
             if callable(crawl_site_pages):
+                discovery_limit = (
+                    MAX_SITE_DISCOVERY_PAGES
+                    if site_page_limit == 0
+                    else max(1, min(site_page_limit, MAX_SITE_DISCOVERY_PAGES))
+                )
+                _report_run_progress(
+                    "Scraping up to {0} same-origin page URLs before visiting pages.".format(
+                        discovery_limit
+                    )
+                )
+                discovery = None
                 try:
-                    discovery = crawl_site_pages()
+                    discovery = crawl_site_pages(max_pages=discovery_limit)
                 except BrowserError:
                     _append_warning(
                         run["warnings"],
@@ -1344,8 +1411,16 @@ def _execute_assessment(
                             "message": "The site page list could not be fetched up front; the scan fell back to links found on each assessed page.",
                         },
                     )
-                else:
-                    pages = discovery.get("pages") if isinstance(discovery, dict) else None
+                _raise_if_run_cancelled()
+                if isinstance(discovery, dict):
+                    candidate_count = len(discovery.get("pages", []))
+                    _report_run_progress(
+                        "URL scrape finished with {0} candidates; visiting up to {1} configured pages one by one.".format(
+                            candidate_count,
+                            "all" if site_page_limit == 0 else site_page_limit,
+                        )
+                    )
+                    pages = discovery.get("pages")
                     if isinstance(pages, list) and pages:
                         site_discovery_complete = True
                         current_page_key = _site_page_key(current.get("url"))
@@ -1467,6 +1542,7 @@ def _execute_assessment(
             return True
 
         while True:
+            _raise_if_run_cancelled()
             if run.get("assessmentScope") == "whole-site":
                 coverage = current.get("coverage")
                 if isinstance(coverage, dict) and coverage.get("completed") is True:
@@ -1984,7 +2060,15 @@ def _execute_assessment(
             )
         _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
         return run
+    except RunCancelled:
+        fallback = run.get("observations", [{}])[-1]
+        _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
+        return run
     except (BrowserError, BrowserActionError) as error:
+        if _run_cancellation_requested():
+            fallback = run.get("observations", [{}])[-1]
+            _set_terminal_state(run, "INCONCLUSIVE", fallback, started)
+            return run
         message = str(error).strip()
         page_content_unavailable = (
             "empty page" in message

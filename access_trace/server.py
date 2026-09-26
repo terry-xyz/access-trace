@@ -733,7 +733,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         self.send_json(HTTPStatus.OK, run)
 
     def _record_run_activity(self, run_id: str, action: Dict[str, Any]):
-        if action.get("kind") == "key":
+        if action.get("kind") == "status" and isinstance(action.get("message"), str):
+            message = action["message"].strip()[:240]
+        elif action.get("kind") == "key":
             message = "Pressed {0}.".format(action.get("key", "keyboard key"))
         else:
             message = "Entered {0} characters in {1}.".format(

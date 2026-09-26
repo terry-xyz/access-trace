@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
@@ -16,10 +17,12 @@ from access_trace.browser import (
     BrowserError,
     IsolatedKeyboardBrowser,
     MAX_PLANNER_SCREENSHOT_BYTES,
+    _WebSocket,
     _UploadedPageRequestPolicy,
 )
 from access_trace.domain import configured_site_page_limit, create_run
 from access_trace.journey import (
+    BROWSER_RUN_LOCK,
     CodexPlanner,
     PlannerError,
     _complete_if_verified,
@@ -499,6 +502,7 @@ class AssessmentTargetTests(unittest.TestCase):
         page_four = self.base_url + "/docs/demos/fixed/three.html"
         run = create_run({"targetUrl": target, "sitePageLimit": 3}, self.server.server_port)
         events = []
+        progress_events = []
         visited = []
 
         class SitemapBrowser:
@@ -523,12 +527,12 @@ class AssessmentTargetTests(unittest.TestCase):
                     },
                 }
 
-            def crawl_site_pages(self):
-                events.append("scrape-links")
+            def crawl_site_pages(self, max_pages):
+                events.append("scrape-links:{0}".format(max_pages))
                 return {
-                    "pages": [target, page_two, page_three, page_four],
+                    "pages": [target, page_two, page_three, page_four][:max_pages],
                     "source": "sitemap",
-                    "truncated": False,
+                    "truncated": max_pages < 4,
                 }
 
             def discover_site_links(self):
@@ -547,12 +551,153 @@ class AssessmentTargetTests(unittest.TestCase):
                 return None
 
         with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", SitemapBrowser):
-            completed = execute_assessment(run, self.run_directory)
+            completed = execute_assessment(
+                run,
+                self.run_directory,
+                progress_callback=progress_events.append,
+            )
 
-        self.assertLess(events.index("scrape-links"), events.index("visit:" + page_two))
+        self.assertLess(events.index("scrape-links:3"), events.index("visit:" + page_two))
         self.assertEqual([page_two, page_three], visited)
-        self.assertEqual(4, completed["siteDiscovery"]["pagesFound"])
+        self.assertEqual(3, completed["siteDiscovery"]["pagesFound"])
         self.assertEqual(3, completed["stoppingPoint"]["coverage"]["areasObserved"])
+        self.assertTrue(
+            any("Scraping up to 3" in event.get("message", "") for event in progress_events)
+        )
+
+    def test_sitemap_scrape_uses_the_configured_page_limit_as_its_url_cap(self):
+        class DiscoveryConnection:
+            def __init__(self):
+                self.expression = None
+
+            def call(self, method, params):
+                self.expression = params["expression"]
+                return {
+                    "result": {
+                        "value": {
+                            "pages": ["https://example.test/", "https://example.test/one"],
+                            "source": "sitemap",
+                            "truncated": True,
+                        }
+                    }
+                }
+
+        browser = IsolatedKeyboardBrowser.__new__(IsolatedKeyboardBrowser)
+        browser.connection = DiscoveryConnection()
+        browser.target_url = "https://example.test/"
+        result = browser.crawl_site_pages(max_pages=3)
+
+        self.assertIn("const maxPages = 3;", browser.connection.expression)
+        self.assertEqual(2, len(result["pages"]))
+
+    def test_queued_whole_site_run_can_be_cancelled_before_browser_start(self):
+        run = create_run(
+            {"targetUrl": self.base_url + "/docs/demos/fixed/index.html"},
+            self.server.server_port,
+        )
+        events = []
+        BROWSER_RUN_LOCK.acquire()
+        try:
+            with mock.patch("access_trace.journey.IsolatedKeyboardBrowser") as browser:
+                completed = execute_assessment(
+                    run,
+                    self.run_directory,
+                    planner=mock.Mock(),
+                    cancellation_requested=lambda: True,
+                    progress_callback=events.append,
+                )
+        finally:
+            BROWSER_RUN_LOCK.release()
+
+        self.assertEqual("INCONCLUSIVE", completed["status"])
+        self.assertIn({"kind": "run-cancelled"}, completed["warnings"])
+        self.assertEqual("not-started", completed["browserSession"]["cleanup"]["status"])
+        self.assertTrue(any("Waiting for another" in event.get("message", "") for event in events))
+        browser.assert_not_called()
+
+    def test_whole_site_run_stops_after_a_cancel_during_url_discovery(self):
+        run = create_run(
+            {"targetUrl": self.base_url + "/docs/demos/fixed/index.html", "sitePageLimit": 3},
+            self.server.server_port,
+        )
+        cancellation = {"requested": False}
+        visited = []
+
+        class CancellableDiscoveryBrowser:
+            def __init__(self, target_url):
+                self.url = target_url
+                self.closed = False
+
+            def observe(self):
+                return {
+                    "url": self.url,
+                    "title": "Site page",
+                    "focus": {"role": "document", "stableId": "document", "isStable": True},
+                    "controls": [],
+                    "pageContentVisible": True,
+                    "lifecycle": {
+                        "pageOpen": True, "dialogOpen": False, "dialogObserved": False,
+                        "popupObserved": False, "crashed": False,
+                        "offLoopbackRedirect": False, "navigationRedirect": False,
+                    },
+                }
+
+            def crawl_site_pages(self, max_pages):
+                self.max_pages = max_pages
+                cancellation["requested"] = True
+                return {"pages": [self.url], "source": "sitemap", "truncated": False}
+
+            def navigate_to(self, url):
+                visited.append(url)
+                self.url = url
+
+            def close(self):
+                self.closed = True
+
+        browser_instances = []
+        def create_browser(target_url):
+            browser = CancellableDiscoveryBrowser(target_url)
+            browser_instances.append(browser)
+            return browser
+
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", side_effect=create_browser):
+            completed = execute_assessment(
+                run,
+                self.run_directory,
+                cancellation_requested=lambda: cancellation["requested"],
+            )
+
+        self.assertEqual("INCONCLUSIVE", completed["status"])
+        self.assertIn({"kind": "run-cancelled"}, completed["warnings"])
+        self.assertEqual([], visited)
+        self.assertTrue(browser_instances[0].closed)
+        self.assertEqual(3, browser_instances[0].max_pages)
+
+    def test_websocket_command_deadline_survives_continuous_page_events(self):
+        class EventFloodSocket:
+            def settimeout(self, timeout):
+                return None
+
+            def gettimeout(self):
+                return 0.03
+
+        connection = _WebSocket.__new__(_WebSocket)
+        connection.socket = EventFloodSocket()
+        connection.timeout = 0.03
+        connection._next_call_id = 1
+        connection._events = __import__("collections").deque(maxlen=16)
+        connection.events_overflowed = False
+        connection.event_handler = None
+        connection._checked_command_ids = set()
+        connection.send = lambda payload: None
+
+        def receive_page_event():
+            time.sleep(0.01)
+            return {"method": "Page.domContentEventFired"}
+
+        connection.receive = receive_page_event
+        with self.assertRaisesRegex(BrowserError, "browser command timed out"):
+            connection.call("Runtime.evaluate")
 
     def test_site_page_limit_is_developer_configurable_and_zero_means_uncapped(self):
         with mock.patch.dict(os.environ, {"ACCESS_TRACE_MAX_SITE_PAGES": "7"}):
