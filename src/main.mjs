@@ -764,6 +764,7 @@ async function handleComparisonRequest() {
             : "The local run could not be completed.";
           slot = {
             record: null,
+            failureStage: operation,
             error: (operation === "creation" ? "Creation failed: " : "Execution failed: ") + detail,
           };
         }

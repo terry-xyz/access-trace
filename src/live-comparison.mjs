@@ -19,7 +19,7 @@ export function summarizeLiveComparisonCounts(slots) {
   for (const slot of Array.isArray(slots) ? slots : []) {
     const record = slot && typeof slot === "object" ? slot.record : null;
     if (!record || typeof record !== "object") {
-      if (typeof slot?.error === "string" && slot.error.startsWith("Creation failed:")) {
+      if (slot?.failureStage === "creation") {
         creationFailures += 1;
       } else {
         executionFailures += 1;
