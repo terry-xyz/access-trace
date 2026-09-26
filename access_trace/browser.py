@@ -1823,6 +1823,11 @@ class IsolatedKeyboardBrowser:
         self._off_loopback_redirect_observed = None
         self._browser_load_error_observed = False
         self._wait_for_target(expected_url=url)
+        if not self.headless:
+            # Startup waits for visible content in headed Chrome, but each
+            # subsequently selected site page needs the same readiness check.
+            # This returns as soon as content appears and is capped at 10s.
+            self._wait_for_rendered_content(timeout=10.0)
 
     def observe(self) -> Dict[str, Any]:
         if self.connection is None:

@@ -1393,7 +1393,11 @@ def _execute_assessment(
                 discovery_limit = (
                     MAX_SITE_DISCOVERY_PAGES
                     if site_page_limit == 0
-                    else max(1, min(site_page_limit, MAX_SITE_DISCOVERY_PAGES))
+                    # Discovery includes the page that is already open. Fetch
+                    # one extra candidate so the configured number can be
+                    # assessed after excluding the starting page (and after
+                    # dropping redirects/canonical aliases).
+                    else max(1, min(site_page_limit + 1, MAX_SITE_DISCOVERY_PAGES))
                 )
                 _report_run_progress(
                     "Scraping up to {0} same-origin page URLs before visiting pages.".format(
@@ -1537,6 +1541,26 @@ def _execute_assessment(
                 _record_observation_warnings(run, next_observation)
                 next_failure = _lifecycle_failure(next_observation)
                 if next_failure is not None:
+                    if (
+                        run.get("assessmentScope") == "whole-site"
+                        and next_observation.get("lifecycle", {}).get(
+                            "pageContentVisible"
+                        ) is False
+                    ):
+                        _append_warning(
+                            run["warnings"],
+                            {
+                                "kind": "site-page-unavailable",
+                                "message": "A discovered page exposed no visible content; the whole-site scan continued to the next URL.",
+                            },
+                        )
+                        _report_run_progress(
+                            "That page exposed no visible content; moving to the next discovered URL."
+                        )
+                        # An unobservable page does not consume the configured
+                        # count of successfully inspected pages. Keep trying the
+                        # already-scraped candidates while the page budget allows.
+                        continue
                     raise BrowserError(next_failure)
                 tab_scan_states.clear()
                 return False
