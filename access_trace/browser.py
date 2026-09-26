@@ -50,6 +50,7 @@ PERMITTED_KEYS = {
 }
 MAX_TYPED_CHARACTERS = 80
 MAX_PLANNER_SCREENSHOT_BYTES = 256 * 1024
+BROWSER_STARTUP_TIMEOUT = 15.0
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 WEBRTC_LOCKDOWN_SCRIPT = r"""
 (() => {
@@ -750,7 +751,7 @@ class IsolatedKeyboardBrowser:
             return int(source.getsockname()[1])
 
     def _wait_for_browser(self) -> str:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + BROWSER_STARTUP_TIMEOUT
         endpoint = "http://127.0.0.1:{0}/json/version".format(self.debug_port)
         while time.monotonic() < deadline:
             if self.process is not None and self.process.poll() is not None:
@@ -767,7 +768,7 @@ class IsolatedKeyboardBrowser:
         raise BrowserError("isolated browser debugging endpoint did not become ready")
 
     def _wait_for_page(self) -> tuple:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + BROWSER_STARTUP_TIMEOUT
         endpoint = "http://127.0.0.1:{0}/json/list".format(self.debug_port)
         while time.monotonic() < deadline:
             if self.process is not None and self.process.poll() is not None:
