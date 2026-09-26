@@ -17,6 +17,7 @@ MAX_REVIEW_REFERENCES = 16
 MAX_REVIEW_PROMPT = 12_000
 MAX_REVIEW_ACTIONS = 24
 MAX_REVIEW_OBSERVATIONS = 20
+MAX_REVIEW_RECOVERIES = 8
 MAX_HANDOFF_REFERENCES = 128
 MAX_REFERENCE_SEQUENCE = 100_000
 MAX_SCREENSHOT_REFERENCE_LENGTH = 128
@@ -83,7 +84,7 @@ def _reference_id(reference: Any) -> Optional[str]:
     kind = reference.get("kind")
     if not isinstance(kind, str):
         return None
-    if kind in {"action", "observation"}:
+    if kind in {"action", "observation", "recovery"}:
         sequence = reference.get("sequence")
         if (
             isinstance(sequence, int)
@@ -120,7 +121,7 @@ def _allowed_references(evidence_handoff: Dict[str, Any]) -> Dict[str, Dict[str,
         # corresponding record in the same run.
         kind = reference["kind"]
         locator = {"id": reference_id, "kind": kind}
-        if kind in {"action", "observation"}:
+        if kind in {"action", "observation", "recovery"}:
             locator["sequence"] = reference["sequence"]
         else:
             locator["ref"] = reference["ref"]
@@ -175,6 +176,7 @@ def _matching_references(
     allowed: Dict[str, Dict[str, Any]],
     actions: List[Any],
     observations: List[Any],
+    recoveries: List[Any],
     observation_start_sequence: int,
     screenshot_available: bool,
 ) -> Dict[str, Dict[str, Any]]:
@@ -191,6 +193,14 @@ def _matching_references(
             observation_start_sequence + len(observations) + 1,
         )
     )
+    recovery_sequences = {
+        recovery.get("sequence")
+        for recovery in recoveries
+        if isinstance(recovery, dict)
+        and isinstance(recovery.get("sequence"), int)
+        and not isinstance(recovery.get("sequence"), bool)
+        and 0 < recovery["sequence"] <= MAX_REFERENCE_SEQUENCE
+    }
     matching = {}
     for reference_id, reference in allowed.items():
         kind = reference.get("kind")
@@ -198,6 +208,8 @@ def _matching_references(
         if kind == "action" and sequence in action_sequences:
             matching[reference_id] = reference
         elif kind == "observation" and sequence in observation_sequences:
+            matching[reference_id] = reference
+        elif kind == "recovery" and sequence in recovery_sequences:
             matching[reference_id] = reference
         elif kind == "stopping-screenshot" and screenshot_available:
             matching[reference_id] = reference
@@ -220,11 +232,21 @@ def _prompt_context(
         or not isinstance(terminal, dict)
         or not isinstance(actions, list)
         or not isinstance(observations, list)
+        or not isinstance(terminal.get("recoveryEvidence"), list)
+    ):
+        raise ReviewError("Run evidence is incomplete")
+    if any(
+        not isinstance(recovery, dict)
+        or not isinstance(recovery.get("actions"), list)
+        for recovery in terminal["recoveryEvidence"]
     ):
         raise ReviewError("Run evidence is incomplete")
 
     bounded_actions = actions[-MAX_REVIEW_ACTIONS:]
     bounded_observations = observations[-MAX_REVIEW_OBSERVATIONS:]
+    bounded_recoveries = terminal["recoveryEvidence"][-MAX_REVIEW_RECOVERIES:]
+    bounded_terminal = dict(terminal)
+    bounded_terminal["recoveryEvidence"] = bounded_recoveries
     observation_start_sequence = len(observations) - len(bounded_observations)
     bounded_stopping = dict(stopping)
     if not screenshot_available:
@@ -235,6 +257,7 @@ def _prompt_context(
             allowed,
             bounded_actions,
             bounded_observations,
+            bounded_recoveries,
             observation_start_sequence,
             screenshot_available,
         )
@@ -243,7 +266,7 @@ def _prompt_context(
             "actions": bounded_actions,
             "observations": bounded_observations,
             "stopping": bounded_stopping,
-            "terminal": terminal,
+            "terminal": bounded_terminal,
             "availableEvidenceReferences": list(matching.values()),
         }
         try:
@@ -262,6 +285,19 @@ def _prompt_context(
             observation_start_sequence = len(observations) - len(bounded_observations)
         elif len(bounded_actions) > 1:
             bounded_actions = bounded_actions[max(1, len(bounded_actions) // 2) :]
+        elif len(bounded_recoveries) > 1:
+            bounded_recoveries = bounded_recoveries[
+                max(1, len(bounded_recoveries) // 2) :
+            ]
+            bounded_terminal["recoveryEvidence"] = bounded_recoveries
+        elif bounded_recoveries and bounded_recoveries[-1].get("actions"):
+            recovery = dict(bounded_recoveries[-1])
+            recovery_actions = recovery["actions"]
+            recovery["actions"] = recovery_actions[
+                max(1, len(recovery_actions) // 2) :
+            ]
+            bounded_recoveries = [*bounded_recoveries[:-1], recovery]
+            bounded_terminal["recoveryEvidence"] = bounded_recoveries
         else:
             raise ReviewError("Run evidence exceeds the review limit")
 

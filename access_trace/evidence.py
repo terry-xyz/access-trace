@@ -7,6 +7,7 @@ EVIDENCE_SCHEMA = "access-trace.evidence.v1"
 MAX_TEXT_LENGTH = 256
 MAX_MESSAGE_LENGTH = 160
 MAX_CHARACTER_COUNT = 100_000
+MAX_RECOVERY_EVIDENCE = 32
 REVIEW_UNAVAILABLE_REASON = "Evidence review is unavailable."
 REPORTING_LIMITATION = (
     "Evidence for the configured keyboard assessment on the controlled local site; "
@@ -253,20 +254,27 @@ def _recovery_step(value: Any) -> Optional[Dict[str, Any]]:
     return step or None
 
 
-def _recovery(value: Any) -> Optional[Dict[str, Any]]:
+def _recovery(value: Any, sequence: int) -> Optional[Dict[str, Any]]:
     if not isinstance(value, dict):
         return None
+    attempted_activations = value.get("attemptedActivations")
+    attempted_activations = (
+        attempted_activations[:8]
+        if isinstance(attempted_activations, list)
+        else []
+    )
     recovery: Dict[str, Any] = {
+        "sequence": sequence,
         "kind": _text(value.get("kind"), 80),
         "attemptedActivations": [
             _text(key, 80)
-            for key in value.get("attemptedActivations", [])[:8]
+            for key in attempted_activations
             if isinstance(key, str)
         ],
         "activationFocusConsistent": bool(value.get("activationFocusConsistent")),
         "actions": [
             step
-            for item in value.get("actions", [])
+            for item in value.get("actions", [])[:8]
             if (step := _recovery_step(item)) is not None
         ] if isinstance(value.get("actions"), list) else [],
         "initialFocus": _focus(value.get("initialFocus")),
@@ -283,7 +291,12 @@ def _recovery(value: Any) -> Optional[Dict[str, Any]]:
 def _recoveries(values: Any) -> List[Dict[str, Any]]:
     if not isinstance(values, list):
         return []
-    return [recovery for item in values if (recovery := _recovery(item)) is not None]
+    recoveries = []
+    for item in values[:MAX_RECOVERY_EVIDENCE]:
+        recovery = _recovery(item, len(recoveries) + 1)
+        if recovery is not None:
+            recoveries.append(recovery)
+    return recoveries
 
 
 def _stopping_point(value: Any) -> Optional[Dict[str, Any]]:
@@ -329,6 +342,7 @@ def _screenshot_ref(value: Any) -> Optional[str]:
 def _references(
     actions: List[Dict[str, Any]],
     observations: List[Dict[str, Any]],
+    recoveries: List[Dict[str, Any]],
     screenshot_ref: Optional[str],
 ) -> List[Dict[str, Any]]:
     references = [
@@ -338,6 +352,10 @@ def _references(
     references.extend(
         {"kind": "observation", "sequence": index}
         for index, _ in enumerate(observations, start=1)
+    )
+    references.extend(
+        {"kind": "recovery", "sequence": recovery["sequence"]}
+        for recovery in recoveries
     )
     if screenshot_ref is not None:
         references.append(
@@ -350,34 +368,61 @@ def _references(
     return references
 
 
-def _reporting_reference(value: Any) -> Optional[Dict[str, Any]]:
+def _evidence_reference_id(value: Any) -> Optional[str]:
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    if not isinstance(kind, str):
+        return None
+    if kind in {"action", "observation", "recovery"}:
+        sequence = _optional_count(value.get("sequence"))
+        if sequence is not None and 0 < sequence <= MAX_CHARACTER_COUNT:
+            return "{}:{}".format(kind, sequence)
+        return None
+    if kind == "stopping-screenshot" and value.get("redacted") is True:
+        screenshot_ref = _screenshot_ref(value.get("ref"))
+        return "stopping-screenshot" if screenshot_ref is not None else None
+    return None
+
+
+def _reporting_reference(
+    value: Any, allowed_references: Dict[str, Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
     if not isinstance(value, dict):
         return None
     kind = value.get("kind")
     reference_id = value.get("id")
     if not isinstance(kind, str) or not isinstance(reference_id, str):
         return None
-    if kind in {"action", "observation"}:
+    if kind in {"action", "observation", "recovery"}:
         sequence = _optional_count(value.get("sequence"))
-        if sequence is None or sequence == 0:
+        if sequence is None or sequence == 0 or sequence > MAX_CHARACTER_COUNT:
             return None
         if reference_id != "{}:{}".format(kind, sequence):
             return None
-        return {"id": reference_id, "kind": kind, "sequence": sequence}
+        locator = {"id": reference_id, "kind": kind, "sequence": sequence}
+        return locator if allowed_references.get(reference_id) == locator else None
     if kind == "stopping-screenshot":
         screenshot_ref = _screenshot_ref(value.get("ref"))
-        if reference_id != "stopping-screenshot" or screenshot_ref is None:
+        if (
+            reference_id != "stopping-screenshot"
+            or screenshot_ref is None
+            or value.get("redacted") is not True
+        ):
             return None
-        return {
+        locator = {
             "id": reference_id,
             "kind": kind,
             "ref": screenshot_ref,
-            "redacted": value.get("redacted") is True,
+            "redacted": True,
         }
+        return locator if allowed_references.get(reference_id) == locator else None
     return None
 
 
-def _reporting(value: Any) -> Dict[str, Any]:
+def _reporting(
+    value: Any, evidence_references: List[Dict[str, Any]]
+) -> Dict[str, Any]:
     """Preserve only the bounded reporting state across handoff refreshes."""
     pending = {
         "status": "pending",
@@ -422,8 +467,21 @@ def _reporting(value: Any) -> Dict[str, Any]:
         )
     ):
         return pending
-    safe_references = [_reporting_reference(item) for item in references]
-    if any(reference is None for reference in safe_references):
+    allowed_references = {}
+    for item in evidence_references:
+        reference_id = _evidence_reference_id(item)
+        if reference_id is not None:
+            if reference_id in allowed_references:
+                return pending
+            allowed_references[reference_id] = {**item, "id": reference_id}
+    safe_references = [
+        _reporting_reference(item, allowed_references) for item in references
+    ]
+    if (
+        any(reference is None for reference in safe_references)
+        or len({reference["id"] for reference in safe_references})
+        != len(safe_references)
+    ):
         return pending
     return {
         **pending,
@@ -460,6 +518,8 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
     raw_actions = run.get("actions")
     raw_observations = run.get("observations")
     raw_recoveries = run.get("recoveryEvidence")
+    recoveries = _recoveries(raw_recoveries)
+    evidence_references = _references(actions, observations, recoveries, screenshot_ref)
     run_status = _text(run.get("status"), 40)
     statistics = {
         "terminalStatus": (
@@ -531,13 +591,13 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
         "terminal": {
             "status": _text(run.get("status"), 40),
             "warnings": _warnings(run.get("warnings")),
-            "recoveryEvidence": _recoveries(run.get("recoveryEvidence")),
+            "recoveryEvidence": recoveries,
             "agentFailure": _warning(run.get("agentFailure")),
             "browserFailure": _warning(run.get("browserFailure")),
             "browserSession": _browser_session(run.get("browserSession")),
         },
         "stats": statistics,
-        "evidenceReferences": _references(actions, observations, screenshot_ref),
+        "evidenceReferences": evidence_references,
         "comparison": {
             "settings": comparison_settings,
             "target": {
@@ -549,7 +609,8 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
         "reporting": _reporting(
             run.get("evidenceHandoff", {}).get("reporting")
             if isinstance(run.get("evidenceHandoff"), dict)
-            else None
+            else None,
+            evidence_references,
         ),
         "privacy": {
             "rawValuesRetained": False,
