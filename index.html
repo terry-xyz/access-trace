@@ -103,9 +103,9 @@
           </div>
 
           <div class="field-group comparison-consistency-field">
-            <div class="field-label-row"><label for="comparison-consistency">Comparison runs</label><button class="help-icon" type="button" aria-label="About comparison runs" aria-describedby="tip-comparison"><span aria-hidden="true">?</span><span id="tip-comparison" class="tooltip" role="tooltip">Each version gets the same number of runs. More runs give a steadier demo comparison.</span></button></div>
+            <div class="field-label-row"><label for="comparison-consistency">Comparison runs</label><button class="help-icon" type="button" aria-label="About comparison runs" aria-describedby="tip-comparison"><span aria-hidden="true">?</span><span id="tip-comparison" class="tooltip" role="tooltip">The selected number of fresh runs is executed for each built-in demo.</span></button></div>
             <select id="comparison-consistency" name="consistencyLevel" aria-describedby="comparison-consistency-hint"></select>
-            <p id="comparison-consistency-hint" class="field-hint">Low is the default.</p>
+            <p id="comparison-consistency-hint" class="field-hint">Low is the default. Runs use the current goal and simulation setting.</p>
           </div>
 
           <div class="settings-row">
@@ -215,95 +215,46 @@
         </article>
       </template>
 
-      <section id="sample-comparison" class="report-section comparison-section" aria-labelledby="comparison-heading" hidden>
-        <div class="sample-notice" role="status">
-          <span class="notice-icon" aria-hidden="true">S</span>
-          <strong>Sample comparison</strong>
-          <button class="help-icon" type="button" aria-label="Sample comparison help" aria-describedby="tip-sample-comparison"><span aria-hidden="true">?</span><span id="tip-sample-comparison" class="tooltip" role="tooltip">These are examples, not separate browser runs. Repeated sample rows reuse the same evidence.</span></button>
-        </div>
-
+      <section id="comparison-section" class="report-section comparison-section" aria-labelledby="comparison-heading" hidden>
         <div class="report-heading-row">
           <div>
-            <p class="step-label">COMPARISON PREVIEW</p>
+            <p class="step-label">LIVE COMPARISON</p>
             <h2 id="comparison-heading" tabindex="-1">Compare demo results</h2>
-            <p class="report-subtitle">The same keyboard checks, shown side by side.</p>
+            <p class="report-subtitle">Run the same assessment against each demo and inspect every result.</p>
           </div>
+          <button id="cancel-comparison-run" class="secondary-button" type="button" hidden>Stop current run</button>
         </div>
 
-        <section class="outcome-card comparison-outcome" aria-labelledby="comparison-result-heading">
-          <div class="report-scope-lead">
-            <span class="card-kicker">COMPARISON RESULT</span>
-            <strong id="comparison-status"></strong>
-          </div>
-          <h3 id="comparison-result-heading" class="visually-hidden">Comparison result</h3>
-          <p id="comparison-summary" class="comparison-summary"></p>
-          <div class="comparison-score-grid" aria-label="Original and updated overall scores">
-            <div><span>Original average score</span><strong id="comparison-original-score"></strong><small id="comparison-original-count"></small><small id="comparison-original-range"></small></div>
-            <div><span>Updated average score</span><strong id="comparison-updated-score"></strong><small id="comparison-updated-count"></small><small id="comparison-updated-range"></small></div>
-            <div><span>Score change</span><strong id="comparison-score-delta"></strong><small>percentage points</small></div>
-          </div>
-          <div class="comparison-coverage">
-            <strong>Coverage change</strong>
-            <p><span id="comparison-original-coverage"></span> <span aria-hidden="true">→</span> <span id="comparison-updated-coverage"></span></p>
-            <p id="comparison-coverage-delta"></p>
-          </div>
+        <section class="comparison-progress-panel" aria-label="Comparison progress">
+          <div class="terminal-progress-label"><span id="comparison-progress-label">Waiting to start</span><strong><span id="comparison-progress-count">0</span>/<span id="comparison-progress-total">2</span></strong></div>
+          <progress id="comparison-progress" value="0" max="2" aria-label="Comparison run progress" aria-valuetext="0 of 2 assessment runs processed"></progress>
+          <p id="comparison-run-status" class="terminal-status-line" role="status" aria-live="polite">Ready to run the built-in demos.</p>
         </section>
 
-        <details class="report-more-details comparison-more-details">
-          <summary>View runs, metric changes, and evidence</summary>
-          <div class="report-more-content">
-        <section class="report-panel comparison-runs-panel" aria-labelledby="comparison-runs-heading">
-          <p class="card-kicker">INDIVIDUAL RUNS</p>
-          <h3 id="comparison-runs-heading">Every assessment run</h3>
-          <p>Each row keeps its terminal state, score availability, coverage, and agent failures visible.</p>
-          <div id="comparison-run-results" class="comparison-run-results"></div>
-        </section>
-
-        <section class="report-panel comparison-metrics-panel" aria-labelledby="comparison-metrics-heading">
-          <p class="card-kicker">METRIC CHANGES</p>
-          <h3 id="comparison-metrics-heading">Average pass rate for every named metric</h3>
-          <p id="comparison-metrics-scroll-help" class="table-scroll-instruction">On narrow screens, focus this table region and use the Left and Right Arrow keys to scroll horizontally through all five columns.</p>
-          <div class="table-scroll comparison-metrics-scroll" role="region" aria-labelledby="comparison-metrics-heading" aria-describedby="comparison-metrics-scroll-help" tabindex="0">
-            <table>
-              <caption>Original and updated website check counts and pass-rate changes</caption>
-              <thead><tr><th scope="col">Metric</th><th scope="col">Original</th><th scope="col">Updated</th><th scope="col">Change</th><th scope="col">Direction</th></tr></thead>
-              <tbody id="comparison-metrics-body"></tbody>
-            </table>
+        <section class="comparison-summary-panel" aria-labelledby="comparison-summary-heading">
+          <p class="card-kicker">RECORDED COUNTS</p>
+          <h3 id="comparison-summary-heading">Summary of returned run records</h3>
+          <p>Counts include only facts recorded by successful runs. Execution errors and missing facts are shown separately.</p>
+          <div class="comparison-summary-grid">
+            <section><h4>Terminal status</h4><ul id="comparison-status-counts"></ul><p id="comparison-status-missing"></p></section>
+            <section><h4>Coverage</h4><ul id="comparison-coverage-counts"></ul><p id="comparison-coverage-missing"></p></section>
+            <section><h4>Success condition</h4><ul id="comparison-success-counts"></ul></section>
+            <section><h4>Execution errors</h4><p id="comparison-error-counts"></p></section>
           </div>
         </section>
 
-        <section class="report-panel comparison-evidence-panel" aria-labelledby="comparison-evidence-heading">
-          <p class="card-kicker">EVIDENCE DIFFERENCES</p>
-          <h3 id="comparison-evidence-heading">Meaningful differences across actions, recovery, screenshots, and evidence citations</h3>
-          <ul id="comparison-evidence-changes" class="comparison-evidence-changes" aria-live="polite"></ul>
-        </section>
+        <dl id="comparison-settings" class="comparison-settings-grid" aria-label="Shared assessment settings"></dl>
 
-        <section class="report-panel comparison-settings-panel" aria-labelledby="comparison-settings-heading">
-          <p class="card-kicker">IDENTICAL SETTINGS</p>
-          <h3 id="comparison-settings-heading">Shared assessment context</h3>
-          <dl id="comparison-settings" class="comparison-settings-grid"></dl>
-        </section>
-
-        <section class="comparison-reports" aria-labelledby="comparison-reports-heading">
-          <div class="evidence-heading-row">
-            <div>
-              <p class="step-label">SUPPORTING REPORTS</p>
-              <h3 id="comparison-reports-heading">Inspect both reports and their evidence</h3>
-            </div>
-          </div>
-          <details id="comparison-original-report" class="comparison-report-details">
-            <summary>Original site report and evidence</summary>
-            <div id="comparison-original-report-content" class="comparison-report-content"></div>
-          </details>
-          <details id="comparison-updated-report" class="comparison-report-details">
-            <summary>Agent-updated site report and evidence</summary>
-            <div id="comparison-updated-report-content" class="comparison-report-content"></div>
-          </details>
-        </section>
-
-        <p class="limitation-banner"><span aria-hidden="true">i</span> Sample keyboard-assessment comparison.</p>
-          </div>
-        </details>
+        <div class="comparison-side-by-side">
+          <section class="comparison-run-group" aria-labelledby="broken-demo-heading">
+            <h3 id="broken-demo-heading">Broken demo</h3>
+            <div id="comparison-broken-runs" class="comparison-run-results"></div>
+          </section>
+          <section class="comparison-run-group" aria-labelledby="fixed-demo-heading">
+            <h3 id="fixed-demo-heading">Fixed demo</h3>
+            <div id="comparison-fixed-runs" class="comparison-run-results"></div>
+          </section>
+        </div>
       </section>
 
       <footer class="site-footer">

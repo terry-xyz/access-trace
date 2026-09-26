@@ -3,18 +3,7 @@ import {
   validateAssessmentGoal,
   validateTargetUrl,
 } from "./assessment.mjs";
-import {
-  CONSISTENCY_RUN_COUNTS,
-  buildSiteComparison,
-  formatCount,
-  formatTerminalStatus,
-} from "./comparison.mjs";
-import {
-  AGENT_UPDATED_GOAL_FOCUSED_SAMPLE,
-  AGENT_UPDATED_WHOLE_SITE_SAMPLE,
-  GOAL_FOCUSED_SAMPLE,
-  WHOLE_SITE_SAMPLE,
-} from "./sample-report.mjs";
+import { CONSISTENCY_RUN_COUNTS, summarizeLiveComparisonCounts } from "./live-comparison.mjs";
 
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
@@ -47,8 +36,14 @@ const scopeStatus = document.querySelector("#scope-status");
 const scopeChip = document.querySelector("#scope-chip");
 const submitLabel = document.querySelector("#submit-label");
 const comparisonButton = document.querySelector("#view-comparison");
-const comparisonSection = document.querySelector("#sample-comparison");
+const comparisonSection = document.querySelector("#comparison-section");
 const comparisonHeading = document.querySelector("#comparison-heading");
+const comparisonCancelButton = document.querySelector("#cancel-comparison-run");
+const comparisonProgress = document.querySelector("#comparison-progress");
+const comparisonProgressLabel = document.querySelector("#comparison-progress-label");
+const comparisonProgressCount = document.querySelector("#comparison-progress-count");
+const comparisonProgressTotal = document.querySelector("#comparison-progress-total");
+const comparisonRunStatus = document.querySelector("#comparison-run-status");
 const setupSection = document.querySelector("#setup");
 const newAssessmentButton = document.querySelector("#new-assessment");
 const navButtons = {
@@ -58,6 +53,8 @@ const navButtons = {
 let liveRecordUrl;
 let reportRenderSequence = 0;
 let activeLiveRunId = null;
+let activeRunContext = null;
+let workflowInProgress = false;
 
 /** setActiveView keeps one focused app screen visible without scrolling the document. */
 function setActiveView(view) {
@@ -68,6 +65,99 @@ function setActiveView(view) {
     if (key === view) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   }
+}
+
+/** setWorkflowBusy locks settings and navigation for the complete create, execute, and review flow. */
+function setWorkflowBusy(busy) {
+  workflowInProgress = busy;
+  for (const control of form.querySelectorAll("input, select, textarea, button")) {
+    control.disabled = busy;
+  }
+  for (const button of Object.values(navButtons)) button.disabled = busy;
+}
+
+/** setCancelableRun exposes cancellation only for the currently executing browser journey. */
+function setCancelableRun(runId, context) {
+  activeLiveRunId = runId;
+  activeRunContext = runId ? context : null;
+  cancelLiveAssessmentButton.hidden = !runId || context !== "single";
+  comparisonCancelButton.hidden = !runId || context !== "comparison";
+  cancelLiveAssessmentButton.disabled = false;
+  comparisonCancelButton.disabled = false;
+}
+
+/** clearCancelableRun removes the stop target as soon as the stored journey reaches a terminal state. */
+function clearCancelableRun(runId) {
+  if (activeLiveRunId !== runId) return;
+  setCancelableRun(null, null);
+}
+
+/** waitForRunTerminal watches durable run status while execute remains open for the evidence review. */
+async function waitForRunTerminal(runId, shouldContinue, onTerminal) {
+  while (shouldContinue()) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1500);
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        const record = await response.json();
+        if (record && typeof record.status === "string" && record.status !== "IN_PROGRESS") {
+          onTerminal(record.status);
+          return;
+        }
+      }
+    } catch {
+      // A failed status poll does not change the execute request or its returned record.
+    } finally {
+      clearTimeout(timeout);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+}
+
+/** executeRun watches terminal browser status independently from the final review response. */
+async function executeRun(runId, context) {
+  let requestSettled = false;
+  const monitor = waitForRunTerminal(runId, () => !requestSettled, () => {
+    clearCancelableRun(runId);
+    if (context === "single") {
+      liveAssessmentStatus.textContent = "Browser run finished. Evidence review is running…";
+      setRunStage(90, "Reviewing evidence", "Browser run saved; preparing its evidence review.");
+    } else {
+      comparisonRunStatus.textContent = "Browser run finished. Its evidence review is running…";
+    }
+  });
+
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/execute`, {
+      method: "POST",
+    });
+    const result = await readResponseJson(response);
+    return { response, result };
+  } finally {
+    requestSettled = true;
+    await monitor;
+    clearCancelableRun(runId);
+  }
+}
+
+/** readResponseJson tolerates a non-JSON server failure so each comparison slot can continue. */
+async function readResponseJson(response) {
+  try {
+    const value = await response.json();
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+/** responseError uses only the server's bounded public message, with a safe operation fallback. */
+function responseError(result, fallback) {
+  return typeof result?.error?.message === "string" && result.error.message.trim()
+    ? result.error.message.slice(0, 300)
+    : fallback;
 }
 
 /** setRunStage reports completed workflow steps; page coverage appears in the final report. */
@@ -91,27 +181,6 @@ function setRunStage(value, label, message) {
   }
 }
 
-const ASSESSMENT_EVIDENCE_PRESENTATION = {
-  action: {
-    label: "keyboard action",
-    shortLabel: "action",
-    describeRecord: ({ key, target, result }) => `${key} at ${target}: ${result}`,
-    describeChange: (change) => (
-      `Keyboard action at ${change.target}: original “${change.original.result}” (${change.original.outcome}), updated “${change.updated.result}” (${change.updated.outcome}).`
-    ),
-    describeFailure: (record) => record.result,
-  },
-  focus: {
-    label: "focus observation",
-    shortLabel: "focus",
-    describeRecord: ({ target, role, indicator }) => `${target} (${role}): ${indicator}`,
-    describeChange: (change) => (
-      `Focus observation at ${change.target}: original “${change.original.indicator}”, updated “${change.updated.indicator}” (${formatEvidenceDirection(change.direction)}).`
-    ),
-    describeFailure: (record) => record.indicator,
-  },
-};
-
 /** formatScopeLabel gives a stable presentation label to the stored assessment-scope value. */
 function formatScopeLabel(scope) {
   return scope === "whole-site" ? "Whole site" : "Goal focused";
@@ -132,25 +201,12 @@ function updateScopePreview() {
   scopeChip.textContent = isWholeSite ? "Whole site" : "Goal focused";
   submitLabel.textContent = "Start assessment";
   setError(goalInput, goalError, "");
-  if (!activeLiveRunId) setActiveView("setup");
-}
-
-/** comparisonEvidenceLink labels a reference to its source report's underlying evidence. */
-function comparisonEvidenceLink(version, record, runNumber = 1) {
-  const reportName = version === "original" ? "Original" : "Updated";
-  return { version, id: record.id, runNumber, label: `${reportName} run ${runNumber} ${record.id}` };
-}
-
-/** comparisonEvidencePair links a changed item to both reports with consistent labels. */
-function comparisonEvidencePair(original, updated, runNumber = 1) {
-  return [
-    comparisonEvidenceLink("original", original, runNumber),
-    comparisonEvidenceLink("updated", updated, runNumber),
-  ];
+  if (!workflowInProgress) setActiveView("setup");
 }
 
 /** validateCurrentConfiguration applies the same target and goal boundary to reports and comparisons. */
 function validateCurrentConfiguration() {
+  if (workflowInProgress) return null;
   comparisonSection.hidden = true;
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
@@ -522,6 +578,7 @@ async function handleLiveAssessment() {
   if (!configuration) return;
 
   setActiveView("live");
+  setWorkflowBusy(true);
   liveTerminal.hidden = false;
   liveResult.hidden = true;
   terminalLog.replaceChildren();
@@ -529,9 +586,6 @@ async function handleLiveAssessment() {
   liveAssessmentStatus.textContent = "Creating a fresh local run…";
   liveRecordDownload.hidden = true;
   liveRecordDetails.hidden = true;
-  liveAssessmentButton.disabled = true;
-  for (const button of Object.values(navButtons)) button.disabled = true;
-
   try {
     const createResponse = await fetch("/api/runs", {
       method: "POST",
@@ -542,23 +596,24 @@ async function handleLiveAssessment() {
         simulationMode: configuration.simulationMode,
       }),
     });
-    const created = await createResponse.json();
+    const created = await readResponseJson(createResponse);
     if (!createResponse.ok) {
-      throw new Error(created.error?.message || "The run could not be created.");
+      throw new Error(responseError(created, "The run could not be created."));
+    }
+    if (typeof created.id !== "string" || !created.id) {
+      throw new Error("The server did not return a run identifier.");
     }
 
     setRunStage(50, "Run created", "Local run record created.");
-    activeLiveRunId = created.id;
-    cancelLiveAssessmentButton.hidden = false;
-    cancelLiveAssessmentButton.disabled = false;
+    setCancelableRun(created.id, "single");
     setRunStage(75, "Assessment running", "Isolated keyboard assessment started.");
     liveAssessmentStatus.textContent = "The isolated browser is checking the page…";
-    const executeResponse = await fetch(`/api/runs/${encodeURIComponent(created.id)}/execute`, {
-      method: "POST",
-    });
-    const result = await executeResponse.json();
+    const { response: executeResponse, result } = await executeRun(created.id, "single");
     if (!executeResponse.ok) {
-      throw new Error(result.error?.message || "The run could not be completed.");
+      throw new Error(responseError(result, "The run could not be completed."));
+    }
+    if (!result || typeof result.id !== "string" || !result.id) {
+      throw new Error("The server did not return a completed run record.");
     }
 
     setRunStage(100, "Result saved", `Run saved with status ${result.status}.`);
@@ -581,459 +636,178 @@ async function handleLiveAssessment() {
       : "The local assessment could not be completed.";
     setRunStage(liveRunProgress.value, "Run needs attention", "The run did not return a completed result.");
   } finally {
-    activeLiveRunId = null;
-    cancelLiveAssessmentButton.hidden = true;
-    cancelLiveAssessmentButton.disabled = false;
-    liveAssessmentButton.disabled = false;
-    for (const button of Object.values(navButtons)) button.disabled = false;
+    if (activeLiveRunId) clearCancelableRun(activeLiveRunId);
+    setWorkflowBusy(false);
   }
 }
 
-/** handleCancelLiveAssessment asks the server to cancel the registered planner while execute remains pending. */
+/** handleCancelLiveAssessment cancels only the captured browser run while it remains in progress. */
 async function handleCancelLiveAssessment() {
   const runId = activeLiveRunId;
   if (!runId) return;
 
-  cancelLiveAssessmentButton.disabled = true;
-  liveAssessmentStatus.textContent = "Requesting cancellation…";
+  const context = activeRunContext;
+  const button = context === "comparison" ? comparisonCancelButton : cancelLiveAssessmentButton;
+  button.disabled = true;
+  setRunStatus(context, "Requesting cancellation…");
   try {
     const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
       method: "POST",
     });
-    const result = await response.json();
+    const result = await readResponseJson(response);
     if (!response.ok) {
-      throw new Error(result.error?.message || "The run could not be cancelled.");
+      throw new Error(responseError(result, "The run could not be cancelled."));
     }
     if (activeLiveRunId === runId) {
-      liveAssessmentStatus.textContent = "Cancellation requested. Waiting for the run to finish…";
+      setRunStatus(context, "Cancellation requested. Waiting for the browser run to finish…");
     }
   } catch (error) {
     if (activeLiveRunId === runId) {
-      liveAssessmentStatus.textContent = error instanceof Error
-        ? error.message
-        : "The run could not be cancelled.";
-      cancelLiveAssessmentButton.disabled = false;
+      setRunStatus(context, error instanceof Error ? error.message : "The run could not be cancelled.");
+      button.disabled = false;
     }
   }
 }
 
-/** getComparisonSettings records the same selected run count and context for both versions. */
+/** setRunStatus routes cancellation and progress messages to the currently visible workflow. */
+function setRunStatus(context, message) {
+  if (context === "comparison") comparisonRunStatus.textContent = message;
+  else liveAssessmentStatus.textContent = message;
+}
+
+/** getComparisonSettings records the shared scope and configured real-run count. */
 function getComparisonSettings(configuration) {
   const consistencyLevel = consistencyInput.value;
   return {
-    targetUrl: configuration.targetUrl,
+    targetUrl: "Built-in broken and fixed demos",
     scope: configuration.scope,
     goal: configuration.goal,
     simulationMode: configuration.simulationMode,
-    interactionProfile: "Keyboard only",
-    browserConditions: "Same controlled local browser conditions",
     consistencyLevel,
     runsPerVersion: CONSISTENCY_RUN_COUNTS[consistencyLevel],
   };
 }
 
-/** createComparisonSamples creates the same number of explicitly labeled sample slots per version. */
-function createComparisonSamples(configuration, settings) {
-  const samples = configuration.scope === "whole-site"
-    ? [WHOLE_SITE_SAMPLE, AGENT_UPDATED_WHOLE_SITE_SAMPLE]
-    : [GOAL_FOCUSED_SAMPLE, AGENT_UPDATED_GOAL_FOCUSED_SAMPLE];
-
-  return samples.map((sample, versionIndex) => Array.from(
-    { length: settings.runsPerVersion },
-    (_, index) => createRepresentativeComparisonRun({
-      sample,
-      settings,
-      goal: configuration.goal,
-      version: versionIndex === 0 ? "original" : "updated",
-      index,
-    }),
-  ));
-}
-
-/** createRepresentativeComparisonRun keeps incomplete and agent-failed sample states visible. */
-function createRepresentativeComparisonRun({ sample, settings, goal, version, index }) {
-  const runNumber = index + 1;
-  const run = {
-    ...sample,
-    runId: index === 0 ? sample.runId : `${sample.runId}-RUN-${runNumber}`,
-    goal,
-    assessmentSettings: settings,
-    comparisonRunNumber: runNumber,
-    representativeRunNote: index === 0
-      ? "Representative sample slot; no browser run has taken place."
-      : `Illustrative repeat slot ${runNumber}; this repeats representative sample evidence and is not an independent browser run.`,
-  };
-
-  if (index !== 1) return run;
-  if (version === "original") {
-    return {
-      ...run,
-      terminalStatus: "INCONCLUSIVE",
-      outcomeTitle: "Representative repeat run remained inconclusive",
-      explanationTitle: "This repeat slot is inconclusive.",
-      explanation: "The representative website-check values remain visible, but this sample slot is inconclusive and cannot support a resolved comparison on its own.",
-    };
-  }
-
-  return {
-    ...run,
-    terminalStatus: "AGENT_FAILED",
-    outcomeTitle: "Representative repeat run recorded an agent failure",
-    explanationTitle: "This repeat slot records an agent failure.",
-    explanation: "The representative website-check values remain visible, while the separate agent failure prevents this sample slot from supporting a resolved comparison on its own.",
-    agentFailures: [
-      ...(run.agentFailures ?? []),
-      "Representative agent failure retained for this sample slot.",
-    ],
-  };
-}
-
-/** handleComparisonRequest shows a validated comparison and moves focus to its result heading. */
-function handleComparisonRequest() {
+/** handleComparisonRequest runs paired demo slots in order and keeps each response isolated. */
+async function handleComparisonRequest() {
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
 
   const settings = getComparisonSettings(configuration);
-  const [original, updated] = createComparisonSamples(configuration, settings);
-  const comparison = buildSiteComparison(original, updated);
-  renderComparison(comparison);
-  setActiveView("comparison");
-  comparisonHeading.focus({ preventScroll: true });
-}
-
-/** renderComparison puts score, metric, and coverage changes ahead of its supporting reports. */
-function renderComparison(comparison) {
-  const status = document.querySelector("#comparison-status");
-  status.textContent = comparison.outcome.label;
-  status.dataset.outcome = comparison.outcome.status;
-  document.querySelector("#comparison-summary").textContent = comparison.outcome.summary;
-
-  document.querySelector("#comparison-original-score").textContent = formatScore(comparison.score.original);
-  document.querySelector("#comparison-original-count").textContent = formatScoreCounts(comparison.score.original);
-  document.querySelector("#comparison-original-range").textContent = formatScoreRange(comparison.score.original);
-  document.querySelector("#comparison-updated-score").textContent = formatScore(comparison.score.updated);
-  document.querySelector("#comparison-updated-count").textContent = formatScoreCounts(comparison.score.updated);
-  document.querySelector("#comparison-updated-range").textContent = formatScoreRange(comparison.score.updated);
-  document.querySelector("#comparison-score-delta").textContent = formatSigned(comparison.score.deltaPercentagePoints);
-  document.querySelector("#comparison-original-coverage").textContent = comparison.coverage.original.label;
-  document.querySelector("#comparison-updated-coverage").textContent = comparison.coverage.updated.label;
-  document.querySelector("#comparison-coverage-delta").textContent = formatCoverageChange(comparison.coverage);
-
-  renderComparisonRunResults(comparison.runs, comparison.runSummaries);
-  renderComparisonMetrics(comparison.metrics);
-  renderComparisonEvidence(comparison.evidenceByRun);
-  renderComparisonSettings(comparison.settings);
-  renderComparisonReports(
-    document.querySelector("#comparison-original-report-content"),
-    comparison.runs.original,
-    "original",
-  );
-  renderComparisonReports(
-    document.querySelector("#comparison-updated-report-content"),
-    comparison.runs.updated,
-    "updated",
-  );
-}
-
-/** formatScore labels the average and keeps a missing score explicit instead of presenting it as zero. */
-function formatScore(score) {
-  const value = score.averagePercentage ?? score.percentage;
-  return value === null ? "Unavailable" : `${value}%`;
-}
-
-/** formatScoreCounts distinguishes pooled check totals from the number of scored runs. */
-function formatScoreCounts(score) {
-  if (score.passed === null || score.attempted === null) {
-    return `${score.scoredRuns} of ${formatCount(score.totalRuns, "run")} scored`;
-  }
-  return `${score.passed} passed / ${score.attempted} attempted across ${formatCount(score.totalRuns, "run")}`;
-}
-
-/** formatScoreRange reports only observed score bounds and names any runs without a score. */
-function formatScoreRange(score) {
-  const range = score.range
-    ? `Range ${score.range.minimum}–${score.range.maximum}%`
-    : "Range unavailable";
-  return `${range} · ${score.scoredRuns} of ${formatCount(score.totalRuns, "run")} scored${score.unscoredRuns > 0 ? `; ${score.unscoredRuns} without a score` : ""}`;
-}
-
-/** formatSigned makes direction visible in score, coverage, and metric changes. */
-function formatSigned(value) {
-  if (value === null) return "Not comparable";
-  if (value === 0) return "No change";
-  return `${value > 0 ? "+" : ""}${value}`;
-}
-
-/** formatCoverageChange keeps both coverage counts visible alongside their percentage-point change. */
-function formatCoverageChange(coverage) {
-  if (!coverage.comparable) return "Coverage change unavailable";
-  const changed = coverage.checkedDelta === 0 && coverage.totalDelta === 0
-    ? "No change in checked or declared coverage"
-    : `${formatSigned(coverage.checkedDelta)} checked; ${formatSigned(coverage.totalDelta)} declared`;
-  return `${changed}; ${formatSigned(coverage.percentagePointDelta)} percentage points`;
-}
-
-/** renderComparisonMetrics exposes every metric row and labels its direction in words. */
-function renderComparisonMetrics(metrics) {
-  const body = document.querySelector("#comparison-metrics-body");
-  const fragment = document.createDocumentFragment();
-
-  for (const metric of metrics) {
-    const row = document.createElement("tr");
-    const name = document.createElement("th");
-    name.scope = "row";
-    name.textContent = metric.name;
-    const original = document.createElement("td");
-    original.textContent = formatMetricValue(metric.original);
-    const updated = document.createElement("td");
-    updated.textContent = formatMetricValue(metric.updated);
-    const change = document.createElement("td");
-    change.textContent = metric.percentagePointDelta === null
-      ? "Not comparable"
-      : metric.original?.totalRuns > 1
-        ? `${formatSigned(metric.percentagePointDelta)} pp average`
-        : `${formatSigned(metric.passedDelta)} checks; ${formatSigned(metric.percentagePointDelta)} pp`;
-    const direction = document.createElement("td");
-    const directionLabel = document.createElement("span");
-    directionLabel.className = "metric-direction";
-    directionLabel.dataset.direction = metric.direction;
-    directionLabel.textContent = metric.direction === "unavailable"
-      ? "Unavailable"
-      : metric.direction === "unchanged"
-        ? "No change"
-        : metric.direction === "improved"
-          ? "Improved"
-          : "Regression";
-    direction.append(directionLabel);
-    row.append(name, original, updated, change, direction);
-    fragment.append(row);
-  }
-
-  body.replaceChildren(fragment);
-}
-
-/** formatMetricValue shows passed and attempted counts as well as the pass rate. */
-function formatMetricValue(metric) {
-  if (metric?.totalRuns > 1) {
-    return metric.scoredRuns === metric.totalRuns
-      ? `${metric.averagePercentage}% average (${metric.scoredRuns} runs)`
-      : `Unavailable (${metric.scoredRuns} of ${metric.totalRuns} runs recorded)`;
-  }
-  return metric
-    ? `${metric.passed} / ${metric.attempted} (${metric.percentage ?? "—"}%)`
-    : "Not recorded";
-}
-
-/** renderComparisonRunResults gives every result row status and failure context before report details open. */
-function renderComparisonRunResults(runs, summaries) {
-  const container = document.querySelector("#comparison-run-results");
-  const fragment = document.createDocumentFragment();
-  for (const [version, title] of [["original", "Original site"], ["updated", "Agent-updated site"]]) {
-    const group = document.createElement("section");
-    group.className = "comparison-run-group";
-    const heading = document.createElement("h4");
-    heading.textContent = title;
-    const list = document.createElement("ol");
-    for (const [index, run] of runs[version].entries()) {
-      const summary = summaries[version][index];
-      const item = document.createElement("li");
-      const score = summary.score.percentage === null ? "score unavailable" : `${summary.score.percentage}% score`;
-      const runHeading = document.createElement("strong");
-      runHeading.textContent = `Run ${index + 1} · ${formatTerminalStatus(summary.terminalStatus)}`;
-      const details = document.createElement("span");
-      details.textContent = `${run.runId}: ${score}; ${summary.coverage ?? "coverage unavailable"}.`;
-      item.append(runHeading, document.createTextNode(" — "), details);
-      if (summary.agentFailures.length > 0) {
-        const failures = document.createElement("span");
-        failures.className = "comparison-run-agent-failures";
-        failures.textContent = `Agent failures: ${summary.agentFailures.join("; ")}`;
-        item.append(failures);
-      }
-      if (summary.warnings.length > 0) {
-        const warnings = document.createElement("span");
-        warnings.className = "comparison-run-agent-failures";
-        warnings.textContent = `Warnings: ${summary.warnings.join("; ")}`;
-        item.append(warnings);
-      }
-      list.append(item);
-    }
-    group.append(heading, list);
-    fragment.append(group);
-  }
-  container.replaceChildren(fragment);
-}
-
-/** renderComparisonEvidence names every run's differences and links to that run's report. */
-function renderComparisonEvidence(evidenceByRun) {
-  const list = document.querySelector("#comparison-evidence-changes");
-  const fragment = document.createDocumentFragment();
-  const addEvidenceItem = (runNumber, text, links = []) => {
-    const item = document.createElement("li");
-    item.append(document.createTextNode(`Run ${runNumber}: ${text}`));
-    for (const { version, id, label, runNumber: linkRunNumber } of links) {
-      item.append(document.createTextNode(" "));
-      const link = document.createElement("a");
-      link.href = `#comparison-${version}-run-${linkRunNumber}-${id}`;
-      link.textContent = label;
-      link.addEventListener("click", () => {
-        document.querySelector(`#comparison-${version}-report`).open = true;
-      });
-      item.append(link);
-    }
-    fragment.append(item);
+  const totalSlots = settings.runsPerVersion * 2;
+  const slots = { broken: [], fixed: [] };
+  const containers = {
+    broken: document.querySelector("#comparison-broken-runs"),
+    fixed: document.querySelector("#comparison-fixed-runs"),
   };
 
-  for (const { runNumber, evidence } of evidenceByRun) {
-    const addRunEvidence = (text, links = []) => addEvidenceItem(runNumber, text, links);
-    for (const change of evidence.assessmentChanges) {
-    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[change.kind];
-    if (change.change !== "changed") {
-      const version = change.change === "added" ? "updated" : "original";
-      const reportName = version === "updated" ? "Updated" : "Original";
-      const record = change.record;
-      const addition = record.outcome === "passed"
-        ? `a passing ${presentation.label}`
-        : `a ${presentation.label} without a recorded outcome`;
-      const description = change.change === "added"
-        ? `${reportName} report adds ${addition}: ${presentation.describeRecord(record)}.`
-        : `Original report has no matching updated ${presentation.label}: ${presentation.describeRecord(record)} (${record.outcome ?? "outcome not recorded"}).`;
-      addRunEvidence(description, [comparisonEvidenceLink(version, record, runNumber)]);
-      continue;
+  let processed = 0;
+  try {
+    setActiveView("comparison");
+    setWorkflowBusy(true);
+    comparisonHeading.focus({ preventScroll: true });
+    containers.broken.replaceChildren();
+    containers.fixed.replaceChildren();
+    renderComparisonSettings(settings);
+    comparisonProgress.max = totalSlots;
+    comparisonProgress.value = 0;
+    comparisonProgressCount.textContent = "0";
+    comparisonProgressTotal.textContent = String(totalSlots);
+    comparisonProgress.setAttribute("aria-valuetext", "0 of " + totalSlots + " assessment runs processed");
+    comparisonProgressLabel.textContent = "Preparing comparison";
+    comparisonRunStatus.textContent = "Creating fresh runs for both built-in demos…";
+    renderComparisonSummary(slots);
+
+    for (let index = 0; index < settings.runsPerVersion; index += 1) {
+      for (const demo of [
+        { key: "broken", label: "Broken demo", path: "/demo/broken" },
+        { key: "fixed", label: "Fixed demo", path: "/demo/fixed" },
+      ]) {
+        const runNumber = index + 1;
+        comparisonProgressLabel.textContent = demo.label + " · run " + runNumber + " of " + settings.runsPerVersion;
+        comparisonRunStatus.textContent = "Creating a fresh " + demo.label.toLowerCase() + " run…";
+        let operation = "creation";
+        let slot;
+        try {
+          const createResponse = await fetch("/api/runs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              targetUrl: window.location.origin + demo.path,
+              goal: configuration.goal,
+              simulationMode: configuration.simulationMode,
+            }),
+          });
+          const created = await readResponseJson(createResponse);
+          if (!createResponse.ok) {
+            throw new Error(responseError(created, "The run could not be created."));
+          }
+          if (typeof created.id !== "string" || !created.id) {
+            throw new Error("The server did not return a run identifier.");
+          }
+
+          operation = "execution";
+          setCancelableRun(created.id, "comparison");
+          comparisonRunStatus.textContent = "Running " + demo.label.toLowerCase() + " · run " + runNumber + "…";
+          const { response, result } = await executeRun(created.id, "comparison");
+          if (!response.ok) {
+            throw new Error(responseError(result, "The run could not be completed."));
+          }
+          if (!result || typeof result.id !== "string" || !result.id) {
+            throw new Error("The server did not return a completed run record.");
+          }
+          slot = { record: result };
+        } catch (error) {
+          if (activeLiveRunId) clearCancelableRun(activeLiveRunId);
+          const detail = error instanceof Error && error.message
+            ? error.message.replace(/[\r\n\t]+/g, " ").slice(0, 300)
+            : "The local run could not be completed.";
+          slot = {
+            record: null,
+            error: (operation === "creation" ? "Creation failed: " : "Execution failed: ") + detail,
+          };
+        }
+
+        slots[demo.key].push(slot);
+        processed += 1;
+        comparisonProgress.value = processed;
+        comparisonProgressCount.textContent = String(processed);
+        comparisonProgress.setAttribute(
+          "aria-valuetext",
+          processed + " of " + totalSlots + " assessment runs processed",
+        );
+        renderComparisonSide(demo.key, slots[demo.key], containers[demo.key]);
+        renderComparisonSummary(slots);
+        comparisonRunStatus.textContent = slot.record
+          ? demo.label + " run " + runNumber + " returned with status " + (slot.record.status || "not recorded") + "."
+          : demo.label + " run " + runNumber + " failed: " + slot.error;
+      }
     }
 
-    addRunEvidence(presentation.describeChange(change), comparisonEvidencePair(change.original, change.updated, runNumber));
-    }
-    for (const failure of evidence.persistentFailures) {
-    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
-    addRunEvidence(
-      `Both reports record a failed ${presentation.shortLabel} check at ${failure.target}.`,
-      comparisonEvidencePair(failure.original, failure.updated, runNumber),
-    );
-    }
-    for (const failure of evidence.additionalUpdatedFailures) {
-    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
-    addRunEvidence(
-      `Updated report adds a failed ${presentation.label}: ${presentation.describeFailure(failure.record)} at ${failure.target}.`,
-      [comparisonEvidenceLink("updated", failure.record, runNumber)],
-    );
-    }
-    for (const failure of evidence.unpairedOriginalFailures) {
-    const presentation = ASSESSMENT_EVIDENCE_PRESENTATION[failure.kind];
-    addRunEvidence(
-      `Original failed ${presentation.shortLabel} evidence at ${failure.target} has no matching updated observation; its outcome is unknown.`,
-      [comparisonEvidenceLink("original", failure.record, runNumber)],
-    );
-    }
-    for (const change of evidence.supportingChanges) {
-      appendSupportingEvidenceDifference(addRunEvidence, change, runNumber);
-    }
-    for (const message of evidence.addedAgentFailures) {
-      addRunEvidence(`Updated report also records an agent failure: ${message}`);
-    }
-    for (const warning of evidence.addedWarnings) {
-      addRunEvidence(`Updated report adds a warning: ${warning}`);
-    }
-    for (const message of evidence.resolvedAgentFailures) {
-      addRunEvidence(`Original report records an agent failure not present in the updated report: ${message}`);
-    }
-    for (const warning of evidence.resolvedWarnings) {
-      addRunEvidence(`Original report adds a warning not present in the updated report: ${warning}`);
-    }
-  }
-
-  if (fragment.childNodes.length === 0) {
-    const item = document.createElement("li");
-    item.textContent = "No action, focus, recovery, screenshot, or citation differences were recorded in any run.";
-    fragment.append(item);
-  }
-  list.replaceChildren(fragment);
-}
-
-/** appendSupportingEvidenceDifference gives recovery notes, screenshots, and citations concise linked summaries. */
-function appendSupportingEvidenceDifference(addEvidenceItem, change, runNumber) {
-  if (change.kind === "recovery") {
-    if (change.change === "changed") {
-      addEvidenceItem(
-        `Recovery evidence ${change.original.id} changed: original “${change.original.text}”, updated “${change.updated.text}”.`,
-        comparisonEvidencePair(change.original, change.updated, runNumber),
-      );
-    } else {
-      const version = change.change === "added" ? "updated" : "original";
-      const record = change.record;
-      addEvidenceItem(
-        `${version === "updated" ? "Updated" : "Original"} report ${change.change} recovery evidence ${record.id}: ${record.text}.`,
-        [comparisonEvidenceLink(version, record, runNumber)],
-      );
-    }
-    return;
-  }
-
-  if (change.kind === "reference") {
-    const original = change.original;
-    const updated = change.updated;
-    const record = change.record;
-    const links = change.change === "changed"
-      ? comparisonEvidencePair(original, updated, runNumber)
-      : [comparisonEvidenceLink(change.change === "added" ? "updated" : "original", record, runNumber)];
-    const description = change.change === "changed"
-      ? `Citation ${original.id} changed label from “${original.label}” to “${updated.label}”.`
-      : `${change.change === "added" ? "Updated" : "Original"} report ${change.change} evidence citation ${record.id}: ${record.label}.`;
-    addEvidenceItem(description, links);
-    return;
-  }
-
-  const original = change.original;
-  const updated = change.updated;
-  const record = change.record;
-  const describeScreenshot = (screenshot) => (
-    `${screenshot.title} for ${screenshot.siteName}; ${screenshot.description} Navigation: ${describeSampleNavigation(screenshot.navigation)}.`
-  );
-  if (change.change === "changed") {
-    addEvidenceItem(
-      `Screenshot mockup changed (${change.changedFields.join(", ")}): original ${describeScreenshot(original)}, updated ${describeScreenshot(updated)}.`,
-      comparisonEvidencePair(original, updated, runNumber),
-    );
-  } else {
-    const version = change.change === "added" ? "updated" : "original";
-    addEvidenceItem(
-      `${version === "updated" ? "Updated" : "Original"} report ${change.change} screenshot mockup ${record.id}: ${describeScreenshot(record)}.`,
-      [comparisonEvidenceLink(version, record, runNumber)],
-    );
+    comparisonProgressLabel.textContent = "Comparison complete";
+    comparisonRunStatus.textContent = "Processed " + processed + " of " + totalSlots + " assessment slots.";
+  } catch (error) {
+    comparisonProgressLabel.textContent = "Comparison stopped";
+    comparisonRunStatus.textContent = error instanceof Error
+      ? error.message
+      : "The comparison could not continue.";
+  } finally {
+    if (activeLiveRunId) clearCancelableRun(activeLiveRunId);
+    setWorkflowBusy(false);
   }
 }
 
-/** describeSampleNavigation distinguishes the focused sample item from other mockup navigation entries. */
-function describeSampleNavigation(navigation) {
-  return navigation
-    .map(({ label, focused }) => `${label}${focused ? " (focused)" : ""}`)
-    .join(", ");
-}
-
-/** formatEvidenceDirection gives explicit outcome changes a readable label in the evidence summary. */
-function formatEvidenceDirection(direction) {
-  return direction === "improved"
-    ? "improved"
-    : direction === "regressed"
-      ? "regressed"
-      : direction === "changed"
-        ? "outcome unchanged"
-        : "direction unresolved";
-}
-
-/** renderComparisonSettings makes the shared setup and selected run count explicit. */
+/** renderComparisonSettings shows the exact shared choices used in every create request. */
 function renderComparisonSettings(settings) {
   const list = document.querySelector("#comparison-settings");
   const values = [
-    ["Target", settings.targetUrl],
-    ["Assessment scope", formatScopeLabel(settings.scope)],
-    ["Goal", settings.goal ?? "None (whole-site)"],
+    ["Targets", settings.targetUrl],
+    ["Assessment scope", settings.scope === "whole-site" ? "Whole page" : "Goal focused"],
+    ["Goal", settings.goal || "None configured"],
     ["Simulation mode", settings.simulationMode ? "On" : "Off"],
-    ["Interaction profile", settings.interactionProfile],
-    ["Browser conditions", settings.browserConditions],
-    ["Consistency", `${settings.consistencyLevel} — ${formatCount(settings.runsPerVersion, "assessment")} per version`],
+    ["Runs per demo", settings.consistencyLevel + " · " + formatRunCount(settings.runsPerVersion)],
   ];
   const fragment = document.createDocumentFragment();
-
   for (const [label, value] of values) {
     const item = document.createElement("div");
     item.className = "comparison-setting";
@@ -1044,257 +818,135 @@ function renderComparisonSettings(settings) {
     item.append(term, description);
     fragment.append(item);
   }
-
   list.replaceChildren(fragment);
 }
 
-/** renderComparisonReports keeps every run's report and evidence available inside its version details. */
-function renderComparisonReports(container, samples, version) {
+/** renderComparisonSide renders only the current slot's returned record or its own safe error. */
+function renderComparisonSide(demo, slots, container) {
   const fragment = document.createDocumentFragment();
-  for (const [index, sample] of samples.entries()) {
-    const run = document.createElement("section");
-    run.className = "comparison-report-run";
+  for (const [index, slot] of slots.entries()) {
+    const article = document.createElement("article");
+    article.className = "comparison-slot";
     const heading = document.createElement("h4");
-    heading.textContent = `Run ${index + 1} · ${sample.runId}`;
-    run.append(heading);
-    renderComparisonReport(run, sample, version, index + 1);
-    fragment.append(run);
+    heading.textContent = "Run " + (index + 1);
+    article.append(heading);
+    if (slot.record) {
+      const reportRoot = document.createElement("div");
+      reportRoot.className = "run-report-root comparison-run-report";
+      reportRoot.id = "comparison-" + demo + "-run-" + (index + 1);
+      renderRunReport(slot.record, reportRoot);
+      article.append(reportRoot);
+    } else {
+      const error = document.createElement("p");
+      error.className = "comparison-slot-error";
+      error.setAttribute("role", "status");
+      error.textContent = slot.error || "This run did not return a record.";
+      article.append(error);
+    }
+    fragment.append(article);
   }
   container.replaceChildren(fragment);
 }
 
-/** renderComparisonReport keeps all report facts and evidence available inside one run's details. */
-function renderComparisonReport(container, sample, version, runNumber) {
-  const fragment = document.createDocumentFragment();
-  const idPrefix = `comparison-${version}-run-${runNumber}-`;
-  const evidenceIds = getComparisonEvidenceIds(sample, idPrefix);
-
-  appendComparisonHeading(fragment, "Report summary");
-  appendComparisonParagraph(fragment, "Run", sample.runId);
-  appendComparisonParagraph(fragment, "Sample provenance", sample.representativeRunNote);
-  appendComparisonParagraph(fragment, "Terminal state", formatTerminalStatus(sample.terminalStatus));
-  appendComparisonParagraph(fragment, "Assessment scope", formatScopeLabel(sample.scope));
-  appendComparisonParagraph(fragment, "Target", sample.assessmentSettings.targetUrl);
-  appendComparisonParagraph(fragment, "Goal", sample.assessmentSettings.goal ?? "None supplied");
-  appendComparisonParagraph(fragment, "Simulation mode", sample.assessmentSettings.simulationMode ? "On" : "Off");
-  appendComparisonParagraph(fragment, "Coverage", sample.coverage);
-  appendComparisonParagraph(fragment, "Duration", sample.duration);
-  appendComparisonParagraph(fragment, "Interaction count", String(sample.interactionCount));
-  appendComparisonParagraph(fragment, "Score", formatReportScore(sample.score));
-  appendComparisonParagraph(fragment, "Outcome", sample.outcomeTitle);
-
-  appendComparisonHeading(fragment, "Named metrics");
-  const metricsList = document.createElement("ul");
-  for (const metric of sample.metrics) {
-    const item = document.createElement("li");
-    item.textContent = `${metric.name}: ${metric.passed} of ${metric.attempted} checks passed`;
-    metricsList.append(item);
-  }
-  fragment.append(metricsList);
-
-  appendComparisonHeading(fragment, "Explanation and proposed fix");
-  appendComparisonParagraph(fragment, sample.explanationTitle, sample.explanation);
-  appendComparisonParagraph(fragment, "Confidence", `${sample.confidence} — ${sample.confidenceContext}`);
-  if (sample.proposedFix) {
-    appendComparisonParagraph(fragment, sample.proposedFixTitle, sample.proposedFix);
-  } else {
-    appendComparisonParagraph(fragment, "Proposed fix", "No evidence-supported proposed fix is available.");
-  }
-  const reference = document.createElement("p");
-  reference.className = "comparison-report-evidence";
-  reference.append(document.createTextNode("WCAG context: "));
-  const referenceLink = document.createElement("a");
-  referenceLink.href = sample.wcagReference.url;
-  referenceLink.target = "_blank";
-  referenceLink.rel = "noreferrer";
-  referenceLink.textContent = sample.wcagReference.label;
-  reference.append(referenceLink, document.createTextNode(". This is not a conformance result."));
-  fragment.append(reference);
-
-  appendComparisonHeading(fragment, "Ordered action evidence");
-  const actions = document.createElement("ol");
-  for (const action of sample.orderedActions) {
-    const item = document.createElement("li");
-    item.id = evidenceIds.get(action.id);
-    item.textContent = `${action.id} · ${action.key} · ${action.target}: ${action.result} (${action.outcome})`;
-    actions.append(item);
-  }
-  fragment.append(actions);
-
-  appendComparisonHeading(fragment, "Focus observations");
-  const focus = document.createElement("ul");
-  for (const observation of sample.focusObservations) {
-    const item = document.createElement("li");
-    item.id = evidenceIds.get(observation.id);
-    item.textContent = `${observation.id} · ${observation.target} (${observation.role}): ${observation.indicator}`;
-    focus.append(item);
-  }
-  fragment.append(focus);
-
-  appendComparisonHeading(fragment, "Screenshot mockup");
-  appendComparisonScreenshot(fragment, sample.screenshot, evidenceIds.get(sample.screenshot.id));
-
-  appendComparisonHeading(fragment, "Evidence references");
-  const references = document.createElement("ul");
-  for (const evidenceReference of sample.evidenceReferences) {
-    const item = document.createElement("li");
-    const link = document.createElement("a");
-    link.href = `#${evidenceIds.get(evidenceReference.id)}`;
-    link.textContent = evidenceReference.id;
-    item.append(link, document.createTextNode(` ${evidenceReference.label}`));
-    references.append(item);
-  }
-  fragment.append(references);
-
-  appendComparisonHeading(fragment, "Recovery evidence");
-  appendComparisonList(fragment, sample.recoveryEvidence, "text", evidenceIds);
-  appendComparisonHeading(fragment, "Agent failures");
-  appendComparisonList(fragment, sample.agentFailures, null);
-  appendComparisonHeading(fragment, "Warnings");
-  appendComparisonList(fragment, sample.warnings, null);
-
-  container.append(fragment);
-}
-
-/** formatReportScore never turns an unavailable score into a misleading null percentage. */
-function formatReportScore(score) {
-  if (!score || score.percentage === null) return score?.label ?? "Score unavailable";
-  return `${score.label} (${score.percentage}%)`;
-}
-
-/** appendComparisonScreenshot preserves the sample capture's site, navigation, and focused item in each report. */
-function appendComparisonScreenshot(parent, sampleScreenshot, evidenceId) {
-  const focusedItems = sampleScreenshot.navigation
-    .filter((entry) => entry.focused)
-    .map(({ label }) => label);
-  const navigationSummary = describeSampleNavigation(sampleScreenshot.navigation);
-  const figure = document.createElement("figure");
-  figure.id = evidenceId;
-  figure.className = "sample-capture comparison-report-screenshot";
-  figure.setAttribute("role", "img");
-  figure.setAttribute(
-    "aria-label",
-    `${sampleScreenshot.title}. ${sampleScreenshot.description} Site: ${sampleScreenshot.siteName}. Navigation: ${navigationSummary}.`,
-  );
-
-  const chrome = document.createElement("div");
-  chrome.className = "capture-chrome";
-  chrome.setAttribute("aria-hidden", "true");
-  for (let dot = 0; dot < 3; dot += 1) chrome.append(document.createElement("span"));
-  const host = document.createElement("i");
-  host.textContent = "sample.local";
-  chrome.append(host);
-
-  const content = document.createElement("div");
-  content.className = "capture-content";
-  content.setAttribute("aria-hidden", "true");
-  const brand = document.createElement("div");
-  brand.className = "capture-brand";
-  const siteName = document.createElement("span");
-  siteName.textContent = sampleScreenshot.siteName;
-  const brandMark = document.createElement("span");
-  brandMark.textContent = "▰";
-  brand.append(siteName, brandMark);
-
-  const navigation = document.createElement("div");
-  navigation.className = "capture-nav";
-  for (const entry of sampleScreenshot.navigation) {
-    const item = document.createElement("span");
-    item.textContent = entry.label;
-    if (entry.focused) item.className = "capture-focused";
-    navigation.append(item);
-  }
-
-  const shortLine = document.createElement("div");
-  shortLine.className = "capture-line capture-line-short";
-  const line = document.createElement("div");
-  line.className = "capture-line";
-  const form = document.createElement("div");
-  form.className = "capture-form";
-  form.append(document.createElement("span"), document.createElement("span"), document.createElement("b"));
-  content.append(brand, navigation, shortLine, line, form);
-
-  const caption = document.createElement("figcaption");
-  caption.textContent = `${sampleScreenshot.id} · ${sampleScreenshot.title} · ${sampleScreenshot.description}`;
-  const focusSummary = document.createElement("p");
-  focusSummary.className = "comparison-screenshot-focus-summary";
-  focusSummary.textContent = focusedItems.length
-    ? `Illustrated keyboard focus: ${focusedItems.join(", ")}.`
-    : "No focused navigation item is shown in this sample mockup.";
-
-  figure.append(chrome, content, focusSummary, caption);
-  parent.append(figure);
-}
-
-/** getComparisonEvidenceIds gives each embedded report unique in-page anchors. */
-function getComparisonEvidenceIds(sample, prefix) {
-  const ids = new Map();
-  const records = [
-    ...sample.orderedActions,
-    ...sample.focusObservations,
-    ...sample.recoveryEvidence,
-    sample.screenshot,
+/** renderComparisonSummary groups raw facts by demo and keeps missing facts separate. */
+function renderComparisonSummary(slots) {
+  const sides = [
+    ["Broken demo", slots.broken],
+    ["Fixed demo", slots.fixed],
   ];
-  for (const record of records) ids.set(record.id, `${prefix}${record.id}`);
-  return ids;
-}
+  const statusList = document.querySelector("#comparison-status-counts");
+  const coverageList = document.querySelector("#comparison-coverage-counts");
+  const successList = document.querySelector("#comparison-success-counts");
+  const statusMissing = document.querySelector("#comparison-status-missing");
+  const coverageMissing = document.querySelector("#comparison-coverage-missing");
+  const executionErrors = document.querySelector("#comparison-error-counts");
 
-/** appendComparisonHeading nests report sections below their visible run heading. */
-function appendComparisonHeading(parent, text) {
-  const heading = document.createElement("h5");
-  heading.textContent = text;
-  parent.append(heading);
-}
+  statusList.replaceChildren();
+  coverageList.replaceChildren();
+  successList.replaceChildren();
+  const statusMissingLabels = [];
+  const coverageMissingLabels = [];
+  const errorLabels = [];
 
-/** appendComparisonParagraph creates text-only report facts without injecting sample HTML. */
-function appendComparisonParagraph(parent, label, value) {
-  const paragraph = document.createElement("p");
-  const strong = document.createElement("strong");
-  strong.textContent = `${label}: `;
-  paragraph.append(strong, document.createTextNode(value));
-  parent.append(paragraph);
-}
-
-/** appendComparisonList preserves recovery and warning records with their stable evidence anchors. */
-function appendComparisonList(parent, items, textKey, evidenceIds = new Map()) {
-  const list = document.createElement("ul");
-  if (items.length === 0) {
-    const empty = document.createElement("li");
-    empty.textContent = "None recorded in this representative sample.";
-    list.append(empty);
+  for (const [label, sideSlots] of sides) {
+    const summary = summarizeLiveComparisonCounts(sideSlots);
+    appendGroupedCounts(statusList, label, summary.terminalStatuses.map(({ status, count }) => (
+      status + ": " + count
+    )), summary.missingTerminalStatus ? "Terminal status not recorded: " + summary.missingTerminalStatus : null);
+    appendGroupedCounts(coverageList, label, summary.coverageGroups.map((group) => {
+      const pair = (group.unit ? group.unit + " · " : "")
+        + "observed " + (group.observed === null ? "not recorded" : group.observed)
+        + " / expected " + (group.expected === null ? "not recorded" : group.expected);
+      return group.status ? pair + " · status " + group.status + ": " + group.count : pair + ": " + group.count;
+    }), summary.missingCoverage ? "Coverage not recorded: " + summary.missingCoverage : null);
+    appendGroupedCounts(successList, label, [
+      "Reached: " + summary.successOutcomes.reached,
+      "Not reached: " + summary.successOutcomes.notReached,
+      "Not recorded: " + summary.successOutcomes.notRecorded,
+      "Not configured: " + summary.successOutcomes.notConfigured,
+    ]);
+    statusMissingLabels.push(label + ": " + summary.missingTerminalStatus + " missing");
+    coverageMissingLabels.push(label + ": " + summary.missingCoverage + " missing");
+    errorLabels.push(
+      label + ": " + summary.creationFailures + " creation errors · "
+        + summary.executionFailures + " execution errors",
+    );
   }
-  for (const entry of items) {
+
+  statusMissing.textContent = statusMissingLabels.join(" · ");
+  coverageMissing.textContent = coverageMissingLabels.join(" · ");
+  executionErrors.textContent = errorLabels.join(" · ");
+}
+
+/** appendGroupedCounts adds one labeled group's recorded values and explicit missing-fact rows. */
+function appendGroupedCounts(container, label, values, missing) {
+  const group = document.createElement("li");
+  const heading = document.createElement("strong");
+  heading.textContent = label;
+  const list = document.createElement("ul");
+  for (const value of values) {
     const item = document.createElement("li");
-    if (textKey) {
-      item.id = evidenceIds.get(entry.id);
-      item.textContent = `${entry.id}: ${entry[textKey]}`;
-    } else {
-      item.textContent = entry;
-    }
+    item.textContent = value;
     list.append(item);
   }
-  parent.append(list);
+  if (values.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "No recorded values";
+    list.append(item);
+  }
+  if (missing) {
+    const item = document.createElement("li");
+    item.textContent = missing;
+    list.append(item);
+  }
+  group.append(heading, list);
+  container.append(group);
 }
 
 /** clearTargetValidationError removes stale feedback once the target input changes. */
 function clearTargetValidationError() {
   setError(targetInput, targetError, "");
   comparisonSection.hidden = true;
-  if (!activeLiveRunId) liveAssessmentSection.hidden = true;
+  if (!workflowInProgress) liveAssessmentSection.hidden = true;
 }
 
 /** clearStaleViews clears a prior result after assessment settings change. */
 function clearStaleViews() {
   comparisonSection.hidden = true;
-  if (!activeLiveRunId) liveAssessmentSection.hidden = true;
+  if (!workflowInProgress) liveAssessmentSection.hidden = true;
 }
 
 /** updateConsistencyPreview keeps the comparison action's promised run count aligned with the selector. */
 function updateConsistencyPreview() {
   const level = consistencyInput.value;
   const runsPerVersion = CONSISTENCY_RUN_COUNTS[level];
-  comparisonButton.textContent = `Compare demos · ${formatCount(runsPerVersion, "run")} per version`;
+  comparisonButton.textContent = "Compare demos · " + formatRunCount(runsPerVersion) + " per version";
   clearStaleViews();
+}
+
+/** formatRunCount labels the configured count without adding a score or rate. */
+function formatRunCount(count) {
+  return count + (count === 1 ? " run" : " runs");
 }
 
 /** populateConsistencyOptions derives labels and values from the comparison domain contract. */
@@ -1303,7 +955,7 @@ function populateConsistencyOptions() {
   for (const [level, runsPerVersion] of Object.entries(CONSISTENCY_RUN_COUNTS)) {
     const option = document.createElement("option");
     option.value = level;
-    option.textContent = `${level} — ${formatCount(runsPerVersion, "assessment")} per version`;
+    option.textContent = level + " — " + formatRunCount(runsPerVersion);
     option.selected = level === "Low";
     fragment.append(option);
   }
@@ -1313,7 +965,7 @@ function populateConsistencyOptions() {
 form.addEventListener("submit", handleAssessmentSubmit);
 comparisonButton.addEventListener("click", handleComparisonRequest);
 navButtons.setup.addEventListener("click", () => {
-  if (activeLiveRunId) return;
+  if (workflowInProgress) return;
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });
@@ -1325,6 +977,7 @@ newAssessmentButton.addEventListener("click", () => {
 loadLocalHtmlButton.addEventListener("click", handleLocalHtmlUpload);
 builtInTargetInput.addEventListener("change", selectBuiltInTarget);
 cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
+comparisonCancelButton.addEventListener("click", handleCancelLiveAssessment);
 targetInput.addEventListener("input", () => {
   updateRecognizedTargetLabel();
   clearTargetValidationError();
