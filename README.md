@@ -1,9 +1,9 @@
 # AccessTrace
 
-AccessTrace runs the app, its demo source documents, and the assessment API from
-one local server. The report and comparison previews are representative sample
-data; a live run starts a fresh keyboard-only browser session and shows the
-redacted run record.
+AccessTrace runs the app, demo pages, and assessment API from one local server.
+A live run starts a fresh keyboard-only browser session and presents its recorded
+evidence. Demo comparisons execute real runs against the built-in fixed and
+broken pages.
 
 ## Run AccessTrace
 

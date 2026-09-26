@@ -22,7 +22,6 @@
         </a>
         <nav aria-label="Page navigation" class="header-nav">
           <button id="nav-setup" type="button" aria-current="page">New assessment</button>
-          <button id="nav-sample-report" type="button">Sample report</button>
           <button id="nav-comparison" type="button">Compare</button>
         </nav>
         <span class="system-state"><i aria-hidden="true"></i> LOCAL SESSION</span>
@@ -33,7 +32,7 @@
       <div id="top" class="intro">
         <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> KEYBOARD ASSESSMENT</p>
         <h1>See what your keyboard can reach.</h1>
-        <p class="intro-copy">Choose a page. Review the evidence when the run ends.</p>
+        <p class="intro-copy">Choose a page. Review its recorded evidence when the run ends.</p>
       </div>
 
       <section id="setup" class="setup-card" aria-labelledby="setup-heading">
@@ -100,9 +99,9 @@
             <summary>More run options</summary>
             <div class="run-fields">
           <div class="field-group comparison-consistency-field">
-            <div class="field-label-row"><label for="comparison-consistency">Comparison runs</label><button class="help-icon" type="button" aria-label="About comparison runs" aria-describedby="tip-comparison"><span aria-hidden="true">?</span><span id="tip-comparison" class="tooltip" role="tooltip">Each version gets the same number of runs. More runs give a steadier demo comparison.</span></button></div>
+            <div class="field-label-row"><label for="comparison-consistency">Comparison runs</label><button class="help-icon" type="button" aria-label="About comparison runs" aria-describedby="tip-comparison"><span aria-hidden="true">?</span><span id="tip-comparison" class="tooltip" role="tooltip">The selected number of fresh runs is executed for each built-in demo.</span></button></div>
             <select id="comparison-consistency" name="consistencyLevel" aria-describedby="comparison-consistency-hint"></select>
-            <p id="comparison-consistency-hint" class="field-hint">Low is the default.</p>
+            <p id="comparison-consistency-hint" class="field-hint">Low is the default. Runs use the current goal and simulation setting.</p>
           </div>
 
           <div class="settings-row">
@@ -145,10 +144,9 @@
             <button id="start-live-assessment" class="primary-button" type="submit">
               <span id="submit-label">Start assessment</span> <span aria-hidden="true">→</span>
             </button>
-            <button id="view-sample-report" class="secondary-button" type="button">Sample report</button>
             <button id="view-comparison" class="secondary-button" type="button">Compare demos</button>
             <span class="action-note">Local run · keyboard only</span>
-            <button class="help-icon privacy-help" type="button" aria-label="About samples and privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Sample data is an example. Live runs send limited page details to your signed-in Codex. Masked screenshots may be shared. Local page files are uploaded to this AccessTrace server and served in an isolated browser page; external requests from uploaded pages are blocked. Optional code context is sent only after a blocked result and is not retained after review.</span></button>
+            <button class="help-icon privacy-help" type="button" aria-label="About privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. Local page files are uploaded to this AccessTrace server and served in an isolated browser page; external requests from uploaded pages are blocked. A local screenshot copy is kept only when values can be covered safely. Optional code context is sent only after a blocked result and is not retained after review.</span></button>
           </div>
         </form>
       </section>
@@ -175,40 +173,7 @@
         </div>
 
         <div id="live-result" class="live-result" hidden>
-          <div class="report-heading-row">
-            <div>
-              <p class="step-label">RUN REPORT</p>
-              <h2 id="live-result-heading" tabindex="-1">Assessment result</h2>
-              <p class="report-subtitle">Evidence for this keyboard run.</p>
-            </div>
-            <span id="live-result-status" class="terminal-status"><span class="status-dot" aria-hidden="true"></span></span>
-          </div>
-          <div class="live-result-grid">
-            <section class="live-outcome-card" aria-labelledby="live-outcome-heading">
-              <p class="card-kicker">RESULT</p>
-              <h3 id="live-outcome-heading">—</h3>
-              <p id="live-assessment-summary"></p>
-              <dl class="live-result-facts">
-                <div><dt>Page</dt><dd id="live-result-target">—</dd></div>
-                <div><dt>Scope</dt><dd id="live-result-scope">—</dd></div>
-                <div><dt>Actions</dt><dd id="live-result-actions">—</dd></div>
-                <div><dt>Checked</dt><dd id="live-result-coverage">—</dd></div>
-                <div><dt>Success</dt><dd id="live-result-success">—</dd></div>
-                <div><dt>Duration</dt><dd id="live-result-duration">—</dd></div>
-                <div><dt>Simulation</dt><dd id="live-result-simulation">—</dd></div>
-              </dl>
-            </section>
-            <section class="live-evidence-card" aria-labelledby="live-evidence-heading">
-              <p class="card-kicker">WHAT HAPPENED</p>
-              <h3 id="live-evidence-heading">Evidence summary</h3>
-              <p id="live-result-explanation"></p>
-              <p id="live-result-stopping"></p>
-              <p id="live-result-screenshot" class="live-screenshot-reference" hidden></p>
-              <p id="live-result-confidence" class="live-confidence" hidden></p>
-              <div id="live-result-fix-block" hidden><strong>Possible fix</strong><p id="live-result-fix"></p></div>
-              <div class="live-warnings-block" id="live-result-warnings-block" hidden><strong>Notes</strong><ul id="live-result-warnings"></ul></div>
-            </section>
-          </div>
+          <div id="live-run-report" class="run-report-root"></div>
           <section id="source-review-result" class="source-review-result" aria-labelledby="source-review-heading" hidden>
             <div class="source-review-heading">
               <div>
@@ -240,278 +205,97 @@
               <summary>View full run record</summary>
               <pre id="live-record-json"></pre>
             </details>
-            <details id="live-evidence-details">
-              <summary>View actions and focus evidence</summary>
-              <div class="live-evidence-lists">
-                <section><h3>Keyboard actions</h3><ol id="live-actions-list"></ol></section>
-                <section><h3>Focus observations</h3><ol id="live-focus-list"></ol></section>
-                <section><h3>Recovery checks</h3><ul id="live-recovery-list"></ul></section>
-              </div>
-            </details>
           </div>
         </div>
       </section>
 
-      <section id="sample-report" class="report-section" aria-labelledby="report-heading" hidden>
-        <div class="sample-notice" role="status">
-          <span class="notice-icon" aria-hidden="true">S</span>
-          <strong>Sample data</strong>
-          <button class="help-icon" type="button" aria-label="Sample data help" aria-describedby="tip-sample"><span aria-hidden="true">?</span><span id="tip-sample" class="tooltip" role="tooltip">Representative sample — not live assessment. This is example data, not evidence about that goal. It does not describe your selected page.</span></button>
-        </div>
-
-        <div class="report-heading-row">
-          <div>
-            <p class="step-label">REPORT PREVIEW</p>
-            <h2 id="report-heading" tabindex="-1">Keyboard assessment</h2>
-            <p class="report-subtitle">A quick look at the final report.</p>
-          </div>
-          <span class="terminal-status"><span class="status-dot" aria-hidden="true"></span><span id="terminal-status-value" data-sample-fact="terminalStatus"></span></span>
-        </div>
-
-        <section class="outcome-card" aria-labelledby="outcome-heading">
-          <div class="report-scope-lead">
-            <span class="card-kicker">ASSESSMENT SCOPE</span>
-            <strong id="report-scope-lead" data-sample-fact="scopeLabel"></strong>
-          </div>
-          <div class="outcome-summary">
-            <div class="outcome-title">
-              <p class="card-kicker">TERMINAL RESULT</p>
-              <h3 id="outcome-heading" data-sample-fact="outcomeTitle"></h3>
-              <p class="coverage-text" data-sample-fact="coverage"></p>
-            </div>
-            <div class="score-block" aria-label="Overall website checks score">
-              <p class="card-kicker">OVERALL SCORE</p>
-              <div class="score-value"><span id="score-percent"></span><span class="score-percent">%</span></div>
-              <p id="score-count" class="score-count"></p>
-              <progress id="score-progress" class="score-progress" value="0" max="1" aria-label=""></progress>
-              <p id="score-formula" class="score-formula"></p>
-            </div>
-          </div>
-
-          <div class="metrics-heading">
+      <template id="run-report-template">
+        <article class="run-report">
+          <div class="report-heading-row">
             <div>
-              <p class="card-kicker">NAMED METRICS</p>
-              <h3>What contributed to the score</h3>
+              <p class="step-label">RUN REPORT</p>
+              <h2 data-field="heading" tabindex="-1">Assessment result</h2>
+              <p class="report-subtitle">Recorded evidence for this keyboard run.</p>
             </div>
-            <p>Website checks only</p>
+            <span class="terminal-status" data-field="status"><span class="status-dot" aria-hidden="true"></span><span data-field="status-label"></span></span>
           </div>
-          <dl id="metrics-grid" class="metrics-grid"></dl>
-        </section>
-
-        <div class="report-context" aria-label="Configured assessment context">
-            <div><span>Target</span><strong id="report-target" data-report-context="target"></strong></div>
-            <div><span>Assessment scope</span><strong id="report-scope" data-sample-fact="scopeLabel"></strong></div>
-            <div><span>Simulation mode</span><strong id="report-simulation" data-report-context="simulationMode"></strong></div>
-        </div>
-
-        <section class="explanation-card" aria-labelledby="explanation-heading">
-          <div class="explanation-copy">
-            <p class="card-kicker">WHAT THE EVIDENCE SAYS</p>
-            <h3 id="explanation-heading" data-sample-fact="explanationTitle"></h3>
-            <p data-sample-fact="explanation"></p>
-            <ul id="explanation-evidence" class="evidence-reference-list" aria-label="Evidence supporting the explanation"></ul>
-          </div>
-          <div class="confidence-card">
-            <span class="confidence-label">CONFIDENCE</span>
-            <strong data-sample-fact="confidence"></strong>
-            <span data-sample-fact="confidenceContext"></span>
-          </div>
-        </section>
-
-        <section class="fix-card" aria-labelledby="fix-heading">
-          <div class="fix-icon" aria-hidden="true">↗</div>
-          <div>
-            <p class="card-kicker">EVIDENCE-SUPPORTED PROPOSED FIX</p>
-            <h3 id="fix-heading" data-sample-fact="proposedFixTitle"></h3>
-            <p data-sample-fact="proposedFix"></p>
-            <p class="fix-evidence">Supported by <span id="fix-evidence-references"></span>.</p>
-          </div>
-        </section>
-
-        <details class="report-more-details">
-          <summary>View report details and evidence</summary>
-          <div class="report-more-content">
-        <div class="report-columns">
-          <section class="report-panel" aria-labelledby="wcag-heading">
-            <p class="card-kicker">STANDARDS CONTEXT</p>
-            <h3 id="wcag-heading">Relevant WCAG reference</h3>
-            <p class="wcag-reference"><a id="wcag-reference-link" data-sample-link="wcagReference" target="_blank" rel="noreferrer"><span id="wcag-reference-label"></span> <span aria-hidden="true">↗</span></a></p>
-            <p class="panel-note">This reference provides context for the focus observation. It is not a conformance result.</p>
-          </section>
-          <section class="report-panel" aria-labelledby="run-details-heading">
-            <p class="card-kicker">RUN DETAILS</p>
-            <h3 id="run-details-heading">Assessment context</h3>
-            <dl class="run-details-grid">
-              <div><dt>Target</dt><dd id="details-target" data-report-context="target"></dd></div>
-              <div><dt>Scope</dt><dd id="details-scope" data-sample-fact="scopeLabel"></dd></div>
-              <div><dt>Goal</dt><dd data-sample-fact="goalSummary"></dd></div>
-              <div><dt>Simulation mode</dt><dd id="details-simulation" data-report-context="simulationMode"></dd></div>
-              <div><dt>Duration</dt><dd><span data-sample-fact="duration"></span> <span class="sample-value">Sample value</span></dd></div>
-              <div><dt>Keyboard interactions</dt><dd><span data-sample-fact="interactionCount"></span> <span class="sample-value">Sample value</span></dd></div>
-              <div><dt>Coverage</dt><dd data-sample-fact="coverage"></dd></div>
-              <div><dt>Agent failures</dt><dd data-sample-fact="agentFailureSummary"></dd></div>
-              <div><dt>Run record</dt><dd><a id="download-record" href="#">Download sample record JSON</a></dd></div>
-            </dl>
-            <p class="configuration-note">These are representative report values, not a browser run made with the current configuration.</p>
-          </section>
-        </div>
-
-        <section class="evidence-section" aria-labelledby="evidence-heading">
-          <div class="evidence-heading-row">
-            <div>
-              <p class="step-label">03 <span aria-hidden="true">/</span> SUPPORTING EVIDENCE</p>
-              <h3 id="evidence-heading">Inspect the observations behind the result</h3>
-            </div>
-            <span id="evidence-count" class="evidence-count"></span>
-          </div>
-
-          <div class="report-columns evidence-top-grid">
-            <section class="report-panel" aria-labelledby="action-heading">
-              <p class="card-kicker">ORDERED ACTIONS</p>
-              <h4 id="action-heading">Keyboard action evidence</h4>
-              <ol id="action-list" class="action-list"></ol>
+          <div class="live-result-grid">
+            <section class="live-outcome-card" aria-label="Recorded run statistics">
+              <p class="card-kicker">RUN FACTS</p>
+              <h3 data-field="outcome-heading">—</h3>
+              <dl class="live-result-facts">
+                <div><dt>Duration</dt><dd data-field="duration">Not recorded</dd></div>
+                <div><dt>Keyboard interactions</dt><dd data-field="interactions">Not recorded</dd></div>
+                <div><dt>Ordered actions</dt><dd data-field="action-count">Not recorded</dd></div>
+                <div><dt>Coverage</dt><dd data-field="coverage">Not available</dd></div>
+                <div><dt>Goal progress</dt><dd data-field="goal-progress">Not available</dd></div>
+                <div><dt>Success condition</dt><dd data-field="success">Not recorded</dd></div>
+                <div><dt>Target</dt><dd data-field="target">Not recorded</dd></div>
+                <div><dt>Goal</dt><dd data-field="goal">None recorded</dd></div>
+              </dl>
             </section>
-            <section class="report-panel" aria-labelledby="focus-heading">
-              <p class="card-kicker">FOCUS OBSERVATIONS</p>
-              <h4 id="focus-heading">Observed focus states</h4>
-              <div class="table-scroll">
-                <table>
-                  <thead><tr><th scope="col">Reference</th><th scope="col">Target and role</th><th scope="col">Observation</th></tr></thead>
-                  <tbody id="focus-table-body"></tbody>
-                </table>
-              </div>
+            <section class="live-evidence-card" aria-label="Evidence review">
+              <p class="card-kicker">EVIDENCE REVIEW</p>
+              <h3 data-field="review-status">Review pending</h3>
+              <p class="run-review-explanation" data-field="review-explanation"></p>
+              <p class="live-confidence" data-field="confidence" hidden></p>
+              <ul class="evidence-reference-list" data-field="review-references" aria-label="Evidence cited by the review"></ul>
+              <div class="run-report-fix live-result-fix-block" data-field="fix-block" hidden><strong>Proposed fix</strong><p data-field="fix"></p></div>
+              <p class="live-screenshot-reference" data-field="screenshot" hidden></p>
+              <div class="live-warnings-block" data-field="warnings-block" hidden><strong>Warnings</strong><ul data-field="warnings"></ul></div>
             </section>
           </div>
-
-          <div class="report-columns evidence-bottom-grid">
-            <section class="report-panel" aria-labelledby="screenshot-heading">
-              <p class="card-kicker">STOPPING SCREENSHOT REFERENCE</p>
-              <h4 id="screenshot-heading" data-sample-fact="screenshotTitle"></h4>
-              <figure id="sample-screenshot" data-sample-screenshot class="sample-capture" role="img" aria-label="">
-                <div class="capture-chrome" aria-hidden="true"><span></span><span></span><span></span><i>sample.local</i></div>
-                <div class="capture-content" aria-hidden="true">
-                  <div class="capture-brand"><span id="capture-site-name"></span><span aria-hidden="true">▰</span></div>
-                  <div id="capture-nav" class="capture-nav"></div>
-                  <div class="capture-line capture-line-short"></div>
-                  <div class="capture-line"></div>
-                  <div class="capture-form"><span></span><span></span><b></b></div>
-                </div>
-                <figcaption data-sample-fact="screenshotDescription"></figcaption>
-              </figure>
-              <p class="panel-note">This illustrative mockup is not a browser capture from a live run.</p>
-            </section>
-
-            <section class="report-panel" aria-labelledby="recovery-heading">
-              <p class="card-kicker">RECOVERY EVIDENCE</p>
-              <h4 id="recovery-heading">Repeat check and recovery</h4>
-              <ul id="recovery-list" class="plain-evidence-list"></ul>
-              <div class="warning-note"><strong>Warnings</strong><ul id="warning-list" data-sample-list="warnings"></ul></div>
-            </section>
-          </div>
-
-          <details class="evidence-details">
-            <summary>How to read this score and its limitations</summary>
-            <div class="details-copy">
-              <p>The score is calculated from passed website checks divided by attempted website checks, multiplied by 100. Website failures lower the score; agent failures are shown separately.</p>
-              <p>This report contains keyboard-assessment evidence for the selected page. It is not a full accessibility assessment and does not establish WCAG conformance.</p>
+          <details class="live-evidence-details">
+            <summary>View ordered actions, focus observations, and recovery checks</summary>
+            <div class="live-evidence-lists">
+              <section><h3>Ordered actions</h3><ol data-field="actions"></ol></section>
+              <section><h3>Focus observations</h3><ol data-field="observations"></ol></section>
+              <section><h3>Recovery checks</h3><ol data-field="recoveries"></ol></section>
             </div>
           </details>
-        </section>
+        </article>
+      </template>
 
-        <p class="limitation-banner"><span aria-hidden="true">i</span> Evidence for one local keyboard assessment.</p>
-          </div>
-        </details>
-      </section>
-
-      <section id="sample-comparison" class="report-section comparison-section" aria-labelledby="comparison-heading" hidden>
-        <div class="sample-notice" role="status">
-          <span class="notice-icon" aria-hidden="true">S</span>
-          <strong>Sample comparison</strong>
-          <button class="help-icon" type="button" aria-label="Sample comparison help" aria-describedby="tip-sample-comparison"><span aria-hidden="true">?</span><span id="tip-sample-comparison" class="tooltip" role="tooltip">These are examples, not separate browser runs. Repeated sample rows reuse the same evidence.</span></button>
-        </div>
-
+      <section id="comparison-section" class="report-section comparison-section" aria-labelledby="comparison-heading" hidden>
         <div class="report-heading-row">
           <div>
-            <p class="step-label">COMPARISON PREVIEW</p>
+            <p class="step-label">LIVE COMPARISON</p>
             <h2 id="comparison-heading" tabindex="-1">Compare demo results</h2>
-            <p class="report-subtitle">The same keyboard checks, shown side by side.</p>
+            <p class="report-subtitle">Run the same assessment against each demo and inspect every result.</p>
           </div>
+          <button id="cancel-comparison-run" class="secondary-button" type="button" hidden>Stop current run</button>
         </div>
 
-        <section class="outcome-card comparison-outcome" aria-labelledby="comparison-result-heading">
-          <div class="report-scope-lead">
-            <span class="card-kicker">COMPARISON RESULT</span>
-            <strong id="comparison-status"></strong>
-          </div>
-          <h3 id="comparison-result-heading" class="visually-hidden">Comparison result</h3>
-          <p id="comparison-summary" class="comparison-summary"></p>
-          <div class="comparison-score-grid" aria-label="Original and updated overall scores">
-            <div><span>Original average score</span><strong id="comparison-original-score"></strong><small id="comparison-original-count"></small><small id="comparison-original-range"></small></div>
-            <div><span>Updated average score</span><strong id="comparison-updated-score"></strong><small id="comparison-updated-count"></small><small id="comparison-updated-range"></small></div>
-            <div><span>Score change</span><strong id="comparison-score-delta"></strong><small>percentage points</small></div>
-          </div>
-          <div class="comparison-coverage">
-            <strong>Coverage change</strong>
-            <p><span id="comparison-original-coverage"></span> <span aria-hidden="true">→</span> <span id="comparison-updated-coverage"></span></p>
-            <p id="comparison-coverage-delta"></p>
-          </div>
+        <section class="comparison-progress-panel" aria-label="Comparison progress">
+          <div class="terminal-progress-label"><span id="comparison-progress-label">Waiting to start</span><strong><span id="comparison-progress-count">0</span>/<span id="comparison-progress-total">2</span></strong></div>
+          <progress id="comparison-progress" value="0" max="2" aria-label="Comparison run progress" aria-valuetext="0 of 2 assessment runs processed"></progress>
+          <p id="comparison-run-status" class="terminal-status-line" role="status" aria-live="polite">Ready to run the built-in demos.</p>
         </section>
 
-        <details class="report-more-details comparison-more-details">
-          <summary>View runs, metric changes, and evidence</summary>
-          <div class="report-more-content">
-        <section class="report-panel comparison-runs-panel" aria-labelledby="comparison-runs-heading">
-          <p class="card-kicker">INDIVIDUAL RUNS</p>
-          <h3 id="comparison-runs-heading">Every assessment run</h3>
-          <p>Each row keeps its terminal state, score availability, coverage, and agent failures visible.</p>
-          <div id="comparison-run-results" class="comparison-run-results"></div>
-        </section>
-
-        <section class="report-panel comparison-metrics-panel" aria-labelledby="comparison-metrics-heading">
-          <p class="card-kicker">METRIC CHANGES</p>
-          <h3 id="comparison-metrics-heading">Average pass rate for every named metric</h3>
-          <p id="comparison-metrics-scroll-help" class="table-scroll-instruction">On narrow screens, focus this table region and use the Left and Right Arrow keys to scroll horizontally through all five columns.</p>
-          <div class="table-scroll comparison-metrics-scroll" role="region" aria-labelledby="comparison-metrics-heading" aria-describedby="comparison-metrics-scroll-help" tabindex="0">
-            <table>
-              <caption>Original and updated website check counts and pass-rate changes</caption>
-              <thead><tr><th scope="col">Metric</th><th scope="col">Original</th><th scope="col">Updated</th><th scope="col">Change</th><th scope="col">Direction</th></tr></thead>
-              <tbody id="comparison-metrics-body"></tbody>
-            </table>
+        <section class="comparison-summary-panel" aria-labelledby="comparison-summary-heading">
+          <p class="card-kicker">RECORDED COUNTS</p>
+          <h3 id="comparison-summary-heading">Summary of returned run records</h3>
+          <p>Counts include only facts recorded by successful runs. Execution errors and missing facts are shown separately.</p>
+          <div class="comparison-summary-grid">
+            <section><h4>Terminal status</h4><ul id="comparison-status-counts"></ul><p id="comparison-status-missing"></p></section>
+            <section><h4>Coverage</h4><ul id="comparison-coverage-counts"></ul><p id="comparison-coverage-missing"></p></section>
+            <section><h4>Success condition</h4><ul id="comparison-success-counts"></ul></section>
+            <section><h4>Execution errors</h4><p id="comparison-error-counts"></p></section>
           </div>
         </section>
 
-        <section class="report-panel comparison-evidence-panel" aria-labelledby="comparison-evidence-heading">
-          <p class="card-kicker">EVIDENCE DIFFERENCES</p>
-          <h3 id="comparison-evidence-heading">Meaningful differences across actions, recovery, screenshots, and evidence citations</h3>
-          <ul id="comparison-evidence-changes" class="comparison-evidence-changes" aria-live="polite"></ul>
-        </section>
+        <dl id="comparison-settings" class="comparison-settings-grid" aria-label="Shared assessment settings"></dl>
 
-        <section class="report-panel comparison-settings-panel" aria-labelledby="comparison-settings-heading">
-          <p class="card-kicker">IDENTICAL SETTINGS</p>
-          <h3 id="comparison-settings-heading">Shared assessment context</h3>
-          <dl id="comparison-settings" class="comparison-settings-grid"></dl>
-        </section>
-
-        <section class="comparison-reports" aria-labelledby="comparison-reports-heading">
-          <div class="evidence-heading-row">
-            <div>
-              <p class="step-label">SUPPORTING REPORTS</p>
-              <h3 id="comparison-reports-heading">Inspect both reports and their evidence</h3>
-            </div>
-          </div>
-          <details id="comparison-original-report" class="comparison-report-details">
-            <summary>Original site report and evidence</summary>
-            <div id="comparison-original-report-content" class="comparison-report-content"></div>
-          </details>
-          <details id="comparison-updated-report" class="comparison-report-details">
-            <summary>Agent-updated site report and evidence</summary>
-            <div id="comparison-updated-report-content" class="comparison-report-content"></div>
-          </details>
-        </section>
-
-        <p class="limitation-banner"><span aria-hidden="true">i</span> Sample keyboard-assessment comparison.</p>
-          </div>
-        </details>
+        <div class="comparison-side-by-side">
+          <section class="comparison-run-group" aria-labelledby="broken-demo-heading">
+            <h3 id="broken-demo-heading">Broken demo</h3>
+            <div id="comparison-broken-runs" class="comparison-run-results"></div>
+          </section>
+          <section class="comparison-run-group" aria-labelledby="fixed-demo-heading">
+            <h3 id="fixed-demo-heading">Fixed demo</h3>
+            <div id="comparison-fixed-runs" class="comparison-run-results"></div>
+          </section>
+        </div>
       </section>
 
       <footer class="site-footer">
