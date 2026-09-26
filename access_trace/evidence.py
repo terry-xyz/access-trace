@@ -630,19 +630,6 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
             len(raw_recoveries) if isinstance(raw_recoveries, list) else None
         ),
     }
-    comparison_settings = {
-        key: assessment[key]
-        for key in (
-            "assessmentScope",
-            "goal",
-            "pageOnly",
-            "sitePageLimit",
-            "successCondition",
-            "simulationMode",
-            "interactionProfile",
-        )
-    }
-
     return {
         "schema": EVIDENCE_SCHEMA,
         "runId": _text(run.get("id"), 80),
@@ -689,14 +676,6 @@ def build_evidence_handoff(run: Dict[str, Any]) -> Dict[str, Any]:
         },
         "stats": statistics,
         "evidenceReferences": evidence_references,
-        "comparison": {
-            "settings": comparison_settings,
-            "target": {
-                "targetUrl": assessment["targetUrl"],
-                "targetVersion": assessment["targetVersion"],
-            },
-            "runCount": 1,
-        },
         "reporting": _reporting(
             run.get("evidenceHandoff", {}).get("reporting")
             if isinstance(run.get("evidenceHandoff"), dict)

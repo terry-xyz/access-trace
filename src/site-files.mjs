@@ -7,7 +7,7 @@ const CREDENTIAL_NAME = /(?:^|[-_.])(?:credentials?|secrets?|tokens?|access[-_.]
 const CREDENTIAL_DATA_EXTENSIONS = /\.(?:json|ya?ml|toml|ini|cfg|txt|properties)$/i;
 
 /** Avoid reading and submitting files whose path strongly indicates stored credentials. */
-export function isSensitiveSourcePath(path) {
+export function isSensitiveSitePath(path) {
   if (typeof path !== "string") return false;
   const parts = path.toLowerCase().split("/");
   if (parts.slice(0, -1).some((part) => CREDENTIAL_DIRECTORIES.has(part))) return true;
@@ -20,7 +20,7 @@ export function isSensitiveSourcePath(path) {
     || (CREDENTIAL_NAME.test(name) && (CREDENTIAL_DATA_EXTENSIONS.test(name) || !name.includes(".")));
 }
 
-export function filterSensitiveFiles(entries) {
-  const safeEntries = entries.filter((entry) => !isSensitiveSourcePath(entry.path));
+export function filterSensitiveSiteFiles(entries) {
+  const safeEntries = entries.filter((entry) => !isSensitiveSitePath(entry.path));
   return { entries: safeEntries, skippedCount: entries.length - safeEntries.length };
 }

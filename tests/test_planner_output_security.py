@@ -7,7 +7,6 @@ import unittest
 from unittest import mock
 
 from access_trace.planner import CodexPlanner, PlannerError
-from access_trace.source_review import CodexSourceReviewer, SourceReviewError
 
 
 class CapturedStdin(io.BytesIO):
@@ -100,27 +99,6 @@ class PlannerOutputSecurityTests(unittest.TestCase):
         self.assertEqual(subprocess.PIPE, captured["kwargs"]["stdin"])
         self.assertIn(b"private-page-evidence", process.stdin.getvalue())
 
-    def test_source_review_prompt_is_sent_through_stdin(self):
-        """test_source_review_prompt_is_sent_through_stdin hides uploaded source."""
-        result = {"status": "NO_PATCH", "summary": "No change", "relevantPaths": [], "patch": ""}
-        process = NoisyCodexProcess(stdout=(json.dumps(result) + "\n").encode())
-        captured = {}
-
-        def fake_popen(args, **kwargs):
-            """fake_popen records public process arguments and stdin mode."""
-            captured.update(args=args, kwargs=kwargs)
-            return process
-
-        with mock.patch("access_trace.source_review.subprocess.Popen", side_effect=fake_popen):
-            actual = CodexSourceReviewer(executable="fake-codex")._request(
-                "private-uploaded-source"
-            )
-        self.assertEqual(result, actual)
-        self.assertEqual("-", captured["args"][-1])
-        self.assertNotIn("private-uploaded-source", " ".join(captured["args"]))
-        self.assertEqual(subprocess.PIPE, captured["kwargs"]["stdin"])
-        self.assertEqual(b"private-uploaded-source", process.stdin.getvalue())
-
     def test_planner_timeout_still_terminates_with_stdin_writer(self):
         """test_planner_timeout_still_terminates_with_stdin_writer checks cleanup."""
         process = NoisyCodexProcess(timeout=True)
@@ -137,32 +115,6 @@ class PlannerOutputSecurityTests(unittest.TestCase):
             with self.assertRaisesRegex(PlannerError, "cancelled"):
                 planner.next_action({})
         self.assertTrue(process.terminated)
-
-    def test_source_review_timeout_still_terminates_with_stdin_writer(self):
-        """test_source_review_timeout_still_terminates_with_stdin_writer checks cleanup."""
-        process = NoisyCodexProcess(timeout=True)
-        with mock.patch("access_trace.source_review.subprocess.Popen", return_value=process):
-            with self.assertRaisesRegex(SourceReviewError, "timed out"):
-                CodexSourceReviewer(executable="fake-codex", timeout=0.01)._request("private")
-        self.assertTrue(process.terminated)
-
-    def test_source_review_output_limit_still_terminates_child(self):
-        """test_source_review_output_limit_still_terminates_child checks output capture."""
-        process = NoisyCodexProcess(stdout=b"x" * 170_000)
-        with mock.patch("access_trace.source_review.subprocess.Popen", return_value=process):
-            with self.assertRaisesRegex(SourceReviewError, "output exceeded"):
-                CodexSourceReviewer(executable="fake-codex")._request("private")
-        self.assertTrue(process.terminated)
-
-    def test_source_review_cancel_still_terminates_child(self):
-        """test_source_review_cancel_still_terminates_child checks cancellation."""
-        reviewer = CodexSourceReviewer(executable="fake-codex")
-        process = NoisyCodexProcess(on_wait=reviewer.cancel)
-        with mock.patch("access_trace.source_review.subprocess.Popen", return_value=process):
-            with self.assertRaisesRegex(SourceReviewError, "cancelled"):
-                reviewer._request("private")
-        self.assertTrue(process.terminated)
-
 
 if __name__ == "__main__":
     unittest.main()

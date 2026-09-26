@@ -3,9 +3,7 @@ import {
   validateAssessmentGoal,
   validateTargetUrl,
 } from "./assessment.mjs";
-import { CONSISTENCY_RUN_COUNTS, summarizeLiveComparisonCounts } from "./live-comparison.mjs";
-import { filterSensitiveFiles, isSensitiveSourcePath } from "./source-context.mjs";
-import { canApproveSourceReview, getSourceReviewActions, hasPersistedSourceBaseline, isSafeSourcePath, validateApplicableFiles } from "./source-apply.mjs";
+import { filterSensitiveSiteFiles } from "./site-files.mjs";
 
 const brandIntro = document.querySelector(".brand-intro");
 if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -19,35 +17,11 @@ const pageOnlyInput = document.querySelector("#page-only");
 const sitePageLimitInput = document.querySelector("#site-page-limit");
 const sitePageLimitError = document.querySelector("#site-page-limit-error");
 const targetSiteFilesInput = document.querySelector("#target-site-files");
-const targetSiteDirectoryInput = document.querySelector("#target-site-directory");
+const chooseLocalFilesButton = document.querySelector("#choose-local-files");
 const targetSiteStatus = document.querySelector("#target-site-status");
 const recognizedTarget = document.querySelector("#recognized-target");
 const goalInput = document.querySelector("#assessment-goal");
 const simulationInput = document.querySelector("#simulation-mode");
-const sourceContextFilesInput = document.querySelector("#source-context-files");
-const sourceContextDirectoryInput = document.querySelector("#source-context-directory");
-const sourceContextStatus = document.querySelector("#source-context-status");
-const sourceContextSkippedBlock = document.querySelector("#source-context-selection-skipped-block");
-const sourceContextSkippedList = document.querySelector("#source-context-selection-skipped");
-const sourceReviewResult = document.querySelector("#source-review-result");
-const sourceReviewStatus = document.querySelector("#source-review-status");
-const sourceReviewSummary = document.querySelector("#source-review-summary");
-const sourceReviewRootCauseBlock = document.querySelector("#source-review-root-cause-block");
-const sourceReviewRootCause = document.querySelector("#source-review-root-cause");
-const sourceReviewProposedFixBlock = document.querySelector("#source-review-proposed-fix-block");
-const sourceReviewProposedFix = document.querySelector("#source-review-proposed-fix");
-const sourceReviewFileCounts = document.querySelector("#source-review-file-counts");
-const sourceReviewRelevantBlock = document.querySelector("#source-review-relevant-block");
-const sourceReviewRelevantPaths = document.querySelector("#source-review-relevant-paths");
-const sourceReviewSkippedBlock = document.querySelector("#source-review-skipped-block");
-const sourceReviewSkippedFiles = document.querySelector("#source-review-skipped-files");
-const sourceReviewPatchBlock = document.querySelector("#source-review-patch-block");
-const sourceReviewPatch = document.querySelector("#source-review-patch");
-const sourceReviewFixButton = document.querySelector("#source-review-fix");
-const sourceReviewApproveButton = document.querySelector("#source-review-approve");
-const sourceReviewActionStatus = document.querySelector("#source-review-action-status");
-const sourcePatchDownload = document.querySelector("#download-source-patch");
-const liveAssessmentButton = document.querySelector("#start-live-assessment");
 const cancelLiveAssessmentButton = document.querySelector("#cancel-live-assessment");
 const liveAssessmentSection = document.querySelector("#live-assessment");
 const liveAssessmentStatus = document.querySelector("#live-assessment-status");
@@ -64,67 +38,30 @@ const liveRunProgress = document.querySelector("#live-run-progress");
 const liveProgressLabel = document.querySelector("#live-progress-label");
 const liveProgressPercent = document.querySelector("#live-progress-percent");
 const terminalLog = document.querySelector("#terminal-log");
-const consistencyInput = document.querySelector("#comparison-consistency");
 const targetError = document.querySelector("#target-error");
 const goalError = document.querySelector("#goal-error");
 const scopeStatus = document.querySelector("#scope-status");
-const scopeChip = document.querySelector("#scope-chip");
 const submitLabel = document.querySelector("#submit-label");
-const comparisonButton = document.querySelector("#view-comparison");
-const comparisonSection = document.querySelector("#comparison-section");
-const comparisonHeading = document.querySelector("#comparison-heading");
-const comparisonCancelButton = document.querySelector("#cancel-comparison-run");
-const comparisonProgress = document.querySelector("#comparison-progress");
-const comparisonProgressLabel = document.querySelector("#comparison-progress-label");
-const comparisonProgressCount = document.querySelector("#comparison-progress-count");
-const comparisonProgressTotal = document.querySelector("#comparison-progress-total");
-const comparisonRunStatus = document.querySelector("#comparison-run-status");
 const setupSection = document.querySelector("#setup");
 const newAssessmentButton = document.querySelector("#new-assessment");
 const navButtons = {
   setup: document.querySelector("#nav-setup"),
   report: document.querySelector("#nav-report"),
-  comparison: document.querySelector("#nav-comparison"),
 };
 let liveRecordUrl;
-let sourcePatchUrl;
-let selectedSourceFiles = [];
-let latestSourceSelection = [];
-let uploadedLocalSourceFiles = [];
-let reviewedSourceFiles = [];
-let sourceReviewBusy = false;
 let reportRenderSequence = 0;
 let activeLiveRunId = null;
-let activeRunContext = null;
 let workflowInProgress = false;
 let latestRunRecord = null;
 
-const MAX_SOURCE_CONTEXT_FILE_BYTES = 512 * 1024;
-const MAX_SOURCE_CONTEXT_REQUEST_BYTES = 5 * 1024 * 1024;
-const MAX_SOURCE_CONTEXT_FILES = 200;
-const MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY = 50;
+const MAX_TARGET_SITE_FILES = 200;
 const MAX_TARGET_SITE_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_TARGET_SITE_FILE_BYTES = 5 * 1024 * 1024;
-const SOURCE_CONTEXT_GENERATED_DIRECTORIES = new Set([
-  ".git", ".hg", ".svn", ".next", ".nuxt", ".venv", ".pytest_cache",
-  ".mypy_cache", ".ruff_cache", ".cache", "__pycache__", "bower_components",
-  "build", "coverage", "dist", "node_modules", "out", "Pods", "site-packages",
-  "target", "venv", "vendor",
-]);
-const SOURCE_CONTEXT_BINARY_EXTENSIONS = new Set([
-  ".7z", ".avif", ".bin", ".class", ".db", ".dll", ".docx", ".eot", ".exe",
-  ".gif", ".gz", ".heic", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3",
-  ".mp4", ".ods", ".odt", ".odp", ".otf", ".pdf", ".png", ".pptx", ".psd",
-  ".rar", ".so", ".sqlite", ".tar", ".ttf", ".wav", ".webm", ".webp", ".woff",
-  ".woff2", ".xls", ".xlsx", ".zip",
-]);
-
 /** setActiveView keeps one focused app screen visible without scrolling the document. */
 function setActiveView(view) {
   const activeView = view === "live" ? "report" : view;
   intro.hidden = activeView !== "setup";
   setupSection.hidden = activeView !== "setup";
-  comparisonSection.hidden = activeView !== "comparison";
   liveAssessmentSection.hidden = activeView !== "report";
   for (const [key, button] of Object.entries(navButtons)) {
     if (key === activeView) button.setAttribute("aria-current", "page");
@@ -150,7 +87,6 @@ async function loadLatestRunReport() {
     if (!record || typeof record.id !== "string" || !record.id) return;
     latestRunRecord = record;
     renderRunReport(record, liveRunReport);
-    renderSourceReview(record, null);
     const serialized = JSON.stringify(record, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -190,23 +126,20 @@ function setWorkflowBusy(busy) {
 }
 
 /** setCancelableRun exposes cancellation only for the currently executing browser journey. */
-function setCancelableRun(runId, context) {
+function setCancelableRun(runId) {
   activeLiveRunId = runId;
-  activeRunContext = runId ? context : null;
-  cancelLiveAssessmentButton.hidden = !runId || context !== "single";
-  comparisonCancelButton.hidden = !runId || context !== "comparison";
+  cancelLiveAssessmentButton.hidden = !runId;
   cancelLiveAssessmentButton.disabled = false;
-  comparisonCancelButton.disabled = false;
 }
 
 /** clearCancelableRun removes the stop target as soon as the stored journey reaches a terminal state. */
 function clearCancelableRun(runId) {
   if (activeLiveRunId !== runId) return;
-  setCancelableRun(null, null);
+  setCancelableRun(null);
 }
 
 /** waitForRunTerminal watches durable run status while execute remains open for the evidence review. */
-async function waitForRunTerminal(runId, context, shouldContinue, onTerminal) {
+async function waitForRunTerminal(runId, shouldContinue, onTerminal) {
   let activityCount = 0;
   while (shouldContinue()) {
     const controller = new AbortController();
@@ -225,11 +158,9 @@ async function waitForRunTerminal(runId, context, shouldContinue, onTerminal) {
           if (activityResponse.ok) {
             const activity = await activityResponse.json();
             const events = Array.isArray(activity.events) ? activity.events : [];
-            if (context === "single") {
-              for (const event of events.slice(activityCount)) {
-                appendTerminalActivity(event.message);
-                liveAssessmentStatus.textContent = event.message;
-              }
+            for (const event of events.slice(activityCount)) {
+              appendTerminalActivity(event.message);
+              liveAssessmentStatus.textContent = event.message;
             }
             activityCount = events.length;
           }
@@ -249,16 +180,12 @@ async function waitForRunTerminal(runId, context, shouldContinue, onTerminal) {
 }
 
 /** executeRun watches terminal browser status independently from the final review response. */
-async function executeRun(runId, context) {
+async function executeRun(runId) {
   let requestSettled = false;
-  const monitor = waitForRunTerminal(runId, context, () => !requestSettled, () => {
+  const monitor = waitForRunTerminal(runId, () => !requestSettled, () => {
     clearCancelableRun(runId);
-    if (context === "single") {
-      liveAssessmentStatus.textContent = "Browser run finished. Evidence review is running…";
-      setRunStage(90, "Reviewing evidence", "Browser run saved; preparing its evidence review.");
-    } else {
-      comparisonRunStatus.textContent = "Browser run finished. Its evidence review is running…";
-    }
+    liveAssessmentStatus.textContent = "Browser run finished. Evidence review is running…";
+    setRunStage(90, "Reviewing evidence", "Browser run saved; preparing its evidence review.");
   });
 
   try {
@@ -274,7 +201,7 @@ async function executeRun(runId, context) {
   }
 }
 
-/** readResponseJson tolerates a non-JSON server failure so each comparison slot can continue. */
+/** readResponseJson tolerates a non-JSON server failure while keeping a useful fallback. */
 async function readResponseJson(response) {
   try {
     const value = await response.json();
@@ -328,16 +255,22 @@ function appendTerminalActivity(message) {
   entry.scrollIntoView({ block: "nearest" });
 }
 
-/** formatScopeLabel gives a stable presentation label to the stored assessment-scope value. */
-function formatScopeLabel(scope) {
-  return scope === "whole-site" ? "Whole site" : "Goal focused";
-}
-
 /** setError keeps the visible message and the field's programmatic invalid state aligned. */
 function setError(input, container, message) {
   container.textContent = message;
   container.hidden = message === "";
   input.setAttribute("aria-invalid", String(message !== ""));
+}
+
+/** clearTargetValidationError removes stale target feedback after its value changes. */
+function clearTargetValidationError() {
+  setError(targetInput, targetError, "");
+  if (!workflowInProgress) liveAssessmentSection.hidden = true;
+}
+
+/** clearStaleViews hides the prior report after assessment settings change. */
+function clearStaleViews() {
+  if (!workflowInProgress) liveAssessmentSection.hidden = true;
 }
 
 /** updateScopePreview reflects the optional goal as an explicit whole-site or goal-focused choice. */
@@ -346,16 +279,14 @@ function updateScopePreview() {
   const isWholeSite = scope === "whole-site";
   const label = isWholeSite ? (pageOnlyInput.checked ? "Selected page only" : "Whole site") : "Goal focused";
   scopeStatus.textContent = label;
-  scopeChip.textContent = label;
   submitLabel.textContent = "Start assessment";
   setError(goalInput, goalError, "");
   if (!workflowInProgress) setActiveView("setup");
 }
 
-/** validateCurrentConfiguration applies the same target and goal boundary to reports and comparisons. */
+/** validateCurrentConfiguration checks the target and goal before a live assessment. */
 function validateCurrentConfiguration() {
   if (workflowInProgress) return null;
-  comparisonSection.hidden = true;
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
   setError(sitePageLimitInput, sitePageLimitError, "");
@@ -397,206 +328,6 @@ function handleAssessmentSubmit(event) {
   void handleLiveAssessment();
 }
 
-/** sourceSkipMessage translates local and server filtering reasons into clear report text. */
-function sourceSkipMessage(reason) {
-  const messages = {
-    "generated-or-dependency-directory": "Generated or dependency folder",
-    "generated-directory": "Generated or dependency folder",
-    gitignore: "Ignored by .gitignore",
-    "file-size-limit": "Larger than 512 KiB",
-    "review-file-size-limit": "Larger than 32 KiB review limit",
-    "review-source-budget": "Exceeds the 64 KiB review budget",
-    "review-prompt-size-limit": "Omitted to fit Codex review input",
-    "request-size-limit": "Skipped to keep the upload under 5 MiB",
-    "file-count-limit": "Skipped because the review accepts at most 200 files",
-    "unsupported-binary": "Binary or non-text content",
-    "binary-content": "Binary or non-text content",
-    "unsupported-utf8": "Not valid UTF-8 text",
-    "unsupported-file-type": "Unsupported file type",
-    "duplicate-path": "Duplicate relative path",
-    "unsafe-path": "Unsafe relative path",
-    "sensitive-file": "Likely credential or private key",
-    "read-error": "Could not read this file",
-  };
-  return messages[reason] || String(reason || "Skipped").replaceAll("-", " ");
-}
-
-/** appendSourceSkipItems safely lists filtered file names without interpreting them as markup. */
-function appendSourceSkipItems(list, entries) {
-  const fragment = document.createDocumentFragment();
-  for (const entry of entries.slice(0, MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY)) {
-    const item = document.createElement("li");
-    item.textContent = `${entry.path} — ${sourceSkipMessage(entry.reason)}`;
-    fragment.append(item);
-  }
-  if (entries.length > MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY) {
-    const item = document.createElement("li");
-    item.textContent = `${entries.length - MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY} more skipped files`;
-    fragment.append(item);
-  }
-  list.replaceChildren(fragment);
-}
-
-/** collectSourceSelection keeps File objects in this page and records each picker's path semantics. */
-function collectSourceSelection() {
-  const entries = [];
-  for (const file of sourceContextFilesInput.files ?? []) {
-    entries.push({ file, path: file.name, selectionType: "file" });
-  }
-  for (const file of sourceContextDirectoryInput.files ?? []) {
-    const relativePath = file.webkitRelativePath || file.name;
-    const path = relativePath.includes("/") ? relativePath.slice(relativePath.indexOf("/") + 1) : relativePath;
-    entries.push({
-      file,
-      path,
-      selectionType: "directory",
-    });
-  }
-  return entries;
-}
-
-/** sourcePathSkipReason quickly removes unsafe, generated, oversized, and known-binary candidates. */
-function sourcePathSkipReason(entry) {
-  const { file, path } = entry;
-  const parts = path.split("/");
-  if (
-    !path
-    || path.startsWith("/")
-    || path.includes("\\")
-    || path.includes("\0")
-    || parts.some((part) => !part || part === "." || part === "..")
-  ) return "unsafe-path";
-  if (parts.slice(0, -1).some((part) => SOURCE_CONTEXT_GENERATED_DIRECTORIES.has(part))) {
-    return "generated-directory";
-  }
-  if (isSensitiveSourcePath(path)) return "sensitive-file";
-  if (file.size > MAX_SOURCE_CONTEXT_FILE_BYTES) return "file-size-limit";
-  const basename = parts.at(-1).toLowerCase();
-  const extension = basename.includes(".") ? basename.slice(basename.lastIndexOf(".")) : "";
-  if (SOURCE_CONTEXT_BINARY_EXTENSIONS.has(extension)) return "binary-content";
-  return null;
-}
-
-/** analyzeSourceSelection chooses a stable, duplicate-free manifest without reading any file text. */
-function analyzeSourceSelection(entries) {
-  const skipped = [];
-  const candidates = [];
-  const sorted = [...entries].sort((left, right) => {
-    if (left.path !== right.path) return left.path < right.path ? -1 : 1;
-    if (left.selectionType === right.selectionType) return 0;
-    return left.selectionType === "file" ? -1 : 1;
-  });
-  const seenPaths = new Set();
-
-  for (const entry of sorted) {
-    const reason = sourcePathSkipReason(entry);
-    if (reason) {
-      skipped.push({ path: entry.path, reason });
-      continue;
-    }
-    if (seenPaths.has(entry.path)) {
-      skipped.push({ path: entry.path, reason: "duplicate-path" });
-      continue;
-    }
-    seenPaths.add(entry.path);
-    candidates.push(entry);
-  }
-
-  const boundedCandidates = candidates.slice(0, MAX_SOURCE_CONTEXT_FILES);
-  for (const entry of candidates.slice(MAX_SOURCE_CONTEXT_FILES)) {
-    skipped.push({ path: entry.path, reason: "file-count-limit" });
-  }
-  return { selectedCount: entries.length, candidates: boundedCandidates, skipped };
-}
-
-/** updateSourceContextSelection reports local file counts without reading or uploading contents. */
-function updateSourceContextSelection() {
-  const explicitSelection = collectSourceSelection();
-  selectedSourceFiles = explicitSelection.length > 0 ? explicitSelection : uploadedLocalSourceFiles;
-  const selection = analyzeSourceSelection(selectedSourceFiles);
-  sourceContextSkippedBlock.hidden = selection.skipped.length === 0;
-  appendSourceSkipItems(sourceContextSkippedList, selection.skipped);
-  if (selection.selectedCount === 0) {
-    sourceContextStatus.textContent = "No source files selected. The page URL remains the assessment target.";
-    return;
-  }
-  sourceContextStatus.textContent = `${selection.selectedCount} selected · ${selection.candidates.length} eligible · ${selection.skipped.length} skipped before source review. Contents are sent to the reviewer only when you press Fix on the report.`;
-}
-
-/** hasBinaryControls rejects non-text payloads using the same control-character rule as the server. */
-function hasBinaryControls(content) {
-  return /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(content);
-}
-
-/** prepareSourceContext strictly decodes and bounds files only after the browser result is BLOCKED. */
-async function prepareSourceContext(entries) {
-  const selection = analyzeSourceSelection(entries);
-  const files = [];
-  const skipped = [...selection.skipped];
-  const encoder = new TextEncoder();
-  const emptyManifestBytes = encoder.encode(
-    JSON.stringify({ sourceContext: { files: [] } }),
-  ).byteLength;
-  let requestBytes = emptyManifestBytes;
-  let readCount = 0;
-
-  for (const entry of selection.candidates) {
-    let content;
-    let bytes;
-    try {
-      bytes = await entry.file.arrayBuffer();
-      readCount += 1;
-    } catch {
-      skipped.push({ path: entry.path, reason: "read-error" });
-      continue;
-    }
-    try {
-      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch {
-      skipped.push({ path: entry.path, reason: "unsupported-utf8" });
-      continue;
-    }
-    if (hasBinaryControls(content)) {
-      skipped.push({ path: entry.path, reason: "unsupported-binary" });
-      continue;
-    }
-
-    const candidate = { path: entry.path, content, selectionType: entry.selectionType };
-    const candidateBytes = requestBytes
-      + encoder.encode(JSON.stringify(candidate)).byteLength
-      + (files.length > 0 ? 1 : 0);
-    if (candidateBytes > MAX_SOURCE_CONTEXT_REQUEST_BYTES) {
-      skipped.push({ path: entry.path, reason: "request-size-limit" });
-      continue;
-    }
-    files.push(candidate);
-    requestBytes = candidateBytes;
-  }
-
-  const body = JSON.stringify({ sourceContext: { files } });
-  if (encoder.encode(body).byteLength > MAX_SOURCE_CONTEXT_REQUEST_BYTES) {
-    throw new Error("The selected source context exceeds the 5 MiB upload limit.");
-  }
-
-  return {
-    selectedCount: selection.selectedCount,
-    readCount,
-    files,
-    skipped,
-    body,
-  };
-}
-
-/** clearSourceSelection releases picker and JavaScript references to selected local files. */
-function clearSourceSelection() {
-  sourceContextFilesInput.value = "";
-  sourceContextDirectoryInput.value = "";
-  selectedSourceFiles = [];
-  sourceContextStatus.textContent = "Source file selections cleared after this run.";
-  sourceContextSkippedBlock.hidden = true;
-  sourceContextSkippedList.replaceChildren();
-}
-
 /** updateRecognizedTargetLabel mirrors the active page URL without retaining stale text. */
 function updateRecognizedTargetLabel() {
   const validation = validateTargetUrl(targetInput.value, window.location.origin);
@@ -606,28 +337,19 @@ function updateRecognizedTargetLabel() {
 }
 
 /** uploadLocalPage makes chosen HTML and its relative assets available at an isolated local URL. */
-async function uploadLocalPage(input, fromDirectory) {
+async function uploadLocalPage(input) {
   const selected = [...(input.files ?? [])];
   if (!selected.length) return;
 
   targetSiteStatus.textContent = "Preparing local page files…";
-  const rootDirectory = fromDirectory
-    ? (selected[0].webkitRelativePath || selected[0].name).split("/")[0]
-    : "";
-  const selectedEntries = selected.map((file) => {
-    const selectedPath = fromDirectory ? file.webkitRelativePath || file.name : file.name;
-    const path = fromDirectory && selectedPath.startsWith(`${rootDirectory}/`)
-      ? selectedPath.slice(rootDirectory.length + 1)
-      : selectedPath;
-    return { file, path };
-  });
-  const { entries, skippedCount } = filterSensitiveFiles(selectedEntries);
+  const selectedEntries = selected.map((file) => ({ file, path: file.name }));
+  const { entries, skippedCount } = filterSensitiveSiteFiles(selectedEntries);
   if (!entries.length) {
     targetSiteStatus.textContent = "No page files remain after excluding likely credentials and private keys.";
     return;
   }
-  if (entries.length > MAX_SOURCE_CONTEXT_FILES) {
-    targetSiteStatus.textContent = `Choose no more than ${MAX_SOURCE_CONTEXT_FILES} page files.`;
+  if (entries.length > MAX_TARGET_SITE_FILES) {
+    targetSiteStatus.textContent = `Choose no more than ${MAX_TARGET_SITE_FILES} page files.`;
     return;
   }
   if (entries.some(({ path, file }) => !path || path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === "..") || file.size > MAX_TARGET_SITE_FILE_BYTES)) {
@@ -645,7 +367,7 @@ async function uploadLocalPage(input, fromDirectory) {
   const entrypoint = htmlEntries.find(({ path }) => path.toLowerCase() === "index.html")
     || htmlEntries[0];
   if (!entrypoint) {
-    targetSiteStatus.textContent = "Choose an HTML file, or a site folder that contains an HTML page.";
+    targetSiteStatus.textContent = "Choose an HTML file together with any supporting assets.";
     return;
   }
 
@@ -662,14 +384,8 @@ async function uploadLocalPage(input, fromDirectory) {
     clearTargetValidationError();
     clearStaleViews();
     targetSiteStatus.textContent = skippedCount
-      ? `Local page ready: ${result.entrypoint}. ${skippedCount} likely credential or private-key files excluded.`
-      : `Local page ready: ${result.entrypoint}`;
-    uploadedLocalSourceFiles = entries.map(({ file, path }) => ({
-      file,
-      path,
-      selectionType: fromDirectory ? "directory" : "file",
-    }));
-    updateSourceContextSelection();
+      ? `Local page ready: ${result.entrypoint} (${entries.length} files uploaded). ${skippedCount} likely credential or private-key files excluded.`
+      : `Local page ready: ${result.entrypoint} (${entries.length} files uploaded).`;
     input.value = "";
   } catch (error) {
     targetSiteStatus.textContent = error instanceof Error
@@ -682,103 +398,6 @@ async function uploadLocalPage(input, fromDirectory) {
 function setField(report, field, value) {
   const element = report.querySelector(`[data-field="${field}"]`);
   if (element) element.textContent = value;
-}
-
-/** appendTextItems renders bounded evidence without interpreting page-provided text as markup. */
-function appendTextItems(list, entries, describe) {
-  const fragment = document.createDocumentFragment();
-  for (const entry of entries) {
-    const item = document.createElement("li");
-    item.textContent = describe(entry);
-    fragment.append(item);
-  }
-  list.replaceChildren(fragment);
-}
-
-/** renderSourceReview presents server review data and local filtering details as inert text. */
-function renderSourceReview(result, selectionSummary) {
-  const review = result.sourceReview && typeof result.sourceReview === "object"
-    ? result.sourceReview
-    : {};
-  const status = String(review.status || "FAILED").toUpperCase();
-  const canFix = Boolean(selectionSummary);
-  const hasSavedBaseline = status === "PATCH_READY" && hasPersistedSourceBaseline(review);
-  const actions = getSourceReviewActions(status, canFix, reviewedSourceFiles.length > 0 || hasSavedBaseline);
-  if (!actions.showSavedReview) {
-    sourceReviewResult.hidden = true;
-    return;
-  }
-  const statusLabels = {
-    NOT_REQUESTED: "Review not requested",
-    IN_PROGRESS: "Review in progress",
-    PATCH_READY: "Patch ready to review",
-    NO_PATCH: "No patch produced",
-    FAILED: "Review failed",
-    CANCELLED: "Review cancelled",
-  };
-  sourceReviewResult.hidden = false;
-  sourceReviewFixButton.hidden = !actions.showFix;
-  sourceReviewFixButton.textContent = status === "NOT_REQUESTED" ? "Fix" : "Retry Fix";
-  sourceReviewFixButton.disabled = sourceReviewBusy;
-  sourceReviewApproveButton.hidden = !actions.showApprove;
-  sourceReviewApproveButton.disabled = sourceReviewBusy;
-  sourceReviewActionStatus.textContent = "";
-  if (!canFix && status === "PATCH_READY" && hasSavedBaseline) {
-    sourceReviewActionStatus.textContent = "Select the source folder to verify the reviewed files and approve this saved proposal.";
-  } else if (!canFix && status === "PATCH_READY") {
-    sourceReviewActionStatus.textContent = "Saved proposal shown for reference. Its source baseline is unavailable; download the patch to apply it manually.";
-  }
-  sourceReviewStatus.textContent = statusLabels[status] || "Review ended";
-  sourceReviewStatus.dataset.status = status.toLowerCase();
-  sourceReviewSummary.textContent = typeof review.summary === "string" && review.summary.trim()
-    ? review.summary
-    : status === "NOT_REQUESTED"
-      ? "Press Fix to ask the agent to find the cause and propose a patch for these files."
-      : "The source review did not return a summary.";
-  sourceReviewRootCauseBlock.hidden = typeof review.rootCause !== "string" || !review.rootCause.trim();
-  sourceReviewRootCause.textContent = sourceReviewRootCauseBlock.hidden ? "" : review.rootCause;
-  sourceReviewProposedFixBlock.hidden = typeof review.proposedFix !== "string" || !review.proposedFix.trim();
-  sourceReviewProposedFix.textContent = sourceReviewProposedFixBlock.hidden ? "" : review.proposedFix;
-
-  const serverSkipped = Array.isArray(review.skipped) ? review.skipped : [];
-  const skipped = [
-    ...(selectionSummary?.skipped ?? []),
-    ...serverSkipped.filter((item) => item && typeof item === "object"),
-  ];
-  sourceReviewFileCounts.textContent = !selectionSummary
-    ? hasSavedBaseline
-      ? "Saved source review. Its verified file list is available for folder selection during approval."
-      : "Saved source review. Local source files are not available in this page session."
-    : selectionSummary.readCount === undefined
-      ? `${selectionSummary.selectedCount} source files selected. Contents have not been sent.`
-      : `${selectionSummary.selectedCount} selected · ${selectionSummary.readCount} read locally · `
-        + `${selectionSummary.sentCount} submitted for review · ${skipped.length} skipped.`;
-
-  const relevantPaths = Array.isArray(review.relevantPaths)
-    ? review.relevantPaths.filter((path) => typeof path === "string")
-    : [];
-  sourceReviewRelevantBlock.hidden = relevantPaths.length === 0;
-  appendTextItems(sourceReviewRelevantPaths, relevantPaths, (path) => path);
-  sourceReviewSkippedBlock.hidden = skipped.length === 0;
-  appendSourceSkipItems(sourceReviewSkippedFiles, skipped.map((item) => ({
-    path: typeof item.path === "string" ? item.path : "Unknown path",
-    reason: typeof item.reason === "string" ? item.reason : "skipped",
-  })));
-
-  const patch = typeof review.patch === "string" ? review.patch : "";
-  const hasPatch = status === "PATCH_READY" && patch.trim() !== "";
-  sourceReviewPatchBlock.hidden = !hasPatch;
-  sourceReviewPatch.textContent = hasPatch ? patch : "";
-  sourcePatchDownload.hidden = !hasPatch;
-  if (sourcePatchUrl) URL.revokeObjectURL(sourcePatchUrl);
-  sourcePatchUrl = null;
-  if (hasPatch) {
-    sourcePatchUrl = URL.createObjectURL(new Blob([patch], { type: "text/x-diff;charset=utf-8" }));
-    sourcePatchDownload.href = sourcePatchUrl;
-    sourcePatchDownload.download = "access-trace-source-review.patch";
-  } else {
-    sourcePatchDownload.removeAttribute("href");
-  }
 }
 
 /** recordedNumber distinguishes a recorded zero from a missing statistic. */
@@ -1135,23 +754,13 @@ function renderRunReport(record, root) {
 
 /** handleLiveAssessment creates and executes one real run, then exposes its redacted JSON record. */
 async function handleLiveAssessment() {
-  if (sourceReviewBusy) return;
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
-  const sourceSelectionForRun = [...selectedSourceFiles];
 
   setActiveView("live");
   setWorkflowBusy(true);
   liveTerminal.hidden = false;
   liveResult.hidden = true;
-  sourceReviewResult.hidden = true;
-  sourceReviewPatchBlock.hidden = true;
-  sourceReviewPatch.textContent = "";
-  sourceReviewPatchBlock.open = false;
-  sourcePatchDownload.hidden = true;
-  sourcePatchDownload.removeAttribute("href");
-  if (sourcePatchUrl) URL.revokeObjectURL(sourcePatchUrl);
-  sourcePatchUrl = null;
   terminalLog.replaceChildren();
   setRunStage(25, "Settings checked", "Page URL and assessment settings checked.");
   liveAssessmentStatus.textContent = "Creating a fresh local run…";
@@ -1178,10 +787,10 @@ async function handleLiveAssessment() {
     }
 
     setRunStage(50, "Run created", "Local run record created.");
-    setCancelableRun(created.id, "single");
+    setCancelableRun(created.id);
     setRunStage(75, "Assessment running", "Isolated keyboard assessment started.");
     liveAssessmentStatus.textContent = "The isolated browser is checking the page…";
-    const { response: executeResponse, result: executeResult } = await executeRun(created.id, "single");
+    const { response: executeResponse, result: executeResult } = await executeRun(created.id);
     let result = executeResult;
     if (!executeResponse.ok) {
       throw new Error(responseError(result, "The run could not be completed."));
@@ -1190,22 +799,10 @@ async function handleLiveAssessment() {
       throw new Error("The server did not return a completed run record.");
     }
 
-    const sourceReviewSelection = ["BLOCKED", "COMPLETED", "INCONCLUSIVE"].includes(String(result.status).toUpperCase())
-      && sourceSelectionForRun.length > 0
-      ? { selectedCount: sourceSelectionForRun.length, skipped: [] }
-      : null;
-    latestSourceSelection = sourceReviewSelection ? sourceSelectionForRun : [];
     setRunStage(100, "Result saved", `Run saved with status ${result.status}.`);
     liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
     latestRunRecord = result;
     renderRunReport(result, liveRunReport);
-    if (sourceReviewSelection) {
-      reviewedSourceFiles = [];
-      renderSourceReview({ ...result, sourceReview: { status: "NOT_REQUESTED" } }, sourceReviewSelection);
-    } else {
-      reviewedSourceFiles = [];
-      renderSourceReview(result, null);
-    }
     const serialized = JSON.stringify(result, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -1230,232 +827,14 @@ async function handleLiveAssessment() {
   }
 }
 
-/** handleSourceFix sends source files only after an explicit Fix action on the report. */
-async function handleSourceFix() {
-  if (!latestRunRecord?.id || sourceReviewBusy || workflowInProgress || latestSourceSelection.length === 0) return;
-  const runId = latestRunRecord.id;
-  const sourceSelection = [...latestSourceSelection];
-  sourceReviewBusy = true;
-  sourceReviewFixButton.disabled = true;
-  sourceReviewActionStatus.textContent = "Reading selected files and preparing the source review…";
-  let prepared;
-  try {
-    prepared = await prepareSourceContext(sourceSelection);
-    if (!prepared.files.length) throw new Error("No eligible text files were available for review.");
-    if (latestRunRecord?.id !== runId) throw new Error("The active report changed. Run Fix again on the current report.");
-    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-review`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: prepared.body,
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result?.error?.message || "The source review could not be completed.");
-    if (latestRunRecord?.id !== runId || result?.id !== runId) {
-      throw new Error("The source review response did not match the active report.");
-    }
-    latestRunRecord = result;
-    const serialized = JSON.stringify(result, null, 2);
-    liveRecordJson.textContent = serialized;
-    if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
-    liveRecordUrl = URL.createObjectURL(new Blob([serialized], { type: "application/json" }));
-    liveRecordDownload.href = liveRecordUrl;
-    reviewedSourceFiles = prepared.files.map(({ path, content }) => ({ path, content }));
-    renderSourceReview(result, {
-      selectedCount: prepared.selectedCount,
-      readCount: prepared.readCount,
-      sentCount: prepared.files.length,
-      skipped: prepared.skipped,
-    });
-    const reviewStatus = String(result.sourceReview?.status || "").toUpperCase();
-    sourceReviewActionStatus.textContent = ["FAILED", "CANCELLED"].includes(reviewStatus)
-      ? "Review did not complete. You can retry Fix."
-      : "Review complete. Inspect the cause and patch before approving.";
-  } catch (error) {
-    sourceReviewStatus.textContent = "Review failed";
-    sourceReviewStatus.dataset.status = "failed";
-    sourceReviewSummary.textContent = error instanceof Error ? error.message : "The source review could not be completed.";
-    sourceReviewFixButton.hidden = false;
-    sourceReviewFixButton.textContent = "Retry Fix";
-    sourceReviewApproveButton.hidden = true;
-    sourceReviewActionStatus.textContent = "You can retry Fix.";
-  } finally {
-    sourceReviewBusy = false;
-    sourceReviewFixButton.disabled = false;
-    sourceReviewApproveButton.disabled = false;
-  }
-}
-
-/** lookupDirectoryFile resolves a reviewer path below the folder the user approved. */
-async function lookupDirectoryFile(rootHandle, path) {
-  if (!isSafeSourcePath(path)) throw new Error(`Unsafe file path in approved patch: ${path}`);
-  const parts = path.split("/");
-  let directory = rootHandle;
-  for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
-  return directory.getFileHandle(parts.at(-1));
-}
-
-/** sha256Text matches the digest format stored with a persisted source-review proposal. */
-async function sha256Text(value) {
-  if (!window.crypto?.subtle) throw new Error("This browser cannot verify the saved source baseline. Download the patch to apply it manually.");
-  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-/** handleSourceFixApproval verifies every reviewed file before writing any of them. */
-async function handleSourceFixApproval() {
-  if (
-    !latestRunRecord?.id
-    || sourceReviewBusy
-    || !canApproveSourceReview(reviewedSourceFiles.length, latestRunRecord?.sourceReview)
-  ) return;
-  const runId = latestRunRecord.id;
-  const approvalReview = latestRunRecord.sourceReview;
-  const reviewSnapshot = JSON.stringify(approvalReview);
-  const reviewedFilesSnapshot = reviewedSourceFiles.map(({ path, content }) => ({ path, content }));
-  const assertApprovalStateCurrent = () => {
-    if (
-      latestRunRecord?.id !== runId
-      || latestRunRecord.sourceReview !== approvalReview
-      || JSON.stringify(latestRunRecord.sourceReview) !== reviewSnapshot
-      || reviewedSourceFiles.length !== reviewedFilesSnapshot.length
-      || reviewedSourceFiles.some((file, index) => (
-        file.path !== reviewedFilesSnapshot[index]?.path
-        || file.content !== reviewedFilesSnapshot[index]?.content
-      ))
-    ) throw new Error("The report or proposal changed during approval. Review it again before applying.");
-  };
-  if (typeof window.showDirectoryPicker !== "function") {
-    sourceReviewActionStatus.textContent = "Direct folder editing is not supported in this browser. Download the patch and apply it manually.";
-    return;
-  }
-  sourceReviewBusy = true;
-  sourceReviewFixButton.disabled = true;
-  sourceReviewApproveButton.disabled = true;
-  let rootHandle;
-  try {
-    rootHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-  } catch (error) {
-    sourceReviewActionStatus.textContent = error?.name === "AbortError"
-      ? "Folder selection canceled. No files were changed."
-      : "A writable folder could not be selected. No files were changed.";
-    sourceReviewBusy = false;
-    sourceReviewFixButton.disabled = false;
-    sourceReviewApproveButton.disabled = false;
-    return;
-  }
-
-  sourceReviewActionStatus.textContent = "Checking the reviewed files before applying the approved patch…";
-  try {
-    assertApprovalStateCurrent();
-    let permission;
-    try {
-      permission = typeof rootHandle.queryPermission === "function"
-        ? await rootHandle.queryPermission({ mode: "readwrite" })
-        : "prompt";
-      if (permission !== "granted" && typeof rootHandle.requestPermission === "function") {
-        permission = await rootHandle.requestPermission({ mode: "readwrite" });
-      }
-    } catch {
-      throw new Error("Write permission could not be confirmed. No files were changed. Choose the folder again and allow write access, or download the patch.");
-    }
-    if (permission !== "granted") throw new Error("Write access was not granted. No files were changed. Choose the folder again and allow write access, or download the patch.");
-    let approvalSourceFiles = reviewedFilesSnapshot;
-    const handlesByPath = new Map();
-    if (!approvalSourceFiles.length) {
-      const review = approvalReview;
-      const paths = Array.isArray(review?.relevantPaths) ? review.relevantPaths : [];
-      const digests = review?.sourceDigests && typeof review.sourceDigests === "object"
-        ? review.sourceDigests
-        : {};
-      if (!paths.length || paths.some((path) => typeof path !== "string" || typeof digests[path] !== "string")) {
-        throw new Error("The saved proposal has no verifiable source baseline. Download the patch to apply it manually.");
-      }
-      approvalSourceFiles = [];
-      for (const path of paths) {
-        const handle = await lookupDirectoryFile(rootHandle, path);
-        const content = await (await handle.getFile()).text();
-        if (await sha256Text(content) !== digests[path]) {
-          throw new Error(`${path} differs from the saved review. No files were changed.`);
-        }
-        approvalSourceFiles.push({ path, content });
-        handlesByPath.set(path, handle);
-      }
-    }
-    for (const baseline of approvalSourceFiles) {
-      const handle = await lookupDirectoryFile(rootHandle, baseline.path);
-      const current = await (await handle.getFile()).text();
-      if (current !== baseline.content) {
-        throw new Error(`${baseline.path} changed since review. No files were changed; run Fix again.`);
-      }
-      handlesByPath.set(baseline.path, handle);
-    }
-    assertApprovalStateCurrent();
-    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-fix-approve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sourceContext: { files: approvalSourceFiles } }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result?.error?.message || "The approved patch could not be prepared.");
-    assertApprovalStateCurrent();
-    const changedFiles = validateApplicableFiles(approvalSourceFiles, result.appliableFiles);
-
-    const writableTargets = [];
-    for (const changed of changedFiles) {
-      const baseline = approvalSourceFiles.find((file) => file.path === changed.path);
-      if (!baseline) throw new Error(`The patch refers to an unreviewed file: ${changed.path}. No files were changed.`);
-      const handle = handlesByPath.get(changed.path);
-      if (!handle) throw new Error(`The patch refers to a file outside the selected folder: ${changed.path}. No files were changed.`);
-      const current = await (await handle.getFile()).text();
-      if (current !== baseline.content) {
-        throw new Error(`${changed.path} changed since review. No files were changed; run Fix again.`);
-      }
-      writableTargets.push({ path: changed.path, handle, content: changed.content });
-    }
-
-    const written = [];
-    for (const target of writableTargets) {
-      let writable;
-      try {
-        assertApprovalStateCurrent();
-        writable = await target.handle.createWritable();
-        assertApprovalStateCurrent();
-        await writable.write(target.content);
-        await writable.close();
-        written.push(target.path);
-      } catch (error) {
-        try {
-          await writable?.abort(error);
-        } catch {
-          // Preserve the write failure; abort is best-effort stream cleanup.
-        }
-        throw new Error(written.length
-          ? `Writing stopped at ${target.path}; already changed: ${written.join(", ")}. ${error instanceof Error ? error.message : "Write failed."}`
-          : `Could not write ${target.path}; no files were changed. ${error instanceof Error ? error.message : "Write failed."}`);
-      }
-    }
-    sourceReviewStatus.textContent = "Applied";
-    sourceReviewStatus.dataset.status = "applied";
-    sourceReviewApproveButton.hidden = true;
-    sourceReviewActionStatus.textContent = `Approved changes written to ${written.length} file${written.length === 1 ? "" : "s"}: ${written.join(", ")}.`;
-  } catch (error) {
-    sourceReviewActionStatus.textContent = error instanceof Error ? error.message : "The patch could not be applied.";
-  } finally {
-    sourceReviewBusy = false;
-    sourceReviewFixButton.disabled = false;
-    sourceReviewApproveButton.disabled = false;
-  }
-}
-
 /** handleCancelLiveAssessment cancels only the captured browser run while it remains in progress. */
 async function handleCancelLiveAssessment() {
   const runId = activeLiveRunId;
   if (!runId) return;
 
-  const context = activeRunContext;
-  const button = context === "comparison" ? comparisonCancelButton : cancelLiveAssessmentButton;
+  const button = cancelLiveAssessmentButton;
   button.disabled = true;
-  setRunStatus(context, "Requesting cancellation…");
+  setRunStatus("Requesting cancellation…");
   try {
     const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
       method: "POST",
@@ -1465,327 +844,29 @@ async function handleCancelLiveAssessment() {
       throw new Error(responseError(result, "The run could not be cancelled."));
     }
     if (activeLiveRunId === runId) {
-      setRunStatus(context, "Cancellation requested. Waiting for the browser run to finish…");
+      setRunStatus("Cancellation requested. Waiting for the browser run to finish…");
     }
   } catch (error) {
     if (activeLiveRunId === runId) {
-      setRunStatus(context, error instanceof Error ? error.message : "The run could not be cancelled.");
+      setRunStatus(error instanceof Error ? error.message : "The run could not be cancelled.");
       button.disabled = false;
     }
   }
 }
 
-/** setRunStatus routes cancellation and progress messages to the currently visible workflow. */
-function setRunStatus(context, message) {
-  if (context === "comparison") comparisonRunStatus.textContent = message;
-  else liveAssessmentStatus.textContent = message;
-}
-
-/** getComparisonSettings records the shared scope and configured real-run count. */
-function getComparisonSettings(configuration) {
-  const consistencyLevel = consistencyInput.value;
-  return {
-    targetUrl: "Built-in broken and fixed demos",
-    scope: configuration.scope,
-    goal: configuration.goal,
-    pageOnly: configuration.pageOnly,
-    sitePageLimit: configuration.sitePageLimit,
-    simulationMode: configuration.simulationMode,
-    consistencyLevel,
-    runsPerVersion: CONSISTENCY_RUN_COUNTS[consistencyLevel],
-  };
-}
-
-/** handleComparisonRequest runs paired demo slots in order and keeps each response isolated. */
-async function handleComparisonRequest() {
-  if (sourceReviewBusy) return;
-  const configuration = validateCurrentConfiguration();
-  if (!configuration) return;
-
-  const settings = getComparisonSettings(configuration);
-  const totalSlots = settings.runsPerVersion * 2;
-  const slots = { broken: [], fixed: [] };
-  const containers = {
-    broken: document.querySelector("#comparison-broken-runs"),
-    fixed: document.querySelector("#comparison-fixed-runs"),
-  };
-
-  let processed = 0;
-  try {
-    setActiveView("comparison");
-    setWorkflowBusy(true);
-    comparisonHeading.focus({ preventScroll: true });
-    containers.broken.replaceChildren();
-    containers.fixed.replaceChildren();
-    renderComparisonSettings(settings);
-    comparisonProgress.max = totalSlots;
-    comparisonProgress.value = 0;
-    comparisonProgressCount.textContent = "0";
-    comparisonProgressTotal.textContent = String(totalSlots);
-    comparisonProgress.setAttribute("aria-valuetext", "0 of " + totalSlots + " assessment runs processed");
-    comparisonProgressLabel.textContent = "Preparing comparison";
-    comparisonRunStatus.textContent = "Creating fresh runs for both built-in demos…";
-    renderComparisonSummary(slots);
-
-    for (let index = 0; index < settings.runsPerVersion; index += 1) {
-      for (const demo of [
-        { key: "broken", label: "Broken demo", path: "/docs/demos/broken/index.html" },
-        { key: "fixed", label: "Fixed demo", path: "/docs/demos/fixed/index.html" },
-      ]) {
-        const runNumber = index + 1;
-        comparisonProgressLabel.textContent = demo.label + " · run " + runNumber + " of " + settings.runsPerVersion;
-        comparisonRunStatus.textContent = "Creating a fresh " + demo.label.toLowerCase() + " run…";
-        let operation = "creation";
-        let slot;
-        try {
-          const createResponse = await fetch("/api/runs", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              targetUrl: window.location.origin + demo.path,
-              goal: configuration.goal,
-              pageOnly: configuration.pageOnly,
-              sitePageLimit: configuration.sitePageLimit,
-              simulationMode: configuration.simulationMode,
-            }),
-          });
-          const created = await readResponseJson(createResponse);
-          if (!createResponse.ok) {
-            throw new Error(responseError(created, "The run could not be created."));
-          }
-          if (typeof created.id !== "string" || !created.id) {
-            throw new Error("The server did not return a run identifier.");
-          }
-
-          operation = "execution";
-          setCancelableRun(created.id, "comparison");
-          comparisonRunStatus.textContent = "Running " + demo.label.toLowerCase() + " · run " + runNumber + "…";
-          const { response, result } = await executeRun(created.id, "comparison");
-          if (!response.ok) {
-            throw new Error(responseError(result, "The run could not be completed."));
-          }
-          if (!result || typeof result.id !== "string" || !result.id) {
-            throw new Error("The server did not return a completed run record.");
-          }
-          slot = { record: result };
-        } catch (error) {
-          if (activeLiveRunId) clearCancelableRun(activeLiveRunId);
-          const detail = error instanceof Error && error.message
-            ? error.message.replace(/[\r\n\t]+/g, " ").slice(0, 300)
-            : "The local run could not be completed.";
-          slot = {
-            record: null,
-            failureStage: operation,
-            error: (operation === "creation" ? "Creation failed: " : "Execution failed: ") + detail,
-          };
-        }
-
-        slots[demo.key].push(slot);
-        processed += 1;
-        comparisonProgress.value = processed;
-        comparisonProgressCount.textContent = String(processed);
-        comparisonProgress.setAttribute(
-          "aria-valuetext",
-          processed + " of " + totalSlots + " assessment runs processed",
-        );
-        renderComparisonSide(demo.key, slots[demo.key], containers[demo.key]);
-        renderComparisonSummary(slots);
-        comparisonRunStatus.textContent = slot.record
-          ? demo.label + " run " + runNumber + " returned with status " + (slot.record.status || "not recorded") + "."
-          : demo.label + " run " + runNumber + " failed: " + slot.error;
-      }
-    }
-
-    comparisonProgressLabel.textContent = "Comparison complete";
-    comparisonRunStatus.textContent = "Processed " + processed + " of " + totalSlots + " assessment slots.";
-  } catch (error) {
-    comparisonProgressLabel.textContent = "Comparison stopped";
-    comparisonRunStatus.textContent = error instanceof Error
-      ? error.message
-      : "The comparison could not continue.";
-  } finally {
-    if (activeLiveRunId) clearCancelableRun(activeLiveRunId);
-    setWorkflowBusy(false);
-  }
-}
-
-/** renderComparisonSettings shows the exact shared choices used in every create request. */
-function renderComparisonSettings(settings) {
-  const list = document.querySelector("#comparison-settings");
-  const values = [
-    ["Targets", settings.targetUrl],
-    ["Assessment scope", settings.scope === "whole-site" ? (settings.pageOnly ? "Selected page only" : "Whole site") : "Goal focused"],
-    ["Page limit", settings.pageOnly || settings.goal ? "Not applicable" : settings.sitePageLimit === 0 ? "All discovered pages" : String(settings.sitePageLimit)],
-    ["Goal", settings.goal || "None configured"],
-    ["Simulation mode", settings.simulationMode ? "On" : "Off"],
-    ["Runs per demo", settings.consistencyLevel + " · " + formatRunCount(settings.runsPerVersion)],
-  ];
-  const fragment = document.createDocumentFragment();
-  for (const [label, value] of values) {
-    const item = document.createElement("div");
-    item.className = "comparison-setting";
-    const term = document.createElement("dt");
-    term.textContent = label;
-    const description = document.createElement("dd");
-    description.textContent = value;
-    item.append(term, description);
-    fragment.append(item);
-  }
-  list.replaceChildren(fragment);
-}
-
-/** renderComparisonSide renders only the current slot's returned record or its own safe error. */
-function renderComparisonSide(demo, slots, container) {
-  const fragment = document.createDocumentFragment();
-  for (const [index, slot] of slots.entries()) {
-    const article = document.createElement("article");
-    article.className = "comparison-slot";
-    const heading = document.createElement("h4");
-    heading.textContent = "Run " + (index + 1);
-    article.append(heading);
-    if (slot.record) {
-      const reportRoot = document.createElement("div");
-      reportRoot.className = "run-report-root comparison-run-report";
-      reportRoot.id = "comparison-" + demo + "-run-" + (index + 1);
-      renderRunReport(slot.record, reportRoot);
-      article.append(reportRoot);
-    } else {
-      const error = document.createElement("p");
-      error.className = "comparison-slot-error";
-      error.setAttribute("role", "status");
-      error.textContent = slot.error || "This run did not return a record.";
-      article.append(error);
-    }
-    fragment.append(article);
-  }
-  container.replaceChildren(fragment);
-}
-
-/** renderComparisonSummary groups raw facts by demo and keeps missing facts separate. */
-function renderComparisonSummary(slots) {
-  const sides = [
-    ["Broken demo", slots.broken],
-    ["Fixed demo", slots.fixed],
-  ];
-  const statusList = document.querySelector("#comparison-status-counts");
-  const coverageList = document.querySelector("#comparison-coverage-counts");
-  const successList = document.querySelector("#comparison-success-counts");
-  const statusMissing = document.querySelector("#comparison-status-missing");
-  const coverageMissing = document.querySelector("#comparison-coverage-missing");
-  const executionErrors = document.querySelector("#comparison-error-counts");
-
-  statusList.replaceChildren();
-  coverageList.replaceChildren();
-  successList.replaceChildren();
-  const statusMissingLabels = [];
-  const coverageMissingLabels = [];
-  const errorLabels = [];
-
-  for (const [label, sideSlots] of sides) {
-    const summary = summarizeLiveComparisonCounts(sideSlots);
-    appendGroupedCounts(statusList, label, summary.terminalStatuses.map(({ status, count }) => (
-      status + ": " + count
-    )), summary.missingTerminalStatus ? "Terminal status not recorded: " + summary.missingTerminalStatus : null);
-    appendGroupedCounts(coverageList, label, summary.coverageGroups.map((group) => {
-      const pair = (group.unit ? group.unit + " · " : "")
-        + "observed " + (group.observed === null ? "not recorded" : group.observed)
-        + " / expected " + (group.expected === null ? "not recorded" : group.expected);
-      return group.status ? pair + " · status " + group.status + ": " + group.count : pair + ": " + group.count;
-    }), summary.missingCoverage ? "Coverage not recorded: " + summary.missingCoverage : null);
-    appendGroupedCounts(successList, label, [
-      "Reached: " + summary.successOutcomes.reached,
-      "Not reached: " + summary.successOutcomes.notReached,
-      "Not recorded: " + summary.successOutcomes.notRecorded,
-      "Not configured: " + summary.successOutcomes.notConfigured,
-    ]);
-    statusMissingLabels.push(label + ": " + summary.missingTerminalStatus + " missing");
-    coverageMissingLabels.push(label + ": " + summary.missingCoverage + " missing");
-    errorLabels.push(
-      label + ": " + summary.creationFailures + " creation errors · "
-        + summary.executionFailures + " execution errors",
-    );
-  }
-
-  statusMissing.textContent = statusMissingLabels.join(" · ");
-  coverageMissing.textContent = coverageMissingLabels.join(" · ");
-  executionErrors.textContent = errorLabels.join(" · ");
-}
-
-/** appendGroupedCounts adds one labeled group's recorded values and explicit missing-fact rows. */
-function appendGroupedCounts(container, label, values, missing) {
-  const group = document.createElement("li");
-  const heading = document.createElement("strong");
-  heading.textContent = label;
-  const list = document.createElement("ul");
-  for (const value of values) {
-    const item = document.createElement("li");
-    item.textContent = value;
-    list.append(item);
-  }
-  if (values.length === 0) {
-    const item = document.createElement("li");
-    item.textContent = "No recorded values";
-    list.append(item);
-  }
-  if (missing) {
-    const item = document.createElement("li");
-    item.textContent = missing;
-    list.append(item);
-  }
-  group.append(heading, list);
-  container.append(group);
-}
-
-/** clearTargetValidationError removes stale feedback once the target input changes. */
-function clearTargetValidationError() {
-  setError(targetInput, targetError, "");
-  comparisonSection.hidden = true;
-  if (!workflowInProgress) liveAssessmentSection.hidden = true;
-}
-
-/** clearStaleViews clears a prior result after assessment settings change. */
-function clearStaleViews() {
-  comparisonSection.hidden = true;
-  if (!workflowInProgress) liveAssessmentSection.hidden = true;
-}
-
-/** updateConsistencyPreview keeps the comparison action's promised run count aligned with the selector. */
-function updateConsistencyPreview() {
-  const level = consistencyInput.value;
-  const runsPerVersion = CONSISTENCY_RUN_COUNTS[level];
-  comparisonButton.textContent = "Compare demos · " + formatRunCount(runsPerVersion) + " per version";
-  clearStaleViews();
-}
-
-/** formatRunCount labels the configured count without adding a score or rate. */
-function formatRunCount(count) {
-  return count + (count === 1 ? " run" : " runs");
-}
-
-/** populateConsistencyOptions derives labels and values from the comparison domain contract. */
-function populateConsistencyOptions() {
-  const fragment = document.createDocumentFragment();
-  for (const [level, runsPerVersion] of Object.entries(CONSISTENCY_RUN_COUNTS)) {
-    const option = document.createElement("option");
-    option.value = level;
-    option.textContent = level + " — " + formatRunCount(runsPerVersion);
-    option.selected = level === "Low";
-    fragment.append(option);
-  }
-  consistencyInput.replaceChildren(fragment);
+/** setRunStatus reports cancellation progress to the active assessment. */
+function setRunStatus(message) {
+  liveAssessmentStatus.textContent = message;
 }
 
 form.addEventListener("submit", handleAssessmentSubmit);
-comparisonButton.addEventListener("click", handleComparisonRequest);
 navButtons.setup.addEventListener("click", () => {
   if (workflowInProgress) return;
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });
 navButtons.report.addEventListener("click", showReportView);
-navButtons.comparison.addEventListener("click", handleComparisonRequest);
 newAssessmentButton.addEventListener("click", () => {
-  if (sourceReviewBusy) return;
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });
@@ -1793,23 +874,12 @@ reportEmptyNewAssessmentButton.addEventListener("click", () => {
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });
-sourceContextFilesInput.addEventListener("change", updateSourceContextSelection);
-sourceContextDirectoryInput.addEventListener("change", updateSourceContextSelection);
-sourceReviewFixButton.addEventListener("click", handleSourceFix);
-sourceReviewApproveButton.addEventListener("click", handleSourceFixApproval);
-targetSiteFilesInput.addEventListener("change", () => {
-  targetSiteDirectoryInput.value = "";
-  void uploadLocalPage(targetSiteFilesInput, false);
+chooseLocalFilesButton.addEventListener("click", () => {
+  targetSiteFilesInput.click();
 });
-targetSiteDirectoryInput.addEventListener("change", () => {
-  targetSiteFilesInput.value = "";
-  void uploadLocalPage(targetSiteDirectoryInput, true);
-});
+targetSiteFilesInput.addEventListener("change", () => void uploadLocalPage(targetSiteFilesInput));
 cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
-comparisonCancelButton.addEventListener("click", handleCancelLiveAssessment);
 targetInput.addEventListener("input", () => {
-  uploadedLocalSourceFiles = [];
-  updateSourceContextSelection();
   updateRecognizedTargetLabel();
   clearTargetValidationError();
   targetSiteStatus.textContent = "Using the page URL above.";
@@ -1820,13 +890,9 @@ sitePageLimitInput.addEventListener("input", () => {
   sitePageLimitInput.dataset.userEdited = "true";
   setError(sitePageLimitInput, sitePageLimitError, "");
 });
-simulationInput.addEventListener("change", clearStaleViews);
-consistencyInput.addEventListener("change", updateConsistencyPreview);
 targetInput.value = "";
 updateRecognizedTargetLabel();
 
 updateScopePreview();
-populateConsistencyOptions();
-updateConsistencyPreview();
 void loadLatestRunReport();
 void loadSitePageLimitDefault();
