@@ -11,6 +11,7 @@ from collections import deque
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import socket
@@ -22,7 +23,7 @@ import urllib.request
 import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 class BrowserError(RuntimeError):
@@ -102,7 +103,7 @@ OBSERVATION_SCRIPT = r"""
   const control = (node) => {
     if (!node || node === document.body || node === document.documentElement) return {
       role: "document",
-      accessibleName: "Fictional contact form",
+      accessibleName: null,
       tag: "body",
       stableId: "document",
       isStable: true
@@ -112,8 +113,10 @@ OBSERVATION_SCRIPT = r"""
       role: roleFor(node),
       accessibleName: labelFor(node),
       tag: node.tagName.toLowerCase(),
-      stableId: compact(node.id) || "anonymous-control",
-      isStable: Boolean(node.id),
+      // DOM order gives anonymous controls a bounded identity for keyboard
+      // traversal without exposing selectors or page text.
+      stableId: compact(node.id) || `dom-index-${allControls.indexOf(node) + 1}`,
+      isStable: allControls.includes(node),
       focusable: true,
     };
     if (editable) {
@@ -149,6 +152,7 @@ OBSERVATION_SCRIPT = r"""
     title: compact(document.title),
     focus: control(active),
     controls,
+    controlCount: allControls.length,
     controlsTruncated: allControls.length > controls.length,
     successMatched,
     lifecycle: {
@@ -571,13 +575,15 @@ def _is_process_alive(pid: int) -> bool:
 
 
 class _UploadedPageRequestPolicy:
-    """Allow one main-frame document request, then fail all network requests."""
+    """Allow the uploaded document and its local assets; deny other network use."""
 
     def __init__(
         self, connection: _WebSocket, target_url: str, main_frame_id: Optional[str]
     ):
         self.connection = connection
         self.target = urlsplit(target_url)
+        site_match = re.match(r"^(/sites/[0-9a-f]{32})/", self.target.path)
+        self.site_prefix = site_match.group(1) + "/" if site_match else ""
         self.main_frame_id = main_frame_id
         self.initial_document_allowed = False
 
@@ -589,10 +595,8 @@ class _UploadedPageRequestPolicy:
         frame_id: Any,
     ) -> bool:
         if (
-            self.initial_document_allowed
-            or self.main_frame_id is None
+            self.main_frame_id is None
             or frame_id != self.main_frame_id
-            or resource_type != "Document"
             or method != "GET"
             or not isinstance(url, str)
         ):
@@ -605,22 +609,34 @@ class _UploadedPageRequestPolicy:
             )
         except ValueError:
             return False
-        matches_target = (
-            request.scheme == "http"
-            and request.scheme == self.target.scheme
+        same_origin = (
+            request.scheme == self.target.scheme
             and request.hostname == self.target.hostname
             and request_port == target_port
-            and request.path == self.target.path
             and not request.username
             and not request.password
-            and not request.query
-            and not request.fragment
         )
-        if matches_target:
+        if not same_origin:
+            return False
+        if resource_type == "Document":
+            matches_target = (
+                not self.initial_document_allowed
+                and request.path == self.target.path
+                and request.query == self.target.query
+            )
+            if not matches_target:
+                return False
             # Consume the sole allow before continuing it: if CDP handling fails,
             # any retry or subsequent navigation remains blocked.
             self.initial_document_allowed = True
-        return matches_target
+            return True
+        if resource_type not in {"Script", "Stylesheet", "Image", "Font", "Media", "Other"}:
+            return False
+        if not self.site_prefix or not request.path.startswith(self.site_prefix):
+            return False
+        relative = unquote(request.path[len(self.site_prefix) :])
+        parts = relative.split("/")
+        return bool(relative) and not any(part in {"", ".", ".."} for part in parts)
 
     def handle_event(self, message: Dict[str, Any]) -> None:
         if message.get("method") != "Fetch.requestPaused":
@@ -951,11 +967,20 @@ class IsolatedKeyboardBrowser:
             target_port = target.port or (80 if target.scheme == "http" else 443)
         except ValueError:
             return False
+        same_origin = (
+            observed.hostname == target.hostname
+            and observed.scheme in {"http", "https"}
+            and target.scheme in {"http", "https"}
+            and observed_port in {80, 443}
+            and target_port in {80, 443}
+        )
+        if not same_origin:
+            return False
+        if target.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return True
         return (
             observed.scheme == target.scheme
             and observed.hostname in {"localhost", "127.0.0.1", "::1"}
-            and target.hostname in {"localhost", "127.0.0.1", "::1"}
-            and observed_port == target_port
             and (observed.path.rstrip("/") or "/")
             == (target.path.rstrip("/") or "/")
             and not observed.query
@@ -1056,9 +1081,17 @@ class IsolatedKeyboardBrowser:
             return None
         if observed.hostname is None:
             return None
+        target = urlsplit(self.target_url)
+        try:
+            observed_port = observed.port or (443 if observed.scheme == "https" else 80)
+            target_port = target.port or (443 if target.scheme == "https" else 80)
+        except ValueError:
+            return True
         return not (
             observed.scheme in {"http", "https"}
-            and observed.hostname in LOOPBACK_HOSTS
+            and observed.hostname == target.hostname
+            and observed_port in {80, 443}
+            and target_port in {80, 443}
         )
 
     def _lifecycle(self, url: Any = None, dialog_open: Optional[bool] = None) -> Dict[str, Any]:

@@ -16,9 +16,16 @@ import {
   WHOLE_SITE_SAMPLE,
 } from "./sample-report.mjs";
 
+const brandIntro = document.querySelector(".brand-intro");
+if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  window.setTimeout(() => brandIntro?.remove(), 650);
+}
+
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
-const builtInTargetInput = document.querySelector("#built-in-target");
+const targetSiteFilesInput = document.querySelector("#target-site-files");
+const targetSiteDirectoryInput = document.querySelector("#target-site-directory");
+const targetSiteStatus = document.querySelector("#target-site-status");
 const recognizedTarget = document.querySelector("#recognized-target");
 const goalInput = document.querySelector("#assessment-goal");
 const simulationInput = document.querySelector("#simulation-mode");
@@ -81,6 +88,8 @@ const MAX_SOURCE_CONTEXT_FILE_BYTES = 512 * 1024;
 const MAX_SOURCE_CONTEXT_REQUEST_BYTES = 5 * 1024 * 1024;
 const MAX_SOURCE_CONTEXT_FILES = 200;
 const MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY = 50;
+const MAX_TARGET_SITE_TOTAL_BYTES = 20 * 1024 * 1024;
+const MAX_TARGET_SITE_FILE_BYTES = 5 * 1024 * 1024;
 const SOURCE_CONTEXT_GENERATED_DIRECTORIES = new Set([
   ".git", ".hg", ".svn", ".next", ".nuxt", ".venv", ".pytest_cache",
   ".mypy_cache", ".ruff_cache", ".cache", "__pycache__", "bower_components",
@@ -674,20 +683,72 @@ function clearSourceSelection() {
   sourceContextSkippedList.replaceChildren();
 }
 
-/** selectBuiltInTarget keeps demo selection on the same server origin as the app. */
-function selectBuiltInTarget() {
-  if (!builtInTargetInput.value) return;
-  targetInput.value = `${window.location.origin}${builtInTargetInput.value}`;
-  updateRecognizedTargetLabel();
-  clearTargetValidationError();
-}
-
-/** updateRecognizedTargetLabel mirrors the active local target without retaining stale text. */
+/** updateRecognizedTargetLabel mirrors the active page URL without retaining stale text. */
 function updateRecognizedTargetLabel() {
   const validation = validateTargetUrl(targetInput.value, window.location.origin);
   recognizedTarget.textContent = validation.valid
     ? validation.normalizedUrl
-    : "Choose a built-in demo or enter a local page URL";
+    : "No page URL selected";
+}
+
+/** uploadLocalPage makes chosen HTML and its relative assets available at an isolated local URL. */
+async function uploadLocalPage(input, fromDirectory) {
+  const selected = [...(input.files ?? [])];
+  if (!selected.length) return;
+
+  targetSiteStatus.textContent = "Preparing local page files…";
+  const rootDirectory = fromDirectory
+    ? (selected[0].webkitRelativePath || selected[0].name).split("/")[0]
+    : "";
+  const entries = selected.map((file) => {
+    const selectedPath = fromDirectory ? file.webkitRelativePath || file.name : file.name;
+    const path = fromDirectory && selectedPath.startsWith(`${rootDirectory}/`)
+      ? selectedPath.slice(rootDirectory.length + 1)
+      : selectedPath;
+    return { file, path };
+  });
+  if (entries.length > MAX_SOURCE_CONTEXT_FILES) {
+    targetSiteStatus.textContent = `Choose no more than ${MAX_SOURCE_CONTEXT_FILES} page files.`;
+    return;
+  }
+  if (entries.some(({ path, file }) => !path || path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === "..") || file.size > MAX_TARGET_SITE_FILE_BYTES)) {
+    targetSiteStatus.textContent = "Page files must use safe relative paths, and each file must be 5 MiB or smaller.";
+    return;
+  }
+  const totalBytes = entries.reduce((sum, entry) => sum + entry.file.size, 0);
+  if (totalBytes > MAX_TARGET_SITE_TOTAL_BYTES) {
+    targetSiteStatus.textContent = "Selected page files must total 20 MiB or less.";
+    return;
+  }
+  const htmlEntries = entries
+    .filter(({ path }) => /\.html?$/i.test(path))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const entrypoint = htmlEntries.find(({ path }) => path.toLowerCase() === "index.html")
+    || htmlEntries[0];
+  if (!entrypoint) {
+    targetSiteStatus.textContent = "Choose an HTML file, or a site folder that contains an HTML page.";
+    return;
+  }
+
+  const body = new FormData();
+  body.append("entrypoint", entrypoint.path);
+  for (const { file, path } of entries) body.append("files", file, path);
+  targetSiteStatus.textContent = `Uploading ${entries.length} page files…`;
+  try {
+    const response = await fetch("/api/sites", { method: "POST", body });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message || "Page files could not be uploaded.");
+    targetInput.value = result.targetUrl;
+    updateRecognizedTargetLabel();
+    clearTargetValidationError();
+    clearStaleSampleReport();
+    targetSiteStatus.textContent = `Local page ready: ${result.entrypoint}`;
+    input.value = "";
+  } catch (error) {
+    targetSiteStatus.textContent = error instanceof Error
+      ? error.message
+      : "Page files could not be uploaded.";
+  }
 }
 
 /** appendTextItems renders bounded evidence without interpreting page-provided text as markup. */
@@ -882,7 +943,7 @@ async function handleLiveAssessment() {
   if (sourcePatchUrl) URL.revokeObjectURL(sourcePatchUrl);
   sourcePatchUrl = null;
   terminalLog.replaceChildren();
-  setRunStage(25, "Settings checked", "Local target and assessment settings checked.");
+  setRunStage(25, "Settings checked", "Page URL and assessment settings checked.");
   liveAssessmentStatus.textContent = "Creating a fresh local run…";
   liveAssessmentSummary.textContent = "";
   liveRecordDownload.hidden = true;
@@ -1781,18 +1842,24 @@ newAssessmentButton.addEventListener("click", () => {
 });
 sourceContextFilesInput.addEventListener("change", updateSourceContextSelection);
 sourceContextDirectoryInput.addEventListener("change", updateSourceContextSelection);
-builtInTargetInput.addEventListener("change", selectBuiltInTarget);
+targetSiteFilesInput.addEventListener("change", () => {
+  targetSiteDirectoryInput.value = "";
+  void uploadLocalPage(targetSiteFilesInput, false);
+});
+targetSiteDirectoryInput.addEventListener("change", () => {
+  targetSiteFilesInput.value = "";
+  void uploadLocalPage(targetSiteDirectoryInput, true);
+});
 cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
 targetInput.addEventListener("input", () => {
   updateRecognizedTargetLabel();
   clearTargetValidationError();
+  targetSiteStatus.textContent = "Using the page URL above.";
 });
 goalInput.addEventListener("input", updateScopePreview);
 simulationInput.addEventListener("change", clearStaleSampleReport);
 consistencyInput.addEventListener("change", updateConsistencyPreview);
-const defaultTarget = `${window.location.origin}/demo/fixed`;
-targetInput.value = defaultTarget;
-builtInTargetInput.value = "/demo/fixed";
+targetInput.value = "";
 updateRecognizedTargetLabel();
 
 renderReportSample(WHOLE_SITE_SAMPLE);

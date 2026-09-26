@@ -19,7 +19,7 @@ from .evidence import attach_evidence_handoff
 from .planner import CodexPlanner, PlannerError, validate_action
 
 
-MAX_INTERACTIONS = 16
+MAX_INTERACTIONS = 64
 BROWSER_RUN_LOCK = threading.Lock()
 
 
@@ -122,7 +122,9 @@ def _focus_snapshot(observation: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _goal_progress(
-    observation: Dict[str, Any], goal: Optional[str] = SUPPORTED_GOAL
+    observation: Dict[str, Any],
+    goal: Optional[str] = SUPPORTED_GOAL,
+    success_condition: Optional[str] = "Message sent",
 ) -> Optional[Dict[str, Any]]:
     if goal is None:
         return None
@@ -158,7 +160,10 @@ def _goal_progress(
             ),
         }
     completed_fields = sum(1 for field in fields.values() if field["acceptedInput"])
-    success_matched = bool(observation.get("successMatched"))
+    success_matched = (
+        success_condition == "Message sent"
+        and bool(observation.get("successMatched"))
+    )
     return {
         "goal": SUPPORTED_GOAL,
         "status": (
@@ -209,13 +214,13 @@ def _coverage_progress(
             and control.get("isStable", True)
         }
     )
-    visited_focus_ids = sorted(
-        set(expected_focus_ids).intersection(covered_focus_ids)
-    )
-    complete = page_observed and not bool(raw.get("controlsTruncated")) and (
-        not expected_focus_ids
-        or set(expected_focus_ids).issubset(covered_focus_ids)
-    )
+    control_count = raw.get("controlCount")
+    if not isinstance(control_count, int) or isinstance(control_count, bool):
+        control_count = len(expected_focus_ids)
+    control_count = max(0, control_count)
+    visited_focus_ids = sorted(set(expected_focus_ids).intersection(covered_focus_ids))
+    visited_count = min(control_count, len(covered_focus_ids))
+    complete = page_observed and visited_count >= control_count
     return {
         "status": (
             "completed"
@@ -225,8 +230,8 @@ def _coverage_progress(
         "completed": complete,
         "areasObserved": 1 if page_observed else 0,
         "areasExpected": 1,
-        "controlsObserved": len(visited_focus_ids),
-        "controlsExpected": len(expected_focus_ids),
+        "controlsObserved": visited_count,
+        "controlsExpected": control_count,
         "visitedControls": visited_focus_ids,
         "expectedControls": expected_focus_ids,
         "controlsTruncated": bool(raw.get("controlsTruncated")),
@@ -241,27 +246,33 @@ def _redacted_url(
     try:
         observed = urlsplit(raw_url[:4096])
         target = urlsplit(target_url)
-        observed_port = observed.port
-        target_port = target.port
+        observed_port = observed.port or (443 if observed.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
     except ValueError:
         return None, "navigation-redirect"
     if observed.hostname is None:
         return None, "navigation-redirect"
-    is_loopback_url = (
-        observed.scheme in {"http", "https"}
-        and observed.hostname in LOOPBACK_HOSTS
-    )
-    same_controlled_origin = (
-        observed.scheme == target.scheme
-        and (
-            observed.hostname == target.hostname
-            or (is_loopback_url and target.hostname in LOOPBACK_HOSTS)
+    target_is_loopback = target.hostname in LOOPBACK_HOSTS
+    observed_is_loopback = observed.hostname in LOOPBACK_HOSTS
+    same_target_origin = (
+        (
+            not target_is_loopback
+            and observed.hostname == target.hostname
+            and observed.scheme in {"http", "https"}
+            and target.scheme in {"http", "https"}
+            and observed_port in {80, 443}
+            and target_port in {80, 443}
         )
-        and observed_port == target_port
+        or (
+            target_is_loopback
+            and observed_is_loopback
+            and observed.scheme == target.scheme
+            and observed_port == target_port
+        )
     )
-    if not is_loopback_url:
+    if not same_target_origin:
         return None, "off-loopback-redirect"
-    if not same_controlled_origin:
+    if target_is_loopback and not observed_is_loopback:
         return None, "navigation-redirect"
     safe_host = observed.hostname
     if ":" in safe_host:
@@ -283,7 +294,7 @@ def _redacted_url(
     safe_url = safe_url[:MAX_PAGE_URL_LENGTH]
     navigation_warning = (
         "navigation-redirect"
-        if original_path != (target.path or "/")
+        if target_is_loopback and original_path != (target.path or "/")
         else None
     )
     return safe_url, navigation_warning
@@ -304,6 +315,7 @@ def redacted_observation(
     assessment_scope: str = "goal-focused",
     goal: Optional[str] = SUPPORTED_GOAL,
     covered_focus_ids: Optional[set] = None,
+    success_condition: Optional[str] = "Message sent",
 ) -> Dict[str, Any]:
     bounded_url, navigation_warning = _redacted_url(
         raw.get("url"), target_url, sensitive_values or ()
@@ -360,12 +372,14 @@ def redacted_observation(
         "success": None
         if is_whole_site
         else {
-            "condition": "Message sent" if goal == SUPPORTED_GOAL else None,
+            "condition": success_condition if goal == SUPPORTED_GOAL else None,
             "matched": bool(raw.get("successMatched"))
-            if goal == SUPPORTED_GOAL
+            if goal == SUPPORTED_GOAL and success_condition == "Message sent"
             else False,
         },
-        "goalProgress": None if is_whole_site else _goal_progress(raw, goal),
+        "goalProgress": None if is_whole_site else _goal_progress(
+            raw, goal, success_condition
+        ),
         "coverage": None,
     }
     raw_controls = raw.get("controls", [])
@@ -511,9 +525,9 @@ def _lifecycle_failure(observation: Dict[str, Any]) -> Optional[str]:
     if {"kind": "page-closed"} in observation.get("warnings", []):
         return "browser page closed"
     if lifecycle.get("offLoopbackRedirect"):
-        return "browser navigated off the controlled target"
+        return "browser navigated off the selected page origin"
     if lifecycle.get("navigationRedirect"):
-        return "browser navigated away from the controlled target"
+        return "browser navigated to a different page on the target origin"
     return None
 
 
@@ -593,6 +607,7 @@ def _settle_action(
                 run.get("assessmentScope", "goal-focused"),
                 run.get("goal"),
                 covered_focus_ids,
+                run.get("successCondition"),
             )
             run["observations"].append(current)
             _record_observation_warnings(run, current)
@@ -623,6 +638,7 @@ def _settle_action(
         run.get("assessmentScope", "goal-focused"),
         run.get("goal"),
         covered_focus_ids,
+        run.get("successCondition"),
     )
     run["observations"].append(current)
     _record_observation_warnings(run, current)
@@ -985,8 +1001,8 @@ def execute_fixed_goal(
 def _execute_assessment(
     run: Dict[str, Any], evidence_directory: Optional[Path], planner: Optional[Any]
 ) -> Dict[str, Any]:
-    if run.get("targetVersion") not in {"fixed", "broken", "local"}:
-        raise ValueError("run has an unsupported controlled target")
+    if run.get("targetVersion") not in {"fixed", "broken", "local", "web"}:
+        raise ValueError("run has an unsupported target")
     if run.get("assessmentScope") not in {"whole-site", "goal-focused"}:
         raise ValueError("run has an unsupported assessment scope")
     if run.get("assessmentScope") == "whole-site" and run.get("goal") is not None:
@@ -1012,7 +1028,7 @@ def _execute_assessment(
         # Do not let a page imitate the controlled demo's "Message sent" signal.
         warning = {
             "kind": "unsupported-goal",
-            "message": "Goal-focused runs are not supported for uploaded local HTML pages; use whole-site scope.",
+            "message": "Goal-focused runs are not supported for uploaded local pages; use whole-site scope.",
         }
         _append_warning(run["warnings"], warning)
         run["browserSession"]["cleanup"] = {
@@ -1049,6 +1065,7 @@ def _execute_assessment(
             run["assessmentScope"],
             run.get("goal"),
             covered_focus_ids,
+            run.get("successCondition"),
         )
         run["observations"] = [current]
         _record_observation_warnings(run, current)
@@ -1075,6 +1092,25 @@ def _execute_assessment(
                 )
                 if barrier_status in {"blocked", "completed", "inconclusive"}:
                     return run
+
+            if (
+                run.get("assessmentScope") == "whole-site"
+                and isinstance(current.get("coverage"), dict)
+                and current["coverage"].get("completed") is not True
+            ):
+                current = _settle_action(
+                    run,
+                    browser,
+                    {"kind": "key", "key": "Tab"},
+                    current,
+                    typed_values,
+                    covered_focus_ids,
+                )
+                if _complete_whole_site_if_verified(
+                    run, current, started, browser, evidence_directory
+                ):
+                    return run
+                continue
 
             screenshot_data_url = None
             capture_planner_screenshot = getattr(
@@ -1144,6 +1180,7 @@ def _execute_assessment(
                     run.get("assessmentScope", "goal-focused"),
                     run.get("goal"),
                     covered_focus_ids,
+                    run.get("successCondition"),
                 )
                 run["observations"].append(current)
                 _record_observation_warnings(run, current)
@@ -1159,6 +1196,7 @@ def _execute_assessment(
                     run.get("assessmentScope", "goal-focused"),
                     run.get("goal"),
                     covered_focus_ids,
+                    run.get("successCondition"),
                 )
                 run["observations"].append(current)
                 _record_observation_warnings(run, current)
@@ -1170,6 +1208,27 @@ def _execute_assessment(
                         run, current, started, browser, evidence_directory
                     ):
                         return run
+                    # A planner can stop before JavaScript finishes rendering or
+                    # before the keyboard traversal reaches the page controls.
+                    # Keep scanning with Tab until every discovered control has
+                    # been visited or the bounded journey limit is reached.
+                    if (
+                        isinstance(current.get("coverage"), dict)
+                        and current["coverage"].get("completed") is not True
+                    ):
+                        current = _settle_action(
+                            run,
+                            browser,
+                            {"kind": "key", "key": "Tab"},
+                            current,
+                            typed_values,
+                            covered_focus_ids,
+                        )
+                        if _complete_whole_site_if_verified(
+                            run, current, started, browser, evidence_directory
+                        ):
+                            return run
+                        continue
                     run["warnings"].append({"kind": "incomplete-coverage"})
                     _set_terminal_state(run, "INCONCLUSIVE", current, started)
                     return run
@@ -1228,6 +1287,10 @@ def _execute_assessment(
             ):
                 return run
 
+        if run.get("assessmentScope") == "whole-site":
+            _append_warning(run["warnings"], {"kind": "incomplete-coverage"})
+            _set_terminal_state(run, "INCONCLUSIVE", run["observations"][-1], started)
+            return run
         raise BrowserError("keyboard journey exceeded its bounded interaction limit")
     except PlannerError as error:
         planner_failure = _planner_failure_evidence(error)

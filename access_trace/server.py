@@ -1,18 +1,22 @@
-"""HTTP boundary for the controlled target and first-run evidence."""
+"""HTTP boundary for page inputs and first-run assessment evidence."""
 
 import json
+import mimetypes
 import os
 import re
+import shutil
 import threading
 import uuid
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
-from .demo import demo_page
 from .domain import CONTROLLED_SCHEME, ValidationError, create_run, utc_now
 from .evidence import attach_evidence_handoff
 from .journey import execute_assessment
@@ -27,13 +31,18 @@ from .store import RunStore
 
 
 MAX_REQUEST_BYTES = 64 * 1024
-MAX_LOCAL_HTML_BYTES = 1024 * 1024
+MAX_LOCAL_SITE_BYTES = 20 * 1024 * 1024
+MAX_LOCAL_SITE_REQUEST_BYTES = 22 * 1024 * 1024
+MAX_LOCAL_SITE_FILES = 200
+MAX_LOCAL_SITE_FILE_BYTES = 5 * 1024 * 1024
 RUN_ID_PATTERN = re.compile(r"^[0-9a-f-]+$")
 SITE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-LOCAL_SITE_PATH_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})$")
+LOCAL_SITE_PATH_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})/(.+)$")
 STATIC_ROOT = Path(__file__).resolve().parent.parent
 STATIC_ASSETS = {
+    "/assets/access-trace-logo-dark.svg": (STATIC_ROOT / "assets" / "access-trace-logo-dark.svg", "image/svg+xml"),
     "/src/assessment.mjs": (STATIC_ROOT / "src" / "assessment.mjs", "text/javascript; charset=utf-8"),
+    "/src/brand-theme.css": (STATIC_ROOT / "src" / "brand-theme.css", "text/css; charset=utf-8"),
     "/src/comparison.mjs": (STATIC_ROOT / "src" / "comparison.mjs", "text/javascript; charset=utf-8"),
     "/src/main.mjs": (STATIC_ROOT / "src" / "main.mjs", "text/javascript; charset=utf-8"),
     "/src/sample-report.mjs": (STATIC_ROOT / "src" / "sample-report.mjs", "text/javascript; charset=utf-8"),
@@ -52,7 +61,7 @@ class _HTMLRootDetector(HTMLParser):
 
 
 class LocalHTMLStore:
-    """Store standalone uploaded pages under an opaque, dedicated data directory."""
+    """Store uploaded page assets under opaque per-site directories."""
 
     def __init__(self, directory: Path):
         self.directory = Path(directory)
@@ -61,36 +70,55 @@ class LocalHTMLStore:
             raise ValueError("local HTML store must be a dedicated data directory")
         self.directory = self.directory.resolve()
 
-    def save(self, contents: bytes) -> str:
+    def save(self, files) -> str:
         site_id = uuid.uuid4().hex
-        destination = self.directory / (site_id + ".html")
-        descriptor = os.open(
-            str(destination), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-        )
+        site_directory = self.directory / site_id
+        site_directory.mkdir(mode=0o700)
         try:
-            with os.fdopen(descriptor, "wb") as target:
-                target.write(contents)
+            for relative_path, contents in files:
+                safe_path = _safe_site_path(relative_path)
+                destination = site_directory.joinpath(*PurePosixPath(safe_path).parts)
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                descriptor = os.open(
+                    str(destination),
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as target:
+                    target.write(contents)
         except Exception:
-            try:
-                destination.unlink()
-            except FileNotFoundError:
-                pass
+            shutil.rmtree(site_directory, ignore_errors=True)
             raise
         return site_id
 
-    def get(self, site_id: str) -> Optional[bytes]:
+    def get(self, site_id: str, relative_path: str) -> Optional[bytes]:
         if not SITE_ID_PATTERN.fullmatch(site_id):
             return None
-        path = self.directory / (site_id + ".html")
         try:
-            descriptor = os.open(
-                str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            )
-        except OSError:
+            safe_path = _safe_site_path(relative_path)
+        except ValidationError:
+            return None
+        site_directory = self.directory / site_id
+        path = site_directory.joinpath(*PurePosixPath(safe_path).parts)
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(site_directory.resolve(strict=True))
+            descriptor = os.open(str(resolved), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except (OSError, ValueError):
             return None
         with os.fdopen(descriptor, "rb") as source:
-            contents = source.read(MAX_LOCAL_HTML_BYTES + 1)
-        return contents if len(contents) <= MAX_LOCAL_HTML_BYTES else None
+            return source.read(MAX_LOCAL_SITE_FILE_BYTES + 1)
+
+
+def _safe_site_path(value: Any) -> str:
+    if not isinstance(value, str) or not value or len(value) > 512:
+        raise ValidationError("page file has an invalid relative path")
+    if "\\" in value or "\x00" in value or value.startswith("/"):
+        raise ValidationError("page file paths must be relative")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValidationError("page file paths must not contain dot segments")
+    return "/".join(parts)
 
 
 class AccessTraceServer(ThreadingHTTPServer):
@@ -147,19 +175,22 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         if asset is not None:
             self.send_file(asset[0], asset[1])
             return
-        if path == "/demo/fixed":
-            self.send_html(demo_page("fixed"))
-            return
-        if path == "/demo/broken":
-            self.send_html(demo_page("broken"))
+        if path.startswith("/docs/demos/"):
+            self.get_demo_document(path)
             return
         local_site_match = LOCAL_SITE_PATH_PATTERN.fullmatch(path)
         if local_site_match:
-            contents = self.server.site_store.get(local_site_match.group(1))
+            site_id = local_site_match.group(1)
+            relative_path = unquote(local_site_match.group(2))
+            contents = self.server.site_store.get(site_id, relative_path)
             if contents is None:
-                self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Local HTML page not found"}})
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Local page file not found"}})
                 return
-            self.send_local_html(contents)
+            if Path(relative_path).suffix.lower() in {".html", ".htm"}:
+                self.send_local_html(contents)
+            else:
+                content_type = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
+                self.send_asset(contents, content_type)
             return
         if path.startswith("/api/runs/"):
             self.get_run(path.rsplit("/", 1)[-1])
@@ -172,7 +203,7 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.FORBIDDEN, {"error": {"message": "Cross-origin requests are not allowed"}})
             return
         if path == "/api/sites":
-            self.upload_local_html()
+            self.upload_local_site()
             return
         if path.startswith("/api/runs/") and path.endswith("/execute"):
             self.execute_run(path)
@@ -193,11 +224,12 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 payload, self.server.controlled_port, self.server.controlled_scheme
             )
             if run.get("targetVersion") == "local":
-                site_id = LOCAL_SITE_PATH_PATTERN.fullmatch(
+                uploaded_site = LOCAL_SITE_PATH_PATTERN.fullmatch(
                     urlsplit(run["targetUrl"]).path
-                ).group(1)
-                if self.server.site_store.get(site_id) is None:
-                    raise ValidationError("uploaded local HTML target was not found")
+                )
+                site_id, entrypoint = uploaded_site.groups()
+                if self.server.site_store.get(site_id, unquote(entrypoint)) is None:
+                    raise ValidationError("uploaded local page file was not found")
             self.server.run_store.save(run)
         except ValidationError as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
@@ -211,13 +243,66 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
 
         self.send_json(HTTPStatus.CREATED, run)
 
-    def upload_local_html(self):
+    def get_demo_document(self, request_path: str):
+        relative_path = unquote(request_path[len("/docs/demos/") :])
+        try:
+            safe_path = _safe_site_path(relative_path)
+            root = (STATIC_ROOT / "docs" / "demos").resolve(strict=True)
+            document = root.joinpath(*PurePosixPath(safe_path).parts).resolve(strict=True)
+            document.relative_to(root)
+            if not document.is_file():
+                raise FileNotFoundError
+            content_type = mimetypes.guess_type(document.name)[0] or "application/octet-stream"
+            if content_type.startswith("text/") or content_type in {"application/javascript"}:
+                content_type += "; charset=utf-8"
+            self.send_file(document, content_type)
+        except (ValidationError, OSError, ValueError):
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Demo document not found"}})
+
+    def upload_local_site(self):
         content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        if content_type != "text/html":
-            self.send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": {"message": "Upload one standalone HTML file"}})
+        if content_type != "multipart/form-data":
+            self.send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": {"message": "Choose an HTML file or site folder"}})
             return
         try:
-            contents = self.read_body(MAX_LOCAL_HTML_BYTES)
+            raw_body = self.read_body(MAX_LOCAL_SITE_REQUEST_BYTES)
+            envelope = (
+                ("Content-Type: " + self.headers.get("Content-Type", "") + "\r\n")
+                + "MIME-Version: 1.0\r\n\r\n"
+            ).encode("ascii") + raw_body
+            message = BytesParser(policy=email_policy).parsebytes(envelope)
+            if not message.is_multipart():
+                raise ValidationError("page files upload was not a multipart form")
+            files = []
+            entrypoint = None
+            total_bytes = 0
+            seen_paths = set()
+            for part in message.iter_parts():
+                field_name = part.get_param("name", header="content-disposition")
+                payload = part.get_payload(decode=True) or b""
+                if field_name == "entrypoint":
+                    entrypoint = payload.decode("utf-8")
+                    continue
+                if field_name != "files" or not part.get_filename():
+                    continue
+                relative_path = _safe_site_path(part.get_filename())
+                if relative_path in seen_paths:
+                    raise ValidationError("page files contain duplicate relative paths")
+                if len(payload) > MAX_LOCAL_SITE_FILE_BYTES:
+                    raise ValidationError("each page file must be 5 MiB or smaller")
+                seen_paths.add(relative_path)
+                total_bytes += len(payload)
+                if total_bytes > MAX_LOCAL_SITE_BYTES:
+                    raise ValidationError("page files must total 20 MiB or less")
+                files.append((relative_path, payload))
+                if len(files) > MAX_LOCAL_SITE_FILES:
+                    raise ValidationError("choose no more than 200 page files")
+
+            entrypoint = _safe_site_path(entrypoint)
+            file_map = dict(files)
+            contents = file_map.get(entrypoint)
+            if contents is None:
+                raise ValidationError("choose an HTML page included with the selected files")
             markup = contents.decode("utf-8")
             if "\x00" in markup:
                 raise ValidationError("HTML must be UTF-8 text")
@@ -226,18 +311,20 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             detector.close()
             if not detector.found_html:
                 raise ValidationError("file must contain an HTML document")
-            site_id = self.server.site_store.save(contents)
+            if Path(entrypoint).suffix.lower() not in {".html", ".htm"}:
+                raise ValidationError("page entry point must be an HTML file")
+            site_id = self.server.site_store.save(files)
         except ValidationError as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
             return
         except UnicodeDecodeError:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": "HTML must be UTF-8 text"}})
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": "Page files must use UTF-8 text filenames and HTML"}})
             return
 
-        target_url = self.base_url() + "/sites/" + site_id
+        target_url = self.base_url() + "/sites/" + site_id + "/" + quote(entrypoint, safe="/")
         self.send_json(
             HTTPStatus.CREATED,
-            {"siteId": site_id, "targetUrl": target_url, "targetVersion": "local"},
+            {"siteId": site_id, "targetUrl": target_url, "targetVersion": "local", "entrypoint": entrypoint},
         )
 
     def execute_run(self, path: str):
@@ -664,13 +751,32 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header(
             "Content-Security-Policy",
-            "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
-            "style-src 'unsafe-inline'; img-src data:; connect-src 'none'; "
+            "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' "
+            + self.base_url()
+            + "; style-src 'unsafe-inline' "
+            + self.base_url()
+            + "; img-src data: "
+            + self.base_url()
+            + "; font-src data: "
+            + self.base_url()
+            + "; media-src data: "
+            + self.base_url()
+            + "; connect-src 'none'; "
             "form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
+        self.end_headers()
+        self.wfile.write(contents)
+
+    def send_asset(self, contents: bytes, content_type: str):
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(contents)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(contents)
 

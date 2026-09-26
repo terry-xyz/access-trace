@@ -16,14 +16,14 @@ CONTROLLED_SCHEME = "http"
 DEMO_TITLE = "AccessTrace Contact form"
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 SUPPORTED_TARGET_PATHS = {
-    "/demo/fixed": "fixed",
-    "/demo/broken": "broken",
+    "/docs/demos/fixed/index.html": "fixed",
+    "/docs/demos/broken/index.html": "broken",
 }
-LOCAL_HTML_TARGET_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})$")
+LOCAL_HTML_TARGET_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})/(.+)$")
 
 
 class ValidationError(ValueError):
-    """Raised when a run request is outside the controlled local boundary."""
+    """Raised when a run request does not satisfy the public input contract."""
 
 
 def utc_now() -> str:
@@ -38,32 +38,35 @@ def validate_target_url(
 
     parsed = urlsplit(target_url)
     host = (parsed.hostname or "").lower()
-    path = parsed.path.rstrip("/") or "/"
+    path = parsed.path or "/"
+    if len(target_url) > 2048:
+        raise ValidationError("targetUrl must be 2048 characters or fewer")
 
     try:
         port = parsed.port
     except ValueError:
         raise ValidationError("targetUrl must use a valid local port")
 
-    if parsed.scheme != controlled_scheme:
-        raise ValidationError("targetUrl must use the controlled server scheme")
-    if host not in LOOPBACK_HOSTS:
-        raise ValidationError("targetUrl must point to the controlled local site")
-    effective_port = port if port is not None else 80
-    if effective_port != controlled_port:
-        raise ValidationError("targetUrl must use the controlled server port")
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValidationError("targetUrl must not contain credentials, a query, or a fragment")
-    if path in SUPPORTED_TARGET_PATHS:
+    if parsed.scheme not in {"http", "https"} or not host:
+        raise ValidationError("targetUrl must be an absolute HTTP or HTTPS URL")
+    if parsed.username or parsed.password:
+        raise ValidationError("targetUrl must not contain embedded credentials")
+
+    effective_port = port if port is not None else (443 if parsed.scheme == "https" else 80)
+    is_controlled_origin = (
+        parsed.scheme == controlled_scheme
+        and host in LOOPBACK_HOSTS
+        and effective_port == controlled_port
+    )
+    uploaded_site = LOCAL_HTML_TARGET_PATTERN.fullmatch(path)
+    if is_controlled_origin and path in SUPPORTED_TARGET_PATHS:
         target_version = SUPPORTED_TARGET_PATHS[path]
-    elif LOCAL_HTML_TARGET_PATTERN.fullmatch(path):
+    elif is_controlled_origin and uploaded_site:
         target_version = "local"
     else:
-        raise ValidationError(
-            "targetUrl must select a controlled demo or an uploaded local HTML page"
-        )
+        target_version = "web"
 
-    normalized = parsed._replace(path=path).geturl()
+    normalized = parsed.geturl()
     return normalized, target_version
 
 
@@ -263,7 +266,7 @@ def create_run(
             [
                 {
                     "kind": "unsupported-goal",
-                    "message": "Goal-focused runs are not supported for uploaded local HTML pages; use whole-site scope.",
+                    "message": "Goal-focused runs are not supported for uploaded local pages; use whole-site scope.",
                 }
             ]
             if run_request["targetVersion"] == "local" and run_request["goal"] is not None

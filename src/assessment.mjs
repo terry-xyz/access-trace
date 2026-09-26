@@ -4,7 +4,6 @@ const UNSAFE_GOAL_PATTERNS = [
   /\b(?:ignore|override|disregard)\b.*\b(?:instructions|rules|safeguards|guardrails)\b/i,
   /\b(?:run|execute)\b.*\b(?:javascript|shell commands?|arbitrary code)\b/i,
 ];
-const REMOTE_TARGET_PATTERN = /\b(?:remote|external|off[- ]site|off[- ]target|third[- ]party)\b|\b(?:another|other)\s+(?:site|website)\b|(?:https?:\/\/|www\.)\S+/i;
 const OTHER_INPUT_MODE_PATTERN = /\b(?:mouse|touchscreen|touch screen|voice commands?|screen reader)\b/i;
 const SECURITY_RESULT_PATTERN = /\b(?:securely|safely|privately|confidentially|encrypt\w*|vulnerab\w*|insecure\w*)\b|\b(?:is|are|be|remains?|becomes?|seems?|stays?)\s+(?:not\s+)?(?:secure|safe|private|confidential|encrypted|vulnerable)\b/i;
 const SECURITY_TOPIC_PATTERN = /\b(?:security|privacy)\b/i;
@@ -28,7 +27,7 @@ const KEYBOARD_GOAL_CUE_PATTERN = /\b(?:keyboard|keys?|tab(?:bing| order)?|enter
 const IMPLICIT_KEYBOARD_ACTION_PATTERN = /\b(?:focus|navigate|move|reach|activate|open|close|select|expand|collapse|submit|send|fill|operate)\b/i;
 
 const UNSAFE_GOAL_ERROR = "This goal asks to override assessment safeguards or execute code, so it cannot be assessed and will not be reinterpreted.";
-const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: this preview accepts free-text goals describing concrete keyboard interactions with named controls on the controlled local site. It cannot assess remote or off-site targets, other input modes, security or privacy evaluations, visual criteria, or other non-keyboard criteria. This goal will not be reinterpreted.";
+const UNSUPPORTED_GOAL_ERROR = "Unsupported goal: describe a concrete keyboard interaction with a named control. Other input modes, security or privacy evaluations, visual criteria, and other non-keyboard criteria are not supported. This goal will not be reinterpreted.";
 const SECURITY_GOAL_ERROR = "Unsupported security/privacy goal: this preview cannot assess whether a site or form is secure, private, or handles sensitive data safely. It accepts keyboard interactions and outcomes only; this goal will not be reinterpreted.";
 
 /** describesKeyboardGoal requires a concrete action on a named control; keyboard input is the assessment profile. */
@@ -64,7 +63,7 @@ function describesSecurityAssessment(candidate) {
   return evaluatesSecurityTopic || evaluatesSensitiveDataHandling;
 }
 
-/** validateTargetUrl accepts only this app's built-in demos or an opaque uploaded-page route. */
+/** validateTargetUrl accepts absolute web URLs and uploaded local site routes. */
 export function validateTargetUrl(value, baseOrigin = CONTROLLED_TARGET_URL) {
   const candidate = typeof value === "string" ? value.trim() : "";
 
@@ -72,49 +71,33 @@ export function validateTargetUrl(value, baseOrigin = CONTROLLED_TARGET_URL) {
     return {
       valid: false,
       normalizedUrl: "",
-      message: "Choose one of this AccessTrace server's local targets.",
+      message: "Enter a URL or choose local page files.",
     };
   }
 
   try {
     const target = new URL(candidate);
-    const base = new URL(baseOrigin);
     const normalizedUrl = target.href;
-    const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-    const portFor = (url) => url.port || (url.protocol === "https:" ? "443" : "80");
-    const sameLocalServer = target.protocol === "http:"
-      && base.protocol === "http:"
-      && loopbackHosts.has(target.hostname)
-      && loopbackHosts.has(base.hostname)
-      && portFor(target) === portFor(base)
+    if (
+      ["http:", "https:"].includes(target.protocol)
+      && target.hostname
       && !target.username
       && !target.password
-      && !target.search
-      && !target.hash;
-    const isBuiltInDemo = target.pathname === "/demo/fixed"
-      || target.pathname === "/demo/broken";
-    const isUploadedLocalPage = /^\/sites\/[0-9a-f]{32}$/.test(target.pathname);
-    const isLegacySampleAddress = baseOrigin === CONTROLLED_TARGET_URL
-      && normalizedUrl === CONTROLLED_TARGET_URL;
-
-    if (isLegacySampleAddress || (sameLocalServer && (isBuiltInDemo || isUploadedLocalPage))) {
+    ) {
       return { valid: true, normalizedUrl, message: "" };
     }
   } catch {
     return {
       valid: false,
       normalizedUrl: "",
-      message: "Enter a valid URL for this AccessTrace server.",
+      message: "Enter a valid HTTP or HTTPS URL, or choose local page files.",
     };
   }
 
-  const baseDescription = baseOrigin === CONTROLLED_TARGET_URL
-    ? CONTROLLED_TARGET_URL
-    : baseOrigin;
   return {
     valid: false,
     normalizedUrl: "",
-    message: `Use a built-in demo or uploaded local HTML page from ${baseDescription}`,
+    message: "Enter an absolute HTTP or HTTPS URL, or choose local page files.",
   };
 }
 
@@ -155,8 +138,7 @@ export function validateAssessmentGoal(value) {
     };
   }
 
-  const describesOutOfScopeGoal = REMOTE_TARGET_PATTERN.test(candidate)
-    || OTHER_INPUT_MODE_PATTERN.test(candidate)
+  const describesOutOfScopeGoal = OTHER_INPUT_MODE_PATTERN.test(candidate)
     || NON_KEYBOARD_CRITERIA_PATTERN.test(candidate);
 
   if (describesOutOfScopeGoal || !describesKeyboardGoal(candidate)) {

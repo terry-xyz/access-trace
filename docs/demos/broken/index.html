@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AccessTrace Contact form</title>
+    <link rel="stylesheet" href="./contact-form.css">
+    <script src="./broken.js" defer></script>
+  </head>
+  <body>
+    <main data-version="broken">
+      <h1>Fictional contact form</h1>
+      <p>This local simulation uses fictional data only.</p>
+      <form id="contact-form" aria-describedby="form-help">
+        <p id="form-help">Complete the fields and activate Submit with the keyboard.</p>
+        <label for="name">Name</label>
+        <input id="name" name="name" type="text" autocomplete="off" placeholder="Avery Example" required>
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="off" placeholder="avery@example.test" required>
+        <label for="message">Message</label>
+        <textarea id="message" name="message" autocomplete="off" placeholder="A fictional message" required></textarea>
+        <button id="submit" type="submit">Submit</button>
+        <p id="success" role="status" aria-live="polite" hidden>Message sent</p>
+      </form>
+    </main>
+  </body>
+</html>

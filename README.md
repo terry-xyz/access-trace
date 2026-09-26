@@ -1,9 +1,9 @@
 # AccessTrace
 
-AccessTrace runs the app, the fixed and broken demo pages, and the assessment API
-from one local server. The report and comparison previews are representative
-sample data; a live run starts a fresh keyboard-only browser session and shows
-the redacted run record.
+AccessTrace runs the app, its demo source documents, and the assessment API from
+one local server. The report and comparison previews are representative sample
+data; a live run starts a fresh keyboard-only browser session and shows the
+redacted run record.
 
 ## Run AccessTrace
 
@@ -19,18 +19,20 @@ python3 -m access_trace --port 8080
 ```
 
 Use this AccessTrace command rather than Python's `http.server`: the app's
-server provides the demo pages and assessment API as well as the UI.
+server provides the UI, demo documents, uploaded local pages, and assessment API.
 
-Open <http://127.0.0.1:8080/>. The built-in demo pages are served by that same
-server:
+Open <http://127.0.0.1:8080/>. The demos are ordinary HTML, CSS, and JavaScript
+files under `docs/demos/`, served as documents:
 
-- <http://127.0.0.1:8080/demo/fixed>
-- <http://127.0.0.1:8080/demo/broken>
+- <http://127.0.0.1:8080/docs/demos/fixed/index.html>
+- <http://127.0.0.1:8080/docs/demos/broken/index.html>
 
-Choose a built-in page or enter the URL of a page served by the local AccessTrace
-server. You can also select multiple source files or a folder as optional context.
-These files are supporting material for the selected page; they do not replace
-the target URL or get served to the browser.
+Enter any absolute HTTP or HTTPS page URL, or choose an HTML file with its
+supporting files or a site folder. AccessTrace uploads selected site files to an
+opaque local path and puts that page URL in the target field. Folder paths are
+preserved so relative CSS, JavaScript, image, and font references work. The
+uploaded page runs in a sandbox with network requests disabled; only assets from
+the uploaded local folder can load.
 
 AccessTrace checks the website first. Only a `BLOCKED` result starts a separate
 read-only source review. At that point, supported UTF-8 text files are filtered
@@ -46,9 +48,11 @@ changed. The report may retain the review summary, relevant paths, skipped
 path/reason metadata, and generated patch. Review the patch before applying it
 yourself.
 
-The local-page allowlist and browser sandbox/network restrictions are unchanged.
+Web URLs are opened in a fresh isolated browser. The browser follows the target
+site while blocking popups and reporting off-site navigation. Uploaded local
+pages have a stricter network policy and cannot submit forms or make connections.
 
-Choose a built-in demo or load an HTML file, then select **Start assessment**.
+Enter a web URL or choose local page files, then select **Start assessment**.
 The app shows run progress and the live report when the assessment finishes.
 AccessTrace invokes the installed Codex CLI with the saved login and validates
 each returned keyboard action locally. Planner actions remain limited to

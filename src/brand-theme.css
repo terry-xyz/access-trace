@@ -1,0 +1,80 @@
+/* AccessTrace identity and Signal Console layout, selected from the brand prototype. */
+:root {
+  --brand-lime: #9fc82b;
+  --brand-orange: #ff9d00;
+  --black: #000000;
+  --surface: #090b08;
+  --surface-raised: #10130d;
+  --ink: #ffffff;
+  --muted: #c3c6bc;
+  --dim: #858b7d;
+  --line: #343b25;
+  --line-strong: #718d25;
+  --cyan: #9fc82b;
+  --cyan-soft: #c3e65a;
+  --green: #9fc82b;
+  --amber: #ff9d00;
+  color-scheme: dark;
+  color: var(--ink);
+  background: #000;
+  font-family: Montserrat, "Avenir Next", Arial, sans-serif;
+}
+
+body {
+  color: #fff;
+  background: #000;
+  font-family: Montserrat, "Avenir Next", Arial, sans-serif;
+}
+
+a { color: var(--cyan-soft); }
+a:hover { color: #fff; }
+.brand { gap: 0; }
+.brand-logo { display: block; width: 118px; height: auto; }
+.site-header { height: 78px; border-color: #343b25; background: #050605; }
+.header-inner { width: min(1440px, calc(100% - 64px)); }
+.header-nav button { min-height: 40px; }
+.header-nav button:hover,
+.header-nav button[aria-current="page"] { border-color: var(--line); color: var(--cyan-soft); background: #9fc82b12; }
+.system-state i { border-color: var(--brand-lime); box-shadow: 0 0 9px #9fc82b70; }
+
+.page-shell { width: min(1280px, calc(100% - 64px)); min-height: calc(100dvh - 78px); padding-top: 48px; padding-bottom: 48px; }
+.intro { display: block; margin: 0 0 28px; }
+.intro .eyebrow { color: var(--brand-lime); }
+.intro h1 { max-width: 850px; margin: 8px 0 10px; font-size: clamp(2.2rem, 5vw, 4.8rem); line-height: 1.04; letter-spacing: -0.055em; }
+.intro-copy { margin: 0; color: var(--muted); font-size: 15px; }
+.setup-card { padding: 22px 0; border-top: 2px solid var(--brand-lime); }
+.section-heading { padding-bottom: 18px; }
+.section-heading h2 { font-size: clamp(1.7rem, 3.2vw, 2.7rem); letter-spacing: -0.045em; }
+.local-badge { text-transform: uppercase; }
+
+.field-group input,
+.field-group textarea,
+.field-group select { border-color: #363c2b; border-radius: 2px; background: #080a07; }
+.field-group input:focus,
+.field-group textarea:focus,
+.field-group select:focus { border-color: var(--cyan); background: #0b1008; }
+.primary-button { border: 1px solid var(--brand-lime); border-radius: 999px; color: #000; background: var(--brand-lime); box-shadow: none; font-weight: 700; }
+.primary-button:hover:not(:disabled) { border-color: #c3e65a; color: #000; background: #c3e65a; }
+.secondary-button { border-radius: 999px; }
+.form-actions .secondary-button { display: inline-flex; }
+.report-section,
+.outcome-card,
+.explanation-card,
+.fix-card,
+.report-panel,
+.live-outcome-card,
+.live-evidence-card { border-color: #343b25; }
+
+@media (max-width: 760px) {
+  .header-inner { width: calc(100% - 28px); }
+  .brand-logo { width: 96px; }
+  .page-shell { width: calc(100% - 28px); min-height: calc(100dvh - 64px); padding-top: 30px; padding-bottom: 32px; }
+  .intro { margin-bottom: 28px; }
+  .intro h1 { font-size: clamp(2rem, 10vw, 3.4rem); }
+  .section-heading { padding-bottom: 18px; }
+  .section-heading h2 { font-size: clamp(2rem, 8vw, 3rem); }
+  .local-badge { display: none; }
+  #assessment-form { grid-template-columns: 1fr; row-gap: 22px; }
+  .source-fields { grid-template-columns: 1fr; }
+  .form-actions .primary-button { width: 100%; }
+}
