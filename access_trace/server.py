@@ -257,6 +257,10 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                 run,
                 self.server.run_store.directory,
                 planner=planner,
+                lifecycle_lock=self.server.active_planners_lock,
+                cancellation_requested=lambda: (
+                    run_id in self.server.cancelled_run_ids
+                ),
             )
             with self.server.active_planners_lock:
                 # The journey owns its terminal status, including a status

@@ -1,10 +1,12 @@
 """The contact-form keyboard journeys and redacted evidence lifecycle."""
 
 import copy
+from contextlib import nullcontext
+from contextvars import ContextVar
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from .browser import (
@@ -21,6 +23,9 @@ from .planner import CodexPlanner, PlannerError, validate_action
 
 MAX_INTERACTIONS = 16
 BROWSER_RUN_LOCK = threading.Lock()
+_TERMINAL_COORDINATION = ContextVar(
+    "access_trace_terminal_coordination", default=None
+)
 
 
 MAX_PAGE_URL_LENGTH = 256
@@ -439,22 +444,35 @@ def _append_action(
 def _set_terminal_state(
     run: Dict[str, Any], status: str, observation: Dict[str, Any], started: float
 ) -> None:
-    now = utc_now()
-    run["status"] = status
-    run["updatedAt"] = now
-    run["completedAt"] = now
-    run["durationMs"] = max(1, int((time.monotonic() - started) * 1000))
-    run["interactionCount"] = len(run["actions"])
-    success = observation.get("success")
-    run["stoppingPoint"] = {
-        "focus": observation["focus"],
-        "successCondition": success.get("condition") if isinstance(success, dict) else None,
-        "successMatched": success.get("matched") if isinstance(success, dict) else None,
-        "goalProgress": observation["goalProgress"],
-        "coverage": observation["coverage"],
-        "observedAt": observation["observedAt"],
-    }
-    attach_evidence_handoff(run)
+    coordination = _TERMINAL_COORDINATION.get()
+    lifecycle_lock, cancellation_requested = (
+        coordination if coordination is not None else (None, None)
+    )
+    lock_context = lifecycle_lock if lifecycle_lock is not None else nullcontext()
+    with lock_context:
+        # The server's cancel endpoint uses this same lock to order requests
+        # against terminalization.
+        if cancellation_requested is not None and cancellation_requested():
+            status = "INCONCLUSIVE"
+            _append_warning(
+                run.setdefault("warnings", []), {"kind": "run-cancelled"}
+            )
+        now = utc_now()
+        run["status"] = status
+        run["updatedAt"] = now
+        run["completedAt"] = now
+        run["durationMs"] = max(1, int((time.monotonic() - started) * 1000))
+        run["interactionCount"] = len(run["actions"])
+        success = observation.get("success")
+        run["stoppingPoint"] = {
+            "focus": observation["focus"],
+            "successCondition": success.get("condition") if isinstance(success, dict) else None,
+            "successMatched": success.get("matched") if isinstance(success, dict) else None,
+            "goalProgress": observation["goalProgress"],
+            "coverage": observation["coverage"],
+            "observedAt": observation["observedAt"],
+        }
+        attach_evidence_handoff(run)
 
 
 def _is_submit_focus(observation: Dict[str, Any]) -> bool:
@@ -954,10 +972,18 @@ def execute_assessment(
     run: Dict[str, Any],
     evidence_directory: Optional[Path] = None,
     planner: Optional[Any] = None,
+    lifecycle_lock: Optional[Any] = None,
+    cancellation_requested: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Execute a bounded whole-site or goal-focused keyboard assessment."""
     with BROWSER_RUN_LOCK:
-        return _execute_assessment(run, evidence_directory, planner)
+        token = _TERMINAL_COORDINATION.set(
+            (lifecycle_lock, cancellation_requested)
+        )
+        try:
+            return _execute_assessment(run, evidence_directory, planner)
+        finally:
+            _TERMINAL_COORDINATION.reset(token)
 
 
 def execute_contact_goal(
