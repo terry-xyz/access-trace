@@ -305,7 +305,9 @@ def _site_page_key(value: Any) -> Optional[str]:
 def _combined_site_coverage(pages: Dict[str, Dict[str, Any]], pending: int) -> Dict[str, Any]:
     controls_observed = sum(item.get("controlsObserved", 0) for item in pages.values())
     controls_expected = sum(item.get("controlsExpected", 0) for item in pages.values())
-    complete = pending == 0
+    complete = pending == 0 and all(
+        item.get("completed") is True for item in pages.values()
+    )
     return {
         "status": "completed" if complete else "partial",
         "completed": complete,
@@ -1315,60 +1317,72 @@ def _execute_assessment(
         consecutive_action_failures = 0
         tab_scan_states = set()
         keyboard_audit_traversal_done = False
+
+        def finish_whole_site_page() -> bool:
+            """Record this page and continue with an unvisited same-origin link when possible."""
+            page_key = _site_page_key(current.get("url"))
+            if page_key:
+                visited_site_pages.add(page_key)
+                site_page_coverage[page_key] = copy.deepcopy(current.get("coverage") or {})
+            if run.get("pageOnly") is not True:
+                discover_links = getattr(browser, "discover_site_links", None)
+                if callable(discover_links):
+                    for link in discover_links():
+                        link_key = _site_page_key(link)
+                        if (
+                            link_key
+                            and link_key not in visited_site_pages
+                            and all(_site_page_key(item) != link_key for item in pending_site_pages)
+                        ):
+                            pending_site_pages.append(link)
+            has_page_capacity = site_page_limit == 0 or len(visited_site_pages) < site_page_limit
+            if pending_site_pages and has_page_capacity:
+                next_page = pending_site_pages.pop(0)
+                next_key = _site_page_key(next_page)
+                if next_key:
+                    visited_site_pages.add(next_key)
+                browser.navigate_to(next_page)
+                covered_focus_ids.clear()
+                next_observation = _redacted_observation(
+                    browser.observe(),
+                    run["targetUrl"],
+                    typed_values.values(),
+                    run["assessmentScope"],
+                    run.get("goal"),
+                    covered_focus_ids,
+                    run.get("successCondition"),
+                )
+                run["observations"].append(next_observation)
+                _record_observation_warnings(run, next_observation)
+                next_failure = _lifecycle_failure(next_observation)
+                if next_failure is not None:
+                    raise BrowserError(next_failure)
+                tab_scan_states.clear()
+                return False
+            if pending_site_pages and site_page_limit != 0:
+                _append_warning(
+                    run["warnings"],
+                    {
+                        "kind": "site-page-limit",
+                        "message": f"The whole-site scan stopped at its {site_page_limit}-page limit.",
+                    },
+                )
+            current["coverage"] = _combined_site_coverage(
+                site_page_coverage, len(pending_site_pages)
+            )
+            _complete_with_screenshot(
+                run, current, started, browser, evidence_directory
+            )
+            return True
+
         while True:
             if run.get("assessmentScope") == "whole-site":
                 coverage = current.get("coverage")
                 if isinstance(coverage, dict) and coverage.get("completed") is True:
-                    page_key = _site_page_key(current.get("url"))
-                    if page_key:
-                        visited_site_pages.add(page_key)
-                        site_page_coverage[page_key] = copy.deepcopy(coverage)
-                    if run.get("pageOnly") is not True:
-                        discover_links = getattr(browser, "discover_site_links", None)
-                        if callable(discover_links):
-                            for link in discover_links():
-                                link_key = _site_page_key(link)
-                                if (
-                                    link_key
-                                    and link_key not in visited_site_pages
-                                    and all(_site_page_key(item) != link_key for item in pending_site_pages)
-                                ):
-                                    pending_site_pages.append(link)
-                    if pending_site_pages and (site_page_limit == 0 or len(visited_site_pages) < site_page_limit):
-                        next_page = pending_site_pages.pop(0)
-                        next_key = _site_page_key(next_page)
-                        if next_key:
-                            visited_site_pages.add(next_key)
-                        browser.navigate_to(next_page)
-                        covered_focus_ids.clear()
-                        current = _redacted_observation(
-                            browser.observe(),
-                            run["targetUrl"],
-                            typed_values.values(),
-                            run["assessmentScope"],
-                            run.get("goal"),
-                            covered_focus_ids,
-                            run.get("successCondition"),
-                        )
-                        run["observations"].append(current)
-                        _record_observation_warnings(run, current)
-                        lifecycle_failure = _lifecycle_failure(current)
-                        if lifecycle_failure is not None:
-                            raise BrowserError(lifecycle_failure)
-                        tab_scan_states.clear()
-                        continue
-                    if pending_site_pages and site_page_limit != 0:
-                        _append_warning(
-                            run["warnings"],
-                            {"kind": "site-page-limit", "message": f"The whole-site scan stopped at its {site_page_limit}-page limit."},
-                        )
-                    current["coverage"] = _combined_site_coverage(
-                        site_page_coverage, len(pending_site_pages)
-                    )
-                    _complete_with_screenshot(
-                        run, current, started, browser, evidence_directory
-                    )
-                    return run
+                    if finish_whole_site_page():
+                        return run
+                    current = run["observations"][-1]
+                    continue
                 scan_state = _tab_scan_signature(current)
                 if scan_state in tab_scan_states:
                     coverage = current.get("coverage")
@@ -1384,10 +1398,10 @@ def _execute_assessment(
                             ),
                         },
                     )
-                    _complete_with_screenshot(
-                        run, current, started, browser, evidence_directory
-                    )
-                    return run
+                    if finish_whole_site_page():
+                        return run
+                    current = run["observations"][-1]
+                    continue
                 tab_scan_states.add(scan_state)
                 try:
                     current = _settle_action(
@@ -1755,6 +1769,22 @@ def _execute_assessment(
                     _set_terminal_state(run, "INCONCLUSIVE", current, started)
                     return run
                 if consecutive_action_failures >= 2:
+                    if run.get("assessmentScope") == "whole-site":
+                        coverage = current.get("coverage")
+                        if isinstance(coverage, dict):
+                            coverage["status"] = "partial"
+                        _append_warning(
+                            run["warnings"],
+                            {
+                                "kind": "incomplete-coverage",
+                                "message": "Keyboard focus traversal stopped after repeated action failures; the scan continued to other pages where possible.",
+                            },
+                        )
+                        consecutive_action_failures = 0
+                        if finish_whole_site_page():
+                            return run
+                        current = run["observations"][-1]
+                        continue
                     failure = {
                         "kind": "action-delivery-failure",
                         "attempts": consecutive_action_failures,
