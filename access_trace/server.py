@@ -17,6 +17,12 @@ from .domain import CONTROLLED_SCHEME, ValidationError, create_run, utc_now
 from .evidence import attach_evidence_handoff
 from .journey import execute_assessment
 from .planner import CodexPlanner
+from .source_context import (
+    MAX_SOURCE_REQUEST_BYTES,
+    SourceContextError,
+    prepare_source_context,
+)
+from .source_review import CodexSourceReviewer, SourceReviewError
 from .store import RunStore
 
 
@@ -88,12 +94,22 @@ class LocalHTMLStore:
 
 
 class AccessTraceServer(ThreadingHTTPServer):
-    def __init__(self, server_address, handler_class, run_directory: Path, planner_factory=None):
+    def __init__(
+        self,
+        server_address,
+        handler_class,
+        run_directory: Path,
+        planner_factory=None,
+        source_reviewer_factory=None,
+    ):
         self.run_store = RunStore(run_directory)
         self.site_store = LocalHTMLStore(self.run_store.directory / "sites")
         self.planner_factory = planner_factory or CodexPlanner
+        self.source_reviewer_factory = source_reviewer_factory or CodexSourceReviewer
         self.active_planners = {}
+        self.active_source_reviewers = {}
         self.cancelled_run_ids = set()
+        self.cancelled_source_review_ids = set()
         self.active_planners_lock = threading.Lock()
         self.controlled_scheme = CONTROLLED_SCHEME
         self.controlled_host = self._public_host(server_address[0])
@@ -160,6 +176,9 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/runs/") and path.endswith("/execute"):
             self.execute_run(path)
+            return
+        if path.startswith("/api/runs/") and path.endswith("/source-review"):
+            self.review_source_context(path)
             return
         if path.startswith("/api/runs/") and path.endswith("/cancel"):
             self.cancel_run(path)
@@ -281,6 +300,226 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
                     self.server.cancelled_run_ids.discard(run_id)
         self.send_json(HTTPStatus.OK, completed)
 
+    def review_source_context(self, path: str):
+        raw_run_id = path[len("/api/runs/") : -len("/source-review")].rstrip("/")
+        run_id = unquote(raw_run_id)
+        if not RUN_ID_PATTERN.fullmatch(run_id):
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+            return
+
+        run = self.server.run_store.get(run_id)
+        if run is None:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+            return
+        if run.get("status") != "BLOCKED":
+            self.send_json(
+                HTTPStatus.CONFLICT,
+                {"error": {"message": "Source review is available only for blocked runs"}},
+            )
+            return
+        if "sourceReview" in run:
+            self.send_json(
+                HTTPStatus.CONFLICT,
+                {"error": {"message": "Source review has already been requested for this run"}},
+            )
+            return
+
+        context = None
+        reviewer = None
+        registered = False
+        try:
+            try:
+                payload = self.read_json(MAX_SOURCE_REQUEST_BYTES)
+            except (ValidationError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": {"message": "request body must be valid JSON: " + str(error)}},
+                )
+                return
+            if not isinstance(payload, dict) or set(payload) != {"sourceContext"}:
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": {"message": 'request body must contain only "sourceContext"'}},
+                )
+                return
+            try:
+                context = prepare_source_context(payload["sourceContext"])
+            except SourceContextError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
+                return
+
+            skipped = [dict(item) for item in context.skipped]
+            if not context.files:
+                with self.server.active_planners_lock:
+                    current = self.server.run_store.get(run_id)
+                    if current is None:
+                        status = HTTPStatus.NOT_FOUND
+                        response = {"error": {"message": "Run not found"}}
+                    elif current.get("status") != "BLOCKED":
+                        status = HTTPStatus.CONFLICT
+                        response = {
+                            "error": {
+                                "message": "Source review is available only for blocked runs"
+                            }
+                        }
+                    elif "sourceReview" in current or run_id in self.server.active_source_reviewers:
+                        status = HTTPStatus.CONFLICT
+                        response = {
+                            "error": {
+                                "message": "Source review has already been requested for this run"
+                            }
+                        }
+                    else:
+                        current["sourceReview"] = {
+                            "status": "NO_PATCH",
+                            "summary": (
+                                "No eligible text files were supplied for review, "
+                                "so no patch was generated."
+                            ),
+                            "relevantPaths": [],
+                            "patch": "",
+                            "skipped": skipped,
+                        }
+                        self.server.run_store.save(current)
+                        status = HTTPStatus.OK
+                        response = current
+                self.send_json(status, response)
+                return
+
+            try:
+                reviewer = self.server.source_reviewer_factory()
+            except Exception:
+                with self.server.active_planners_lock:
+                    current = self.server.run_store.get(run_id)
+                    if current is None:
+                        status = HTTPStatus.NOT_FOUND
+                        response = {"error": {"message": "Run not found"}}
+                    elif current.get("status") != "BLOCKED":
+                        status = HTTPStatus.CONFLICT
+                        response = {
+                            "error": {
+                                "message": "Source review is available only for blocked runs"
+                            }
+                        }
+                    elif "sourceReview" in current:
+                        status = HTTPStatus.CONFLICT
+                        response = {
+                            "error": {
+                                "message": "Source review has already been requested for this run"
+                            }
+                        }
+                    elif run_id in self.server.active_source_reviewers:
+                        status = HTTPStatus.CONFLICT
+                        response = {
+                            "error": {"message": "Source review is already in progress"}
+                        }
+                    else:
+                        current["sourceReview"] = {
+                            "status": "FAILED",
+                            "summary": "The source reviewer could not be started.",
+                            "relevantPaths": [],
+                            "patch": "",
+                            "skipped": skipped,
+                        }
+                        self.server.run_store.save(current)
+                        status = HTTPStatus.OK
+                        response = current
+                self.send_json(status, response)
+                return
+
+            with self.server.active_planners_lock:
+                current = self.server.run_store.get(run_id)
+                if current is None:
+                    status = HTTPStatus.NOT_FOUND
+                    payload = {"error": {"message": "Run not found"}}
+                elif current.get("status") != "BLOCKED":
+                    status = HTTPStatus.CONFLICT
+                    payload = {
+                        "error": {"message": "Source review is available only for blocked runs"}
+                    }
+                elif "sourceReview" in current:
+                    status = HTTPStatus.CONFLICT
+                    payload = {
+                        "error": {
+                            "message": "Source review has already been requested for this run"
+                        }
+                    }
+                elif run_id in self.server.active_source_reviewers:
+                    status = HTTPStatus.CONFLICT
+                    payload = {"error": {"message": "Source review is already in progress"}}
+                else:
+                    current["sourceReview"] = {
+                        "status": "IN_PROGRESS",
+                        "summary": "Reviewing uploaded files against browser evidence.",
+                        "relevantPaths": [],
+                        "patch": "",
+                        "skipped": skipped,
+                    }
+                    self.server.active_source_reviewers[run_id] = reviewer
+                    registered = True
+                    self.server.run_store.save(current)
+                    status = None
+                    payload = None
+                    run = current
+
+            if status is not None:
+                self.send_json(status, payload)
+                return
+
+            try:
+                review_result = reviewer.review(run, context)
+                skipped = [dict(item) for item in context.skipped]
+                source_review = {
+                    "status": review_result["status"],
+                    "summary": review_result["summary"],
+                    "relevantPaths": review_result["relevantPaths"],
+                    "patch": review_result["patch"],
+                    "skipped": skipped,
+                }
+            except SourceReviewError as error:
+                skipped = [dict(item) for item in context.skipped]
+                source_review = {
+                    "status": "FAILED",
+                    "summary": str(error).strip()[:2000] or "Source review failed.",
+                    "relevantPaths": [],
+                    "patch": "",
+                    "skipped": skipped,
+                }
+            except Exception:
+                skipped = [dict(item) for item in context.skipped]
+                source_review = {
+                    "status": "FAILED",
+                    "summary": "The source reviewer failed unexpectedly.",
+                    "relevantPaths": [],
+                    "patch": "",
+                    "skipped": skipped,
+                }
+
+            with self.server.active_planners_lock:
+                if run_id in self.server.cancelled_source_review_ids:
+                    source_review = {
+                        "status": "CANCELLED",
+                        "summary": "Source review was cancelled.",
+                        "relevantPaths": [],
+                        "patch": "",
+                        "skipped": skipped,
+                    }
+                completed = self.server.run_store.get(run_id)
+                if completed is None:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Run not found"}})
+                    return
+                completed["sourceReview"] = source_review
+                self.server.run_store.save(completed)
+            self.send_json(HTTPStatus.OK, completed)
+        finally:
+            if registered:
+                with self.server.active_planners_lock:
+                    if self.server.active_source_reviewers.get(run_id) is reviewer:
+                        del self.server.active_source_reviewers[run_id]
+                    self.server.cancelled_source_review_ids.discard(run_id)
+            if context is not None:
+                context.cleanup()
+
     def cancel_run(self, path: str):
         raw_run_id = path[len("/api/runs/") : -len("/cancel")].rstrip("/")
         run_id = unquote(raw_run_id)
@@ -293,6 +532,35 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             if run is None:
                 status = HTTPStatus.NOT_FOUND
                 payload = {"error": {"message": "Run not found"}}
+            elif (
+                isinstance(run.get("sourceReview"), dict)
+                and run["sourceReview"].get("status") == "IN_PROGRESS"
+            ):
+                reviewer = self.server.active_source_reviewers.get(run_id)
+                if reviewer is None:
+                    status = HTTPStatus.CONFLICT
+                    payload = {
+                        "error": {"message": "Source review is active, but its reviewer cannot be cancelled"}
+                    }
+                else:
+                    cancel = getattr(reviewer, "cancel", None)
+                    if not callable(cancel):
+                        status = HTTPStatus.CONFLICT
+                        payload = {
+                            "error": {"message": "Source review is active, but its reviewer cannot be cancelled"}
+                        }
+                    else:
+                        try:
+                            cancel()
+                        except Exception:
+                            status = HTTPStatus.CONFLICT
+                            payload = {
+                                "error": {"message": "Source review is active, but could not be cancelled"}
+                            }
+                        else:
+                            self.server.cancelled_source_review_ids.add(run_id)
+                            status = HTTPStatus.ACCEPTED
+                            payload = {"id": run_id, "status": "CANCELLATION_REQUESTED"}
             elif run.get("status") != "IN_PROGRESS":
                 status = HTTPStatus.CONFLICT
                 payload = {"error": {"message": "Run is not active or cancellable"}}
@@ -334,8 +602,8 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.OK, run)
 
-    def read_json(self) -> Dict[str, Any]:
-        raw_body = self.read_body(MAX_REQUEST_BYTES)
+    def read_json(self, maximum_bytes: int = MAX_REQUEST_BYTES) -> Dict[str, Any]:
+        raw_body = self.read_body(maximum_bytes)
         return json.loads(raw_body.decode("utf-8"))
 
     def read_body(self, maximum_bytes: int) -> bytes:
@@ -434,8 +702,13 @@ def create_server(
     port: int = 8080,
     run_directory: Optional[Path] = None,
     planner_factory=None,
+    source_reviewer_factory=None,
 ):
     directory = Path(run_directory or ".access-trace/runs")
     return AccessTraceServer(
-        (host, port), AccessTraceHandler, directory, planner_factory=planner_factory
+        (host, port),
+        AccessTraceHandler,
+        directory,
+        planner_factory=planner_factory,
+        source_reviewer_factory=source_reviewer_factory,
     )

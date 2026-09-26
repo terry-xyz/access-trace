@@ -22,9 +22,22 @@ const builtInTargetInput = document.querySelector("#built-in-target");
 const recognizedTarget = document.querySelector("#recognized-target");
 const goalInput = document.querySelector("#assessment-goal");
 const simulationInput = document.querySelector("#simulation-mode");
-const localHtmlFileInput = document.querySelector("#local-html-file");
-const localHtmlStatus = document.querySelector("#local-html-status");
-const loadLocalHtmlButton = document.querySelector("#load-local-html");
+const sourceContextFilesInput = document.querySelector("#source-context-files");
+const sourceContextDirectoryInput = document.querySelector("#source-context-directory");
+const sourceContextStatus = document.querySelector("#source-context-status");
+const sourceContextSkippedBlock = document.querySelector("#source-context-selection-skipped-block");
+const sourceContextSkippedList = document.querySelector("#source-context-selection-skipped");
+const sourceReviewResult = document.querySelector("#source-review-result");
+const sourceReviewStatus = document.querySelector("#source-review-status");
+const sourceReviewSummary = document.querySelector("#source-review-summary");
+const sourceReviewFileCounts = document.querySelector("#source-review-file-counts");
+const sourceReviewRelevantBlock = document.querySelector("#source-review-relevant-block");
+const sourceReviewRelevantPaths = document.querySelector("#source-review-relevant-paths");
+const sourceReviewSkippedBlock = document.querySelector("#source-review-skipped-block");
+const sourceReviewSkippedFiles = document.querySelector("#source-review-skipped-files");
+const sourceReviewPatchBlock = document.querySelector("#source-review-patch-block");
+const sourceReviewPatch = document.querySelector("#source-review-patch");
+const sourcePatchDownload = document.querySelector("#download-source-patch");
 const liveAssessmentButton = document.querySelector("#start-live-assessment");
 const cancelLiveAssessmentButton = document.querySelector("#cancel-live-assessment");
 const liveAssessmentSection = document.querySelector("#live-assessment");
@@ -60,7 +73,27 @@ const navButtons = {
 };
 let recordUrl;
 let liveRecordUrl;
+let sourcePatchUrl;
 let activeLiveRunId = null;
+let selectedSourceFiles = [];
+
+const MAX_SOURCE_CONTEXT_FILE_BYTES = 512 * 1024;
+const MAX_SOURCE_CONTEXT_REQUEST_BYTES = 5 * 1024 * 1024;
+const MAX_SOURCE_CONTEXT_FILES = 200;
+const MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY = 50;
+const SOURCE_CONTEXT_GENERATED_DIRECTORIES = new Set([
+  ".git", ".hg", ".svn", ".next", ".nuxt", ".venv", ".pytest_cache",
+  ".mypy_cache", ".ruff_cache", ".cache", "__pycache__", "bower_components",
+  "build", "coverage", "dist", "node_modules", "out", "Pods", "site-packages",
+  "target", "venv", "vendor",
+]);
+const SOURCE_CONTEXT_BINARY_EXTENSIONS = new Set([
+  ".7z", ".avif", ".bin", ".class", ".db", ".dll", ".docx", ".eot", ".exe",
+  ".gif", ".gz", ".heic", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3",
+  ".mp4", ".ods", ".odt", ".odp", ".otf", ".pdf", ".png", ".pptx", ".psd",
+  ".rar", ".so", ".sqlite", ".tar", ".ttf", ".wav", ".webm", ".webp", ".woff",
+  ".woff2", ".xls", ".xlsx", ".zip",
+]);
 
 /** setActiveView keeps one focused app screen visible without scrolling the document. */
 function setActiveView(view) {
@@ -446,45 +479,199 @@ function handleAssessmentSubmit(event) {
   void handleLiveAssessment();
 }
 
-/** handleLocalHtmlUpload stores one self-contained page on this server and selects its opaque route. */
-async function handleLocalHtmlUpload() {
-  const file = localHtmlFileInput.files?.[0];
-  if (!file) {
-    localHtmlStatus.textContent = "Choose one .html or .htm file first.";
-    return;
-  }
-  if (!/\.html?$/i.test(file.name)) {
-    localHtmlStatus.textContent = "Choose a standalone .html or .htm file.";
-    return;
-  }
-  if (file.size > 1024 * 1024) {
-    localHtmlStatus.textContent = "The HTML file must be 1 MB or smaller.";
-    return;
-  }
+/** sourceSkipMessage translates local and server filtering reasons into clear report text. */
+function sourceSkipMessage(reason) {
+  const messages = {
+    "generated-or-dependency-directory": "Generated or dependency folder",
+    "generated-directory": "Generated or dependency folder",
+    gitignore: "Ignored by .gitignore",
+    "file-size-limit": "Larger than 512 KiB",
+    "review-file-size-limit": "Larger than 32 KiB review limit",
+    "review-source-budget": "Exceeds the 64 KiB review budget",
+    "review-prompt-size-limit": "Omitted to fit Codex review input",
+    "request-size-limit": "Skipped to keep the upload under 5 MiB",
+    "file-count-limit": "Skipped because the review accepts at most 200 files",
+    "unsupported-binary": "Binary or non-text content",
+    "binary-content": "Binary or non-text content",
+    "unsupported-utf8": "Not valid UTF-8 text",
+    "unsupported-file-type": "Unsupported file type",
+    "duplicate-path": "Duplicate relative path",
+    "unsafe-path": "Unsafe relative path",
+    "read-error": "Could not read this file",
+  };
+  return messages[reason] || String(reason || "Skipped").replaceAll("-", " ");
+}
 
-  loadLocalHtmlButton.disabled = true;
-  localHtmlStatus.textContent = "Loading the local HTML file…";
-  try {
-    const response = await fetch("/api/sites", {
-      method: "POST",
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: file,
+/** appendSourceSkipItems safely lists filtered file names without interpreting them as markup. */
+function appendSourceSkipItems(list, entries) {
+  const fragment = document.createDocumentFragment();
+  for (const entry of entries.slice(0, MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY)) {
+    const item = document.createElement("li");
+    item.textContent = `${entry.path} — ${sourceSkipMessage(entry.reason)}`;
+    fragment.append(item);
+  }
+  if (entries.length > MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY) {
+    const item = document.createElement("li");
+    item.textContent = `${entries.length - MAX_SOURCE_CONTEXT_SKIPPED_DISPLAY} more skipped files`;
+    fragment.append(item);
+  }
+  list.replaceChildren(fragment);
+}
+
+/** collectSourceSelection keeps File objects in this page and records each picker's path semantics. */
+function collectSourceSelection() {
+  const entries = [];
+  for (const file of sourceContextFilesInput.files ?? []) {
+    entries.push({ file, path: file.name, selectionType: "file" });
+  }
+  for (const file of sourceContextDirectoryInput.files ?? []) {
+    entries.push({
+      file,
+      path: file.webkitRelativePath || file.name,
+      selectionType: "directory",
     });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message || "The HTML file could not be loaded.");
-
-    targetInput.value = result.targetUrl;
-    builtInTargetInput.value = "";
-    updateRecognizedTargetLabel();
-    clearTargetValidationError();
-    localHtmlStatus.textContent = `Loaded ${file.name}. This local page is selected as the target.`;
-  } catch (error) {
-    localHtmlStatus.textContent = error instanceof Error
-      ? error.message
-      : "The HTML file could not be loaded.";
-  } finally {
-    loadLocalHtmlButton.disabled = false;
   }
+  return entries;
+}
+
+/** sourcePathSkipReason quickly removes unsafe, generated, oversized, and known-binary candidates. */
+function sourcePathSkipReason(entry) {
+  const { file, path } = entry;
+  const parts = path.split("/");
+  if (
+    !path
+    || path.startsWith("/")
+    || path.includes("\\")
+    || path.includes("\0")
+    || parts.some((part) => !part || part === "." || part === "..")
+  ) return "unsafe-path";
+  if (parts.slice(0, -1).some((part) => SOURCE_CONTEXT_GENERATED_DIRECTORIES.has(part))) {
+    return "generated-directory";
+  }
+  if (file.size > MAX_SOURCE_CONTEXT_FILE_BYTES) return "file-size-limit";
+  const basename = parts.at(-1).toLowerCase();
+  const extension = basename.includes(".") ? basename.slice(basename.lastIndexOf(".")) : "";
+  if (SOURCE_CONTEXT_BINARY_EXTENSIONS.has(extension)) return "binary-content";
+  return null;
+}
+
+/** analyzeSourceSelection chooses a stable, duplicate-free manifest without reading any file text. */
+function analyzeSourceSelection(entries) {
+  const skipped = [];
+  const candidates = [];
+  const sorted = [...entries].sort((left, right) => {
+    if (left.path !== right.path) return left.path < right.path ? -1 : 1;
+    if (left.selectionType === right.selectionType) return 0;
+    return left.selectionType === "file" ? -1 : 1;
+  });
+  const seenPaths = new Set();
+
+  for (const entry of sorted) {
+    const reason = sourcePathSkipReason(entry);
+    if (reason) {
+      skipped.push({ path: entry.path, reason });
+      continue;
+    }
+    if (seenPaths.has(entry.path)) {
+      skipped.push({ path: entry.path, reason: "duplicate-path" });
+      continue;
+    }
+    seenPaths.add(entry.path);
+    candidates.push(entry);
+  }
+
+  const boundedCandidates = candidates.slice(0, MAX_SOURCE_CONTEXT_FILES);
+  for (const entry of candidates.slice(MAX_SOURCE_CONTEXT_FILES)) {
+    skipped.push({ path: entry.path, reason: "file-count-limit" });
+  }
+  return { selectedCount: entries.length, candidates: boundedCandidates, skipped };
+}
+
+/** updateSourceContextSelection reports local file counts without reading or uploading contents. */
+function updateSourceContextSelection() {
+  selectedSourceFiles = collectSourceSelection();
+  const selection = analyzeSourceSelection(selectedSourceFiles);
+  sourceContextSkippedBlock.hidden = selection.skipped.length === 0;
+  appendSourceSkipItems(sourceContextSkippedList, selection.skipped);
+  if (selection.selectedCount === 0) {
+    sourceContextStatus.textContent = "No source files selected. The page URL remains the assessment target.";
+    return;
+  }
+  sourceContextStatus.textContent = `${selection.selectedCount} selected · ${selection.candidates.length} eligible · ${selection.skipped.length} skipped before reading. Contents are read only after a blocked result.`;
+}
+
+/** hasBinaryControls rejects non-text payloads using the same control-character rule as the server. */
+function hasBinaryControls(content) {
+  return /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(content);
+}
+
+/** prepareSourceContext strictly decodes and bounds files only after the browser result is BLOCKED. */
+async function prepareSourceContext(entries) {
+  const selection = analyzeSourceSelection(entries);
+  const files = [];
+  const skipped = [...selection.skipped];
+  const encoder = new TextEncoder();
+  const emptyManifestBytes = encoder.encode(
+    JSON.stringify({ sourceContext: { files: [] } }),
+  ).byteLength;
+  let requestBytes = emptyManifestBytes;
+  let readCount = 0;
+
+  for (const entry of selection.candidates) {
+    let content;
+    let bytes;
+    try {
+      bytes = await entry.file.arrayBuffer();
+      readCount += 1;
+    } catch {
+      skipped.push({ path: entry.path, reason: "read-error" });
+      continue;
+    }
+    try {
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      skipped.push({ path: entry.path, reason: "unsupported-utf8" });
+      continue;
+    }
+    if (hasBinaryControls(content)) {
+      skipped.push({ path: entry.path, reason: "unsupported-binary" });
+      continue;
+    }
+
+    const candidate = { path: entry.path, content, selectionType: entry.selectionType };
+    const candidateBytes = requestBytes
+      + encoder.encode(JSON.stringify(candidate)).byteLength
+      + (files.length > 0 ? 1 : 0);
+    if (candidateBytes > MAX_SOURCE_CONTEXT_REQUEST_BYTES) {
+      skipped.push({ path: entry.path, reason: "request-size-limit" });
+      continue;
+    }
+    files.push(candidate);
+    requestBytes = candidateBytes;
+  }
+
+  const body = JSON.stringify({ sourceContext: { files } });
+  if (encoder.encode(body).byteLength > MAX_SOURCE_CONTEXT_REQUEST_BYTES) {
+    throw new Error("The selected source context exceeds the 5 MiB upload limit.");
+  }
+
+  return {
+    selectedCount: selection.selectedCount,
+    readCount,
+    files,
+    skipped,
+    body,
+  };
+}
+
+/** clearSourceSelection releases picker and JavaScript references to selected local files. */
+function clearSourceSelection() {
+  sourceContextFilesInput.value = "";
+  sourceContextDirectoryInput.value = "";
+  selectedSourceFiles = [];
+  sourceContextStatus.textContent = "Source file selections cleared after this run.";
+  sourceContextSkippedBlock.hidden = true;
+  sourceContextSkippedList.replaceChildren();
 }
 
 /** selectBuiltInTarget keeps demo selection on the same server origin as the app. */
@@ -495,12 +682,12 @@ function selectBuiltInTarget() {
   clearTargetValidationError();
 }
 
-/** updateRecognizedTargetLabel mirrors the active built-in or uploaded route without retaining stale text. */
+/** updateRecognizedTargetLabel mirrors the active local target without retaining stale text. */
 function updateRecognizedTargetLabel() {
   const validation = validateTargetUrl(targetInput.value, window.location.origin);
   recognizedTarget.textContent = validation.valid
     ? validation.normalizedUrl
-    : "Choose a built-in demo or load a local HTML file";
+    : "Choose a built-in demo or enter a local page URL";
 }
 
 /** appendTextItems renders bounded evidence without interpreting page-provided text as markup. */
@@ -512,6 +699,69 @@ function appendTextItems(list, entries, describe) {
     fragment.append(item);
   }
   list.replaceChildren(fragment);
+}
+
+/** renderSourceReview presents server review data and local filtering details as inert text. */
+function renderSourceReview(result, selectionSummary) {
+  if (!selectionSummary) {
+    sourceReviewResult.hidden = true;
+    return;
+  }
+
+  const review = result.sourceReview && typeof result.sourceReview === "object"
+    ? result.sourceReview
+    : {};
+  const status = String(review.status || "FAILED").toUpperCase();
+  const statusLabels = {
+    IN_PROGRESS: "Review in progress",
+    PATCH_READY: "Patch ready to review",
+    NO_PATCH: "No patch produced",
+    FAILED: "Review failed",
+    CANCELLED: "Review cancelled",
+  };
+  sourceReviewResult.hidden = false;
+  sourceReviewStatus.textContent = statusLabels[status] || "Review ended";
+  sourceReviewStatus.dataset.status = status.toLowerCase();
+  sourceReviewSummary.textContent = typeof review.summary === "string" && review.summary.trim()
+    ? review.summary
+    : "The source review did not return a summary.";
+
+  const serverSkipped = Array.isArray(review.skipped) ? review.skipped : [];
+  const skipped = [
+    ...selectionSummary.skipped,
+    ...serverSkipped.filter((item) => item && typeof item === "object"),
+  ];
+  sourceReviewFileCounts.textContent = (
+    `${selectionSummary.selectedCount} selected · ${selectionSummary.readCount} read locally · `
+    `${selectionSummary.sentCount} submitted for review · `
+    + `${skipped.length} skipped.`
+  );
+
+  const relevantPaths = Array.isArray(review.relevantPaths)
+    ? review.relevantPaths.filter((path) => typeof path === "string")
+    : [];
+  sourceReviewRelevantBlock.hidden = relevantPaths.length === 0;
+  appendTextItems(sourceReviewRelevantPaths, relevantPaths, (path) => path);
+  sourceReviewSkippedBlock.hidden = skipped.length === 0;
+  appendSourceSkipItems(sourceReviewSkippedFiles, skipped.map((item) => ({
+    path: typeof item.path === "string" ? item.path : "Unknown path",
+    reason: typeof item.reason === "string" ? item.reason : "skipped",
+  })));
+
+  const patch = typeof review.patch === "string" ? review.patch : "";
+  const hasPatch = status === "PATCH_READY" && patch.trim() !== "";
+  sourceReviewPatchBlock.hidden = !hasPatch;
+  sourceReviewPatch.textContent = hasPatch ? patch : "";
+  sourcePatchDownload.hidden = !hasPatch;
+  if (sourcePatchUrl) URL.revokeObjectURL(sourcePatchUrl);
+  sourcePatchUrl = null;
+  if (hasPatch) {
+    sourcePatchUrl = URL.createObjectURL(new Blob([patch], { type: "text/x-diff;charset=utf-8" }));
+    sourcePatchDownload.href = sourcePatchUrl;
+    sourcePatchDownload.download = "access-trace-source-review.patch";
+  } else {
+    sourcePatchDownload.removeAttribute("href");
+  }
 }
 
 /** renderLiveAssessmentResult presents only facts recorded in the completed run. */
@@ -618,10 +868,19 @@ function renderLiveAssessmentResult(result, configuration) {
 async function handleLiveAssessment() {
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
+  const sourceSelectionForRun = [...selectedSourceFiles];
 
   setActiveView("live");
   liveTerminal.hidden = false;
   liveResult.hidden = true;
+  sourceReviewResult.hidden = true;
+  sourceReviewPatchBlock.hidden = true;
+  sourceReviewPatch.textContent = "";
+  sourceReviewPatchBlock.open = false;
+  sourcePatchDownload.hidden = true;
+  sourcePatchDownload.removeAttribute("href");
+  if (sourcePatchUrl) URL.revokeObjectURL(sourcePatchUrl);
+  sourcePatchUrl = null;
   terminalLog.replaceChildren();
   setRunStage(25, "Settings checked", "Local target and assessment settings checked.");
   liveAssessmentStatus.textContent = "Creating a fresh local run…";
@@ -655,14 +914,91 @@ async function handleLiveAssessment() {
     const executeResponse = await fetch(`/api/runs/${encodeURIComponent(created.id)}/execute`, {
       method: "POST",
     });
-    const result = await executeResponse.json();
+    let result = await executeResponse.json();
     if (!executeResponse.ok) {
       throw new Error(result.error?.message || "The run could not be completed.");
     }
 
-    setRunStage(100, "Result saved", `Run saved with status ${result.status}.`);
+    let sourceReviewSelection = null;
+    if (String(result.status).toUpperCase() === "BLOCKED" && sourceSelectionForRun.length > 0) {
+      cancelLiveAssessmentButton.disabled = true;
+      liveAssessmentStatus.textContent = "The browser run is blocked. Preparing selected files locally; Stop becomes available when review starts…";
+      setRunStage(88, "Source review", "Browser result is blocked; reading eligible source files locally.");
+      let prepared = null;
+      try {
+        prepared = await prepareSourceContext(sourceSelectionForRun);
+      } catch (error) {
+        sourceReviewSelection = {
+          selectedCount: sourceSelectionForRun.length,
+          readCount: 0,
+          sentCount: 0,
+          skipped: [{ path: "Source context", reason: "request-size-limit" }],
+        };
+        result = {
+          ...result,
+          sourceReview: {
+            status: "FAILED",
+            summary: error instanceof Error ? error.message : "The source files could not be prepared for review.",
+            relevantPaths: [],
+            patch: "",
+            skipped: [],
+          },
+        };
+      }
+      if (prepared) {
+        sourceReviewSelection = {
+          selectedCount: prepared.selectedCount,
+          readCount: prepared.readCount,
+          sentCount: prepared.files.length,
+          skipped: prepared.skipped,
+        };
+        setRunStage(92, "Source review", `Submitting ${prepared.files.length} eligible files for blocked-run review.`);
+        cancelLiveAssessmentButton.disabled = false;
+        liveAssessmentStatus.textContent = "Source review is running. You can stop this review while it is active.";
+        try {
+          const reviewResponse = await fetch(
+            `/api/runs/${encodeURIComponent(created.id)}/source-review`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: prepared.body,
+            },
+          );
+          const reviewed = await reviewResponse.json();
+          if (!reviewResponse.ok) {
+            throw new Error(reviewed.error?.message || "The source review could not be completed.");
+          }
+          result = reviewed;
+        } catch (error) {
+          result = {
+            ...result,
+            sourceReview: {
+              status: "FAILED",
+              summary: error instanceof Error
+                ? error.message
+                : "The source review could not be completed.",
+              relevantPaths: [],
+              patch: "",
+              skipped: [],
+            },
+          };
+        } finally {
+          prepared.files.length = 0;
+          prepared.body = "";
+          sourceSelectionForRun.length = 0;
+          clearSourceSelection();
+        }
+      }
+    }
+
+    const reviewStatus = String(result.sourceReview?.status || "").toUpperCase();
+    const finalStage = sourceReviewSelection && reviewStatus
+      ? `Source review ${reviewStatus.toLowerCase().replaceAll("_", " ")}`
+      : "Result saved";
+    setRunStage(100, finalStage, `Run saved with status ${result.status}.`);
     liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
     renderLiveAssessmentResult(result, configuration);
+    renderSourceReview(result, sourceReviewSelection);
     const serialized = JSON.stringify(result, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -680,6 +1016,8 @@ async function handleLiveAssessment() {
       : "The local assessment could not be completed.";
     setRunStage(liveRunProgress.value, "Run needs attention", "The run did not return a completed result.");
   } finally {
+    sourceSelectionForRun.length = 0;
+    clearSourceSelection();
     activeLiveRunId = null;
     cancelLiveAssessmentButton.hidden = true;
     cancelLiveAssessmentButton.disabled = false;
@@ -1441,7 +1779,8 @@ newAssessmentButton.addEventListener("click", () => {
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });
-loadLocalHtmlButton.addEventListener("click", handleLocalHtmlUpload);
+sourceContextFilesInput.addEventListener("change", updateSourceContextSelection);
+sourceContextDirectoryInput.addEventListener("change", updateSourceContextSelection);
 builtInTargetInput.addEventListener("change", selectBuiltInTarget);
 cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
 targetInput.addEventListener("input", () => {

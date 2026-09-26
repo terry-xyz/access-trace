@@ -75,22 +75,28 @@
             </select>
           </div>
 
-          <div class="field-group local-file-field">
-            <div class="field-label-row"><label for="local-html-file">Your HTML file <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About local HTML files" aria-describedby="tip-local-html"><span aria-hidden="true">?</span><span id="tip-local-html" class="tooltip" role="tooltip">One standalone .html file, up to 1 MB. Linked files are not included. The file is kept on this server.</span></button></div>
-            <input
-              id="local-html-file"
-              name="localHtmlFile"
-              type="file"
-              accept=".html,.htm,text/html"
-              aria-describedby="local-html-hint local-html-status"
-            />
-            <p id="local-html-hint" class="field-hint">One standalone .html file, up to 1 MB.</p>
-            <button id="load-local-html" class="secondary-button compact-button" type="button">Load file</button>
-            <p id="local-html-status" class="scope-status" role="status" aria-live="polite"></p>
+          <div class="field-group source-context-field">
+            <div class="field-label-row"><label id="source-context-label" for="source-context-files">Source context <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About source files" aria-describedby="tip-source-context"><span aria-hidden="true">?</span><span id="tip-source-context" class="tooltip" role="tooltip">Choose source, configuration, and documentation files to help explain a blocked keyboard result. Only selected text files that fit the review limits are sent to your signed-in Codex, and only after a blocked result. Files are never served or executed, and the original source is not retained.</span></button></div>
+            <div class="source-context-pickers" aria-describedby="source-context-hint source-context-status">
+              <div>
+                <label for="source-context-files">Choose files</label>
+                <input id="source-context-files" name="sourceContextFiles" type="file" multiple aria-describedby="source-context-hint source-context-status" />
+              </div>
+              <div>
+                <label for="source-context-directory">Choose a folder</label>
+                <input id="source-context-directory" name="sourceContextDirectory" type="file" webkitdirectory directory multiple aria-describedby="source-context-hint source-context-status" />
+              </div>
+            </div>
+            <p id="source-context-hint" class="field-hint">Selected files stay in this browser during the assessment. Their contents are read and sent only if the page is blocked.</p>
+            <p id="source-context-status" class="scope-status" role="status" aria-live="polite">No source files selected.</p>
+            <div id="source-context-selection-skipped-block" class="source-context-skipped" hidden>
+              <strong>Skipped before review</strong>
+              <ul id="source-context-selection-skipped"></ul>
+            </div>
           </div>
 
           <div class="field-group">
-            <div class="field-label-row"><label for="assessment-goal">Goal <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About assessment goals" aria-describedby="tip-goal"><span aria-hidden="true">?</span><span id="tip-goal" class="tooltip" role="tooltip">Leave blank to check the whole page. For a goal, name a button or field and say what to do with the keyboard (concrete keyboard interactions with named controls). Not supported: goals without a recognizable action on a named control, security or privacy evaluations, visual checks, or remote pages; requests to override safeguards or run code are rejected. Uploaded pages can only be checked as a whole.</span></button></div>
+            <div class="field-label-row"><label for="assessment-goal">Goal <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About assessment goals" aria-describedby="tip-goal"><span aria-hidden="true">?</span><span id="tip-goal" class="tooltip" role="tooltip">Leave blank to check the whole page. For a goal, name a button or field and say what to do with the keyboard (concrete keyboard interactions with named controls). Not supported: goals without a recognizable action on a named control, security or privacy evaluations, visual checks, or remote pages; requests to override safeguards or run code are rejected.</span></button></div>
             <textarea
               id="assessment-goal"
               name="goal"
@@ -131,7 +137,7 @@
             <button id="view-sample-report" class="secondary-button" type="button">Sample report</button>
             <button id="view-comparison" class="secondary-button" type="button">Compare demos</button>
             <span class="action-note">Local run · keyboard only</span>
-            <button class="help-icon privacy-help" type="button" aria-label="About samples and privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Sample data is an example. Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. A local copy is kept only when values can be covered safely. Your HTML file stays on this server.</span></button>
+            <button class="help-icon privacy-help" type="button" aria-label="About samples and privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Sample data is an example. Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. Selected source files stay in this browser during the assessment. If the page is blocked, supported text files within review limits are sent to signed-in Codex; files are never served or executed, and the original source is not retained.</span></button>
           </div>
         </form>
       </section>
@@ -192,6 +198,30 @@
               <div class="live-warnings-block" id="live-result-warnings-block" hidden><strong>Notes</strong><ul id="live-result-warnings"></ul></div>
             </section>
           </div>
+          <section id="source-review-result" class="source-review-result" aria-labelledby="source-review-heading" hidden>
+            <div class="source-review-heading">
+              <div>
+                <p class="card-kicker">BLOCKED RUN FOLLOW-UP</p>
+                <h3 id="source-review-heading">Source review</h3>
+              </div>
+              <span id="source-review-status" class="source-review-status"></span>
+            </div>
+            <p id="source-review-summary"></p>
+            <p id="source-review-file-counts" class="source-review-file-counts"></p>
+            <div id="source-review-relevant-block" hidden>
+              <strong>Relevant files</strong>
+              <ul id="source-review-relevant-paths"></ul>
+            </div>
+            <div id="source-review-skipped-block" class="source-context-skipped" hidden>
+              <strong>Files skipped</strong>
+              <ul id="source-review-skipped-files"></ul>
+            </div>
+            <details id="source-review-patch-block" hidden>
+              <summary>View proposed patch</summary>
+              <pre id="source-review-patch"></pre>
+            </details>
+            <a id="download-source-patch" class="secondary-button" hidden>Download patch</a>
+          </section>
           <div class="live-result-actions">
             <a id="download-live-record" class="secondary-button" hidden>Download run record</a>
             <button id="new-assessment" class="primary-button" type="button">New assessment <span aria-hidden="true">→</span></button>
