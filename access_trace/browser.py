@@ -968,11 +968,11 @@ class IsolatedKeyboardBrowser:
         except ValueError:
             return False
         same_origin = (
-            observed.hostname == target.hostname
-            and observed.scheme in {"http", "https"}
-            and target.scheme in {"http", "https"}
-            and observed_port in {80, 443}
-            and target_port in {80, 443}
+            observed.scheme == target.scheme
+            and observed.hostname == target.hostname
+            and observed_port == target_port
+            and not observed.username
+            and not observed.password
         )
         if not same_origin:
             return False
@@ -1089,9 +1089,11 @@ class IsolatedKeyboardBrowser:
             return True
         return not (
             observed.scheme in {"http", "https"}
+            and observed.scheme == target.scheme
             and observed.hostname == target.hostname
-            and observed_port in {80, 443}
-            and target_port in {80, 443}
+            and observed_port == target_port
+            and not observed.username
+            and not observed.password
         )
 
     def _lifecycle(self, url: Any = None, dialog_open: Optional[bool] = None) -> Dict[str, Any]:
