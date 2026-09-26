@@ -394,6 +394,12 @@ a:hover { color: #fff; }
 .source-review-heading h3 { margin: 3px 0 0; color: #e0ebec; font-size: 13px; font-weight: 500; }
 .source-review-status { color: var(--cyan); font-size: 9px; }
 #source-review-summary, .source-review-file-counts { margin: 7px 0 0; color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+#source-review-root-cause-block, #source-review-proposed-fix-block { margin-top: 9px; color: var(--cyan-soft); font-size: 9px; }
+#source-review-root-cause-block p, #source-review-proposed-fix-block p { margin: 4px 0 0; color: #b9c9cb; line-height: 1.5; overflow-wrap: anywhere; }
+.source-review-write-note { margin: 9px 0 0; color: var(--dim); font-size: 8px; line-height: 1.45; }
+.source-review-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+.source-review-actions button { min-height: 30px; font-size: 9px; }
+#source-review-action-status { flex: 1 1 220px; margin: 0; color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
 #source-review-relevant-block { margin-top: 8px; font-size: 9px; }
 #source-review-result details { margin-top: 9px; border-top: 1px solid var(--line); padding-top: 7px; color: var(--cyan-soft); font-size: 9px; }
 #source-review-patch { max-height: 30vh; overflow: auto; margin: 8px 0; border: 1px solid var(--line); border-radius: 3px; padding: 9px; color: #c8d6d8; background: rgba(2, 5, 6, 0.8); font-size: 9px; line-height: 1.45; white-space: pre; }

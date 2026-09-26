@@ -2,6 +2,7 @@
 
 import uuid
 import re
+import ipaddress
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
@@ -52,6 +53,15 @@ def validate_target_url(
     if parsed.username or parsed.password:
         raise ValidationError("targetUrl must not contain embedded credentials")
 
+    if host not in LOOPBACK_HOSTS:
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            if not address.is_global:
+                raise ValidationError("targetUrl must use a public web address")
+
     effective_port = port if port is not None else (443 if parsed.scheme == "https" else 80)
     is_controlled_origin = (
         parsed.scheme == controlled_scheme
@@ -64,6 +74,8 @@ def validate_target_url(
     elif is_controlled_origin and uploaded_site:
         target_version = "local"
     else:
+        if host in LOOPBACK_HOSTS:
+            raise ValidationError("targetUrl must use a supported controlled page")
         target_version = "web"
 
     normalized = parsed.geturl()

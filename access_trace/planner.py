@@ -19,6 +19,7 @@ from .browser import (
 
 
 MAX_PLANNER_OUTPUT = 20_000
+MAX_PLANNER_STDERR = 64 * 1024
 MAX_PLANNER_PROMPT = 12_000
 MAX_PLANNER_FIELD_LENGTH = 80
 DEFAULT_PLANNER_TIMEOUT = 60.0
@@ -308,6 +309,31 @@ def _codex_child_environment() -> Dict[str, str]:
     }
 
 
+def _start_codex_prompt_writer(process: subprocess.Popen, prompt: str) -> Optional[threading.Thread]:
+    """_start_codex_prompt_writer sends private prompt text through the CLI's stdin mode."""
+    stream = getattr(process, "stdin", None)
+    if stream is None:
+        # Legacy process substitutes do not expose stdin; real Popen instances do.
+        return None
+
+    def write_prompt() -> None:
+        """write_prompt feeds stdin concurrently so full pipes cannot block output capture."""
+        try:
+            stream.write(prompt.encode("utf-8"))
+        except (BrokenPipeError, OSError):
+            # A child that exits before reading its prompt reports its own error.
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    writer = threading.Thread(target=write_prompt, daemon=True)
+    writer.start()
+    return writer
+
+
 def _codex_action_shape(value: Any) -> Optional[Dict[str, Any]]:
     """Normalize Codex's nullable action fields and optional goal decision."""
     action_fields = {"kind", "key", "field", "text"}
@@ -592,7 +618,7 @@ class CodexPlanner:
                 screenshot_path.write_bytes(screenshot)
                 # Codex's --image option accepts one or more files. Keep the
                 # value attached so its variadic parser cannot consume the
-                # positional prompt that is appended below.
+                # stdin-mode marker that is appended below.
                 args.append("--image=" + str(screenshot_path))
             # Keep only runtime essentials and the saved account login path.
             # In particular, API keys, provider URLs, proxies, MCP tokens, and
@@ -600,11 +626,11 @@ class CodexPlanner:
             environment = _codex_child_environment()
             try:
                 process = subprocess.Popen(
-                    args + [prompt],
+                    args + ["-"],
                     cwd=str(directory),
                     env=environment,
                     shell=False,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
@@ -612,12 +638,13 @@ class CodexPlanner:
                 raise PlannerError(
                     "Codex CLI could not start; ensure it is installed and logged in"
                 ) from error
+            prompt_writer = _start_codex_prompt_writer(process, prompt)
             with self._process_lock:
                 self._active_process = process
             if self._cancelled.is_set():
                 self.cancel()
             try:
-                stdout, _stderr = process.communicate(timeout=self._timeout)
+                stdout, _stderr = self._capture_output(process)
             except subprocess.TimeoutExpired as error:
                 self._stop_process(process)
                 raise PlannerError("Codex CLI planner timed out") from error
@@ -625,6 +652,8 @@ class CodexPlanner:
                 self._stop_process(process)
                 raise
             finally:
+                if prompt_writer is not None:
+                    prompt_writer.join(timeout=1.0)
                 with self._process_lock:
                     if self._active_process is process:
                         self._active_process = None
@@ -660,16 +689,86 @@ class CodexPlanner:
                 output_description=output_description,
             )
 
+    def _capture_output(self, process: subprocess.Popen) -> tuple[bytes, bytes]:
+        """_capture_output bounds both CLI pipes before retaining their contents."""
+        if not hasattr(process, "stdout") or not hasattr(process, "stderr"):
+            # Older process substitutes expose communicate only; real Popen
+            # instances always provide the pipes requested by _request.
+            return process.communicate(timeout=self._timeout)
+
+        buffers = [bytearray(), bytearray()]
+        limit_hit = threading.Event()
+        stop_lock = threading.Lock()
+        kill_timer = None
+
+        def stop_for_limit() -> None:
+            """stop_for_limit terminates a child before excess output can accumulate."""
+            nonlocal kill_timer
+            with stop_lock:
+                if limit_hit.is_set():
+                    return
+                limit_hit.set()
+                try:
+                    process.terminate()
+                except OSError:
+                    return
+                kill_timer = threading.Timer(0.25, self._force_kill, args=(process,))
+                kill_timer.daemon = True
+                kill_timer.start()
+
+        def capture(stream: Any, target: bytearray, limit: int) -> None:
+            """capture drains a pipe while retaining at most its byte budget."""
+            while True:
+                try:
+                    chunk = stream.read(8192)
+                except (OSError, ValueError):
+                    return
+                if not chunk:
+                    return
+                available = limit - len(target)
+                if available > 0:
+                    target.extend(chunk[:available])
+                if len(chunk) > available:
+                    stop_for_limit()
+
+        readers = [
+            threading.Thread(target=capture, args=(process.stdout, buffers[0], MAX_PLANNER_OUTPUT), daemon=True),
+            threading.Thread(target=capture, args=(process.stderr, buffers[1], MAX_PLANNER_STDERR), daemon=True),
+        ]
+        try:
+            for reader in readers:
+                reader.start()
+            process.wait(timeout=self._timeout)
+        finally:
+            for reader in readers:
+                if reader.ident is not None:
+                    reader.join(timeout=1.0)
+                if reader.is_alive():
+                    limit_hit.set()
+            with stop_lock:
+                if kill_timer is not None:
+                    kill_timer.cancel()
+        if limit_hit.is_set():
+            raise PlannerError("Codex CLI output exceeded its limit")
+        return bytes(buffers[0]), bytes(buffers[1])
+
     @staticmethod
     def _stop_process(process: subprocess.Popen) -> None:
         """Terminate a cancelled/timed-out CLI, escalating if it does not exit."""
+        def await_exit(timeout: Optional[float] = None) -> None:
+            """await_exit lets pipe readers retain ownership of real process streams."""
+            if hasattr(process, "stdout") and hasattr(process, "stderr"):
+                process.wait(timeout=timeout)
+            else:
+                process.communicate(timeout=timeout)
+
         try:
             process.terminate()
-            process.communicate(timeout=1.0)
+            await_exit(timeout=1.0)
         except subprocess.TimeoutExpired:
             try:
                 process.kill()
-                process.communicate()
+                await_exit()
             except OSError:
                 pass
         except OSError:
@@ -678,7 +777,7 @@ class CodexPlanner:
             if process.poll() is None:
                 try:
                     process.kill()
-                    process.communicate()
+                    await_exit()
                 except OSError:
                     pass
 

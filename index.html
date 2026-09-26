@@ -77,7 +77,7 @@
               </div>
             </div>
             <p id="target-site-status" class="scope-status" role="status" aria-live="polite">Choose a local HTML file or site folder to use it as the page target.</p>
-            <p class="field-hint">The fixed and broken demo source files are in <a href="/docs/demos/README.md" target="_blank" rel="noreferrer">docs/demos</a>.</p>
+            <p class="field-hint">Eligible text files from this site folder can also provide code context for the report's Fix action. The fixed and broken demo source files are in <a href="/docs/demos/README.md" target="_blank" rel="noreferrer">docs/demos</a>.</p>
           </div>
           </div>
 
@@ -122,7 +122,7 @@
             </div>
           </div>
           <div class="field-group source-context-field">
-            <div class="field-label-row"><label id="source-context-label" for="source-context-files">Code context for blocked results <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About source context" aria-describedby="tip-source-context"><span aria-hidden="true">?</span><span id="tip-source-context" class="tooltip" role="tooltip">Choose source, configuration, and documentation files to help explain a blocked keyboard result. Only selected text files that fit the review limits are sent to your signed-in Codex, and only after a blocked result. Files are never served or executed, and the original source is not retained.</span></button></div>
+            <div class="field-label-row"><label id="source-context-label" for="source-context-files">Code context for report fixes <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About source context" aria-describedby="tip-source-context"><span aria-hidden="true">?</span><span id="tip-source-context" class="tooltip" role="tooltip">Choose source, configuration, and documentation files here, or use eligible text files from a local page upload. Only supported text files within the review limits are sent to your signed-in Codex after you press Fix. Files used as code context are not executed, and their source text is not retained by the server.</span></button></div>
             <div class="source-context-pickers" aria-describedby="source-context-hint source-context-status">
               <div>
                 <label for="source-context-files">Choose files</label>
@@ -133,7 +133,7 @@
                 <input id="source-context-directory" name="sourceContextDirectory" type="file" webkitdirectory directory multiple aria-describedby="source-context-hint source-context-status" />
               </div>
             </div>
-            <p id="source-context-hint" class="field-hint">These files are separate from the local page files. Their contents are sent only after a blocked result.</p>
+            <p id="source-context-hint" class="field-hint">Choose source files here, or choose local page files above. Eligible text files enable Fix on an eligible report; contents are sent for review only when you press Fix.</p>
             <p id="source-context-status" class="scope-status" role="status" aria-live="polite">No source files selected.</p>
             <div id="source-context-selection-skipped-block" class="source-context-skipped" hidden>
               <strong>Skipped before review</strong>
@@ -149,7 +149,7 @@
             </button>
             <button id="view-comparison" class="secondary-button" type="button">Compare demos</button>
             <span class="action-note">Local run · keyboard only</span>
-            <button class="help-icon privacy-help" type="button" aria-label="About privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. Local page files are uploaded to this AccessTrace server and served in an isolated browser page; external requests from uploaded pages are blocked. A local screenshot copy is kept only when values can be covered safely. Optional code context is sent only after a blocked result and is not retained after review.</span></button>
+            <button class="help-icon privacy-help" type="button" aria-label="About privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. Local page files are uploaded to this AccessTrace server and served in an isolated browser page; external requests from uploaded pages are blocked. A local screenshot copy is kept only when values can be covered safely. Optional code context is sent only when you press Fix on an eligible report. Approving a patch asks you to choose a writable folder and checks the reviewed files before applying changes.</span></button>
           </div>
         </form>
       </section>
@@ -186,13 +186,21 @@
           <section id="source-review-result" class="source-review-result" aria-labelledby="source-review-heading" hidden>
             <div class="source-review-heading">
               <div>
-                <p class="card-kicker">BLOCKED RUN FOLLOW-UP</p>
+                <p class="card-kicker">REPORT FOLLOW-UP</p>
                 <h3 id="source-review-heading">Source review</h3>
               </div>
               <span id="source-review-status" class="source-review-status"></span>
             </div>
             <p id="source-review-summary"></p>
+            <div id="source-review-root-cause-block" hidden><strong>Root cause</strong><p id="source-review-root-cause"></p></div>
+            <div id="source-review-proposed-fix-block" hidden><strong>Suggested fix</strong><p id="source-review-proposed-fix"></p></div>
             <p id="source-review-file-counts" class="source-review-file-counts"></p>
+            <p id="source-review-write-note" class="source-review-write-note">Approval writes changes to a folder you choose. Select the same source folder you reviewed; AccessTrace checks that the files have not changed before writing.</p>
+            <div class="source-review-actions">
+              <button id="source-review-fix" class="primary-button" type="button">Fix</button>
+              <button id="source-review-approve" class="primary-button" type="button" hidden>Approve and apply</button>
+              <p id="source-review-action-status" role="status" aria-live="polite"></p>
+            </div>
             <div id="source-review-relevant-block" hidden>
               <strong>Relevant files</strong>
               <ul id="source-review-relevant-paths"></ul>

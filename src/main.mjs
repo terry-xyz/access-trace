@@ -4,6 +4,8 @@ import {
   validateTargetUrl,
 } from "./assessment.mjs";
 import { CONSISTENCY_RUN_COUNTS, summarizeLiveComparisonCounts } from "./live-comparison.mjs";
+import { filterSensitiveFiles, isSensitiveSourcePath } from "./source-context.mjs";
+import { canApproveSourceReview, getSourceReviewActions, hasPersistedSourceBaseline, isSafeSourcePath, validateApplicableFiles } from "./source-apply.mjs";
 
 const brandIntro = document.querySelector(".brand-intro");
 if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -28,6 +30,10 @@ const sourceContextSkippedList = document.querySelector("#source-context-selecti
 const sourceReviewResult = document.querySelector("#source-review-result");
 const sourceReviewStatus = document.querySelector("#source-review-status");
 const sourceReviewSummary = document.querySelector("#source-review-summary");
+const sourceReviewRootCauseBlock = document.querySelector("#source-review-root-cause-block");
+const sourceReviewRootCause = document.querySelector("#source-review-root-cause");
+const sourceReviewProposedFixBlock = document.querySelector("#source-review-proposed-fix-block");
+const sourceReviewProposedFix = document.querySelector("#source-review-proposed-fix");
 const sourceReviewFileCounts = document.querySelector("#source-review-file-counts");
 const sourceReviewRelevantBlock = document.querySelector("#source-review-relevant-block");
 const sourceReviewRelevantPaths = document.querySelector("#source-review-relevant-paths");
@@ -35,6 +41,9 @@ const sourceReviewSkippedBlock = document.querySelector("#source-review-skipped-
 const sourceReviewSkippedFiles = document.querySelector("#source-review-skipped-files");
 const sourceReviewPatchBlock = document.querySelector("#source-review-patch-block");
 const sourceReviewPatch = document.querySelector("#source-review-patch");
+const sourceReviewFixButton = document.querySelector("#source-review-fix");
+const sourceReviewApproveButton = document.querySelector("#source-review-approve");
+const sourceReviewActionStatus = document.querySelector("#source-review-action-status");
 const sourcePatchDownload = document.querySelector("#download-source-patch");
 const liveAssessmentButton = document.querySelector("#start-live-assessment");
 const cancelLiveAssessmentButton = document.querySelector("#cancel-live-assessment");
@@ -78,6 +87,10 @@ const navButtons = {
 let liveRecordUrl;
 let sourcePatchUrl;
 let selectedSourceFiles = [];
+let latestSourceSelection = [];
+let uploadedLocalSourceFiles = [];
+let reviewedSourceFiles = [];
+let sourceReviewBusy = false;
 let reportRenderSequence = 0;
 let activeLiveRunId = null;
 let activeRunContext = null;
@@ -376,6 +389,7 @@ function sourceSkipMessage(reason) {
     "unsupported-file-type": "Unsupported file type",
     "duplicate-path": "Duplicate relative path",
     "unsafe-path": "Unsafe relative path",
+    "sensitive-file": "Likely credential or private key",
     "read-error": "Could not read this file",
   };
   return messages[reason] || String(reason || "Skipped").replaceAll("-", " ");
@@ -404,9 +418,11 @@ function collectSourceSelection() {
     entries.push({ file, path: file.name, selectionType: "file" });
   }
   for (const file of sourceContextDirectoryInput.files ?? []) {
+    const relativePath = file.webkitRelativePath || file.name;
+    const path = relativePath.includes("/") ? relativePath.slice(relativePath.indexOf("/") + 1) : relativePath;
     entries.push({
       file,
-      path: file.webkitRelativePath || file.name,
+      path,
       selectionType: "directory",
     });
   }
@@ -427,6 +443,7 @@ function sourcePathSkipReason(entry) {
   if (parts.slice(0, -1).some((part) => SOURCE_CONTEXT_GENERATED_DIRECTORIES.has(part))) {
     return "generated-directory";
   }
+  if (isSensitiveSourcePath(path)) return "sensitive-file";
   if (file.size > MAX_SOURCE_CONTEXT_FILE_BYTES) return "file-size-limit";
   const basename = parts.at(-1).toLowerCase();
   const extension = basename.includes(".") ? basename.slice(basename.lastIndexOf(".")) : "";
@@ -468,7 +485,8 @@ function analyzeSourceSelection(entries) {
 
 /** updateSourceContextSelection reports local file counts without reading or uploading contents. */
 function updateSourceContextSelection() {
-  selectedSourceFiles = collectSourceSelection();
+  const explicitSelection = collectSourceSelection();
+  selectedSourceFiles = explicitSelection.length > 0 ? explicitSelection : uploadedLocalSourceFiles;
   const selection = analyzeSourceSelection(selectedSourceFiles);
   sourceContextSkippedBlock.hidden = selection.skipped.length === 0;
   appendSourceSkipItems(sourceContextSkippedList, selection.skipped);
@@ -476,7 +494,7 @@ function updateSourceContextSelection() {
     sourceContextStatus.textContent = "No source files selected. The page URL remains the assessment target.";
     return;
   }
-  sourceContextStatus.textContent = `${selection.selectedCount} selected · ${selection.candidates.length} eligible · ${selection.skipped.length} skipped before reading. Contents are read only after a blocked result.`;
+  sourceContextStatus.textContent = `${selection.selectedCount} selected · ${selection.candidates.length} eligible · ${selection.skipped.length} skipped before source review. Contents are sent to the reviewer only when you press Fix on the report.`;
 }
 
 /** hasBinaryControls rejects non-text payloads using the same control-character rule as the server. */
@@ -570,13 +588,18 @@ async function uploadLocalPage(input, fromDirectory) {
   const rootDirectory = fromDirectory
     ? (selected[0].webkitRelativePath || selected[0].name).split("/")[0]
     : "";
-  const entries = selected.map((file) => {
+  const selectedEntries = selected.map((file) => {
     const selectedPath = fromDirectory ? file.webkitRelativePath || file.name : file.name;
     const path = fromDirectory && selectedPath.startsWith(`${rootDirectory}/`)
       ? selectedPath.slice(rootDirectory.length + 1)
       : selectedPath;
     return { file, path };
   });
+  const { entries, skippedCount } = filterSensitiveFiles(selectedEntries);
+  if (!entries.length) {
+    targetSiteStatus.textContent = "No page files remain after excluding likely credentials and private keys.";
+    return;
+  }
   if (entries.length > MAX_SOURCE_CONTEXT_FILES) {
     targetSiteStatus.textContent = `Choose no more than ${MAX_SOURCE_CONTEXT_FILES} page files.`;
     return;
@@ -612,7 +635,15 @@ async function uploadLocalPage(input, fromDirectory) {
     updateRecognizedTargetLabel();
     clearTargetValidationError();
     clearStaleViews();
-    targetSiteStatus.textContent = `Local page ready: ${result.entrypoint}`;
+    targetSiteStatus.textContent = skippedCount
+      ? `Local page ready: ${result.entrypoint}. ${skippedCount} likely credential or private-key files excluded.`
+      : `Local page ready: ${result.entrypoint}`;
+    uploadedLocalSourceFiles = entries.map(({ file, path }) => ({
+      file,
+      path,
+      selectionType: fromDirectory ? "directory" : "file",
+    }));
+    updateSourceContextSelection();
     input.value = "";
   } catch (error) {
     targetSiteStatus.textContent = error instanceof Error
@@ -640,16 +671,19 @@ function appendTextItems(list, entries, describe) {
 
 /** renderSourceReview presents server review data and local filtering details as inert text. */
 function renderSourceReview(result, selectionSummary) {
-  if (!selectionSummary) {
-    sourceReviewResult.hidden = true;
-    return;
-  }
-
   const review = result.sourceReview && typeof result.sourceReview === "object"
     ? result.sourceReview
     : {};
   const status = String(review.status || "FAILED").toUpperCase();
+  const canFix = Boolean(selectionSummary);
+  const hasSavedBaseline = status === "PATCH_READY" && hasPersistedSourceBaseline(review);
+  const actions = getSourceReviewActions(status, canFix, reviewedSourceFiles.length > 0 || hasSavedBaseline);
+  if (!actions.showSavedReview) {
+    sourceReviewResult.hidden = true;
+    return;
+  }
   const statusLabels = {
+    NOT_REQUESTED: "Review not requested",
     IN_PROGRESS: "Review in progress",
     PATCH_READY: "Patch ready to review",
     NO_PATCH: "No patch produced",
@@ -657,22 +691,42 @@ function renderSourceReview(result, selectionSummary) {
     CANCELLED: "Review cancelled",
   };
   sourceReviewResult.hidden = false;
+  sourceReviewFixButton.hidden = !actions.showFix;
+  sourceReviewFixButton.textContent = status === "NOT_REQUESTED" ? "Fix" : "Retry Fix";
+  sourceReviewFixButton.disabled = sourceReviewBusy;
+  sourceReviewApproveButton.hidden = !actions.showApprove;
+  sourceReviewApproveButton.disabled = sourceReviewBusy;
+  sourceReviewActionStatus.textContent = "";
+  if (!canFix && status === "PATCH_READY" && hasSavedBaseline) {
+    sourceReviewActionStatus.textContent = "Select the source folder to verify the reviewed files and approve this saved proposal.";
+  } else if (!canFix && status === "PATCH_READY") {
+    sourceReviewActionStatus.textContent = "Saved proposal shown for reference. Its source baseline is unavailable; download the patch to apply it manually.";
+  }
   sourceReviewStatus.textContent = statusLabels[status] || "Review ended";
   sourceReviewStatus.dataset.status = status.toLowerCase();
   sourceReviewSummary.textContent = typeof review.summary === "string" && review.summary.trim()
     ? review.summary
-    : "The source review did not return a summary.";
+    : status === "NOT_REQUESTED"
+      ? "Press Fix to ask the agent to find the cause and propose a patch for these files."
+      : "The source review did not return a summary.";
+  sourceReviewRootCauseBlock.hidden = typeof review.rootCause !== "string" || !review.rootCause.trim();
+  sourceReviewRootCause.textContent = sourceReviewRootCauseBlock.hidden ? "" : review.rootCause;
+  sourceReviewProposedFixBlock.hidden = typeof review.proposedFix !== "string" || !review.proposedFix.trim();
+  sourceReviewProposedFix.textContent = sourceReviewProposedFixBlock.hidden ? "" : review.proposedFix;
 
   const serverSkipped = Array.isArray(review.skipped) ? review.skipped : [];
   const skipped = [
-    ...selectionSummary.skipped,
+    ...(selectionSummary?.skipped ?? []),
     ...serverSkipped.filter((item) => item && typeof item === "object"),
   ];
-  sourceReviewFileCounts.textContent = (
-    `${selectionSummary.selectedCount} selected · ${selectionSummary.readCount} read locally · `
-    `${selectionSummary.sentCount} submitted for review · `
-    + `${skipped.length} skipped.`
-  );
+  sourceReviewFileCounts.textContent = !selectionSummary
+    ? hasSavedBaseline
+      ? "Saved source review. Its verified file list is available for folder selection during approval."
+      : "Saved source review. Local source files are not available in this page session."
+    : selectionSummary.readCount === undefined
+      ? `${selectionSummary.selectedCount} source files selected. Contents have not been sent.`
+      : `${selectionSummary.selectedCount} selected · ${selectionSummary.readCount} read locally · `
+        + `${selectionSummary.sentCount} submitted for review · ${skipped.length} skipped.`;
 
   const relevantPaths = Array.isArray(review.relevantPaths)
     ? review.relevantPaths.filter((path) => typeof path === "string")
@@ -1053,87 +1107,22 @@ async function handleLiveAssessment() {
       throw new Error("The server did not return a completed run record.");
     }
 
-    let sourceReviewSelection = null;
-    if (String(result.status).toUpperCase() === "BLOCKED" && sourceSelectionForRun.length > 0) {
-      cancelLiveAssessmentButton.disabled = true;
-      liveAssessmentStatus.textContent = "The browser run is blocked. Preparing selected files locally; Stop becomes available when review starts…";
-      setRunStage(88, "Source review", "Browser result is blocked; reading eligible source files locally.");
-      let prepared = null;
-      try {
-        prepared = await prepareSourceContext(sourceSelectionForRun);
-      } catch (error) {
-        sourceReviewSelection = {
-          selectedCount: sourceSelectionForRun.length,
-          readCount: 0,
-          sentCount: 0,
-          skipped: [{ path: "Source context", reason: "request-size-limit" }],
-        };
-        result = {
-          ...result,
-          sourceReview: {
-            status: "FAILED",
-            summary: error instanceof Error ? error.message : "The source files could not be prepared for review.",
-            relevantPaths: [],
-            patch: "",
-            skipped: [],
-          },
-        };
-      }
-      if (prepared) {
-        sourceReviewSelection = {
-          selectedCount: prepared.selectedCount,
-          readCount: prepared.readCount,
-          sentCount: prepared.files.length,
-          skipped: prepared.skipped,
-        };
-        setRunStage(92, "Source review", `Submitting ${prepared.files.length} eligible files for blocked-run review.`);
-        cancelLiveAssessmentButton.disabled = false;
-        liveAssessmentStatus.textContent = "Source review is running. You can stop this review while it is active.";
-        try {
-          const reviewResponse = await fetch(
-            `/api/runs/${encodeURIComponent(created.id)}/source-review`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: prepared.body,
-            },
-          );
-          const reviewed = await reviewResponse.json();
-          if (!reviewResponse.ok) {
-            throw new Error(reviewed.error?.message || "The source review could not be completed.");
-          }
-          result = reviewed;
-        } catch (error) {
-          result = {
-            ...result,
-            sourceReview: {
-              status: "FAILED",
-              summary: error instanceof Error
-                ? error.message
-                : "The source review could not be completed.",
-              relevantPaths: [],
-              patch: "",
-              skipped: [],
-            },
-          };
-        } finally {
-          prepared.files.length = 0;
-          prepared.body = "";
-          sourceSelectionForRun.length = 0;
-          clearSourceSelection();
-        }
-      }
-    }
-
-    const reviewStatus = String(result.sourceReview?.status || "").toUpperCase();
-    const finalStage = sourceReviewSelection && reviewStatus
-      ? `Source review ${reviewStatus.toLowerCase().replaceAll("_", " ")}`
-      : "Result saved";
-    setRunStage(100, finalStage, `Run saved with status ${result.status}.`);
+    const sourceReviewSelection = ["BLOCKED", "COMPLETED", "INCONCLUSIVE"].includes(String(result.status).toUpperCase())
+      && sourceSelectionForRun.length > 0
+      ? { selectedCount: sourceSelectionForRun.length, skipped: [] }
+      : null;
+    latestSourceSelection = sourceReviewSelection ? sourceSelectionForRun : [];
+    setRunStage(100, "Result saved", `Run saved with status ${result.status}.`);
     liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
     latestRunRecord = result;
     renderRunReport(result, liveRunReport);
-    renderSourceReview(result, sourceReviewSelection);
+    if (sourceReviewSelection) {
+      reviewedSourceFiles = [];
+      renderSourceReview({ ...result, sourceReview: { status: "NOT_REQUESTED" } }, sourceReviewSelection);
+    } else {
+      reviewedSourceFiles = [];
+      renderSourceReview(result, null);
+    }
     const serialized = JSON.stringify(result, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -1153,10 +1142,188 @@ async function handleLiveAssessment() {
       : "The local assessment could not be completed.";
     setRunStage(liveRunProgress.value, "Run needs attention", "The run did not return a completed result.");
   } finally {
-    sourceSelectionForRun.length = 0;
-    clearSourceSelection();
     if (activeLiveRunId) clearCancelableRun(activeLiveRunId);
     setWorkflowBusy(false);
+  }
+}
+
+/** handleSourceFix sends source files only after an explicit Fix action on the report. */
+async function handleSourceFix() {
+  if (!latestRunRecord?.id || sourceReviewBusy || latestSourceSelection.length === 0) return;
+  sourceReviewBusy = true;
+  sourceReviewFixButton.disabled = true;
+  sourceReviewActionStatus.textContent = "Reading selected files and preparing the source review…";
+  let prepared;
+  try {
+    prepared = await prepareSourceContext(latestSourceSelection);
+    if (!prepared.files.length) throw new Error("No eligible text files were available for review.");
+    const response = await fetch(`/api/runs/${encodeURIComponent(latestRunRecord.id)}/source-review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: prepared.body,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message || "The source review could not be completed.");
+    latestRunRecord = result;
+    const serialized = JSON.stringify(result, null, 2);
+    liveRecordJson.textContent = serialized;
+    if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
+    liveRecordUrl = URL.createObjectURL(new Blob([serialized], { type: "application/json" }));
+    liveRecordDownload.href = liveRecordUrl;
+    reviewedSourceFiles = prepared.files.map(({ path, content }) => ({ path, content }));
+    renderSourceReview(result, {
+      selectedCount: prepared.selectedCount,
+      readCount: prepared.readCount,
+      sentCount: prepared.files.length,
+      skipped: prepared.skipped,
+    });
+    const reviewStatus = String(result.sourceReview?.status || "").toUpperCase();
+    sourceReviewActionStatus.textContent = ["FAILED", "CANCELLED"].includes(reviewStatus)
+      ? "Review did not complete. You can retry Fix."
+      : "Review complete. Inspect the cause and patch before approving.";
+  } catch (error) {
+    sourceReviewStatus.textContent = "Review failed";
+    sourceReviewStatus.dataset.status = "failed";
+    sourceReviewSummary.textContent = error instanceof Error ? error.message : "The source review could not be completed.";
+    sourceReviewFixButton.hidden = false;
+    sourceReviewFixButton.textContent = "Retry Fix";
+    sourceReviewApproveButton.hidden = true;
+    sourceReviewActionStatus.textContent = "You can retry Fix.";
+  } finally {
+    sourceReviewBusy = false;
+    sourceReviewFixButton.disabled = false;
+    sourceReviewApproveButton.disabled = false;
+  }
+}
+
+/** lookupDirectoryFile resolves a reviewer path below the folder the user approved. */
+async function lookupDirectoryFile(rootHandle, path) {
+  if (!isSafeSourcePath(path)) throw new Error(`Unsafe file path in approved patch: ${path}`);
+  const parts = path.split("/");
+  let directory = rootHandle;
+  for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+  return directory.getFileHandle(parts.at(-1));
+}
+
+/** sha256Text matches the digest format stored with a persisted source-review proposal. */
+async function sha256Text(value) {
+  if (!window.crypto?.subtle) throw new Error("This browser cannot verify the saved source baseline. Download the patch to apply it manually.");
+  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** handleSourceFixApproval verifies every reviewed file before writing any of them. */
+async function handleSourceFixApproval() {
+  if (
+    !latestRunRecord?.id
+    || sourceReviewBusy
+    || !canApproveSourceReview(reviewedSourceFiles.length, latestRunRecord?.sourceReview)
+  ) return;
+  if (typeof window.showDirectoryPicker !== "function") {
+    sourceReviewActionStatus.textContent = "Direct folder editing is not supported in this browser. Download the patch and apply it manually.";
+    return;
+  }
+  let rootHandle;
+  try {
+    rootHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+  } catch (error) {
+    sourceReviewActionStatus.textContent = error?.name === "AbortError"
+      ? "Folder selection canceled. No files were changed."
+      : "A writable folder could not be selected. No files were changed.";
+    return;
+  }
+
+  sourceReviewBusy = true;
+  sourceReviewApproveButton.disabled = true;
+  sourceReviewActionStatus.textContent = "Checking the reviewed files before applying the approved patch…";
+  try {
+    let permission;
+    try {
+      permission = typeof rootHandle.queryPermission === "function"
+        ? await rootHandle.queryPermission({ mode: "readwrite" })
+        : "prompt";
+      if (permission !== "granted" && typeof rootHandle.requestPermission === "function") {
+        permission = await rootHandle.requestPermission({ mode: "readwrite" });
+      }
+    } catch {
+      throw new Error("Write permission could not be confirmed. No files were changed. Choose the folder again and allow write access, or download the patch.");
+    }
+    if (permission !== "granted") throw new Error("Write access was not granted. No files were changed. Choose the folder again and allow write access, or download the patch.");
+    let approvalSourceFiles = reviewedSourceFiles;
+    const handlesByPath = new Map();
+    if (!approvalSourceFiles.length) {
+      const review = latestRunRecord.sourceReview;
+      const paths = Array.isArray(review?.relevantPaths) ? review.relevantPaths : [];
+      const digests = review?.sourceDigests && typeof review.sourceDigests === "object"
+        ? review.sourceDigests
+        : {};
+      if (!paths.length || paths.some((path) => typeof path !== "string" || typeof digests[path] !== "string")) {
+        throw new Error("The saved proposal has no verifiable source baseline. Download the patch to apply it manually.");
+      }
+      approvalSourceFiles = [];
+      for (const path of paths) {
+        const handle = await lookupDirectoryFile(rootHandle, path);
+        const content = await (await handle.getFile()).text();
+        if (await sha256Text(content) !== digests[path]) {
+          throw new Error(`${path} differs from the saved review. No files were changed.`);
+        }
+        approvalSourceFiles.push({ path, content });
+        handlesByPath.set(path, handle);
+      }
+      reviewedSourceFiles = approvalSourceFiles;
+    }
+    for (const baseline of approvalSourceFiles) {
+      const handle = await lookupDirectoryFile(rootHandle, baseline.path);
+      const current = await (await handle.getFile()).text();
+      if (current !== baseline.content) {
+        throw new Error(`${baseline.path} changed since review. No files were changed; run Fix again.`);
+      }
+      handlesByPath.set(baseline.path, handle);
+    }
+    const response = await fetch(`/api/runs/${encodeURIComponent(latestRunRecord.id)}/source-fix-approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceContext: { files: approvalSourceFiles } }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message || "The approved patch could not be prepared.");
+    const changedFiles = validateApplicableFiles(approvalSourceFiles, result.appliableFiles);
+
+    const writableTargets = [];
+    for (const changed of changedFiles) {
+      const baseline = approvalSourceFiles.find((file) => file.path === changed.path);
+      if (!baseline) throw new Error(`The patch refers to an unreviewed file: ${changed.path}. No files were changed.`);
+      const handle = handlesByPath.get(changed.path);
+      if (!handle) throw new Error(`The patch refers to a file outside the selected folder: ${changed.path}. No files were changed.`);
+      const current = await (await handle.getFile()).text();
+      if (current !== baseline.content) {
+        throw new Error(`${changed.path} changed since review. No files were changed; run Fix again.`);
+      }
+      writableTargets.push({ path: changed.path, handle, content: changed.content });
+    }
+
+    const written = [];
+    for (const target of writableTargets) {
+      try {
+        const writable = await target.handle.createWritable();
+        await writable.write(target.content);
+        await writable.close();
+        written.push(target.path);
+      } catch (error) {
+        throw new Error(written.length
+          ? `Writing stopped at ${target.path}; already changed: ${written.join(", ")}. ${error instanceof Error ? error.message : "Write failed."}`
+          : `Could not write ${target.path}; no files were changed. ${error instanceof Error ? error.message : "Write failed."}`);
+      }
+    }
+    sourceReviewStatus.textContent = "Applied";
+    sourceReviewStatus.dataset.status = "applied";
+    sourceReviewApproveButton.hidden = true;
+    sourceReviewActionStatus.textContent = `Approved changes written to ${written.length} file${written.length === 1 ? "" : "s"}: ${written.join(", ")}.`;
+  } catch (error) {
+    sourceReviewActionStatus.textContent = error instanceof Error ? error.message : "The patch could not be applied.";
+  } finally {
+    sourceReviewBusy = false;
+    sourceReviewApproveButton.disabled = false;
   }
 }
 
@@ -1503,6 +1670,8 @@ reportEmptyNewAssessmentButton.addEventListener("click", () => {
 });
 sourceContextFilesInput.addEventListener("change", updateSourceContextSelection);
 sourceContextDirectoryInput.addEventListener("change", updateSourceContextSelection);
+sourceReviewFixButton.addEventListener("click", handleSourceFix);
+sourceReviewApproveButton.addEventListener("click", handleSourceFixApproval);
 targetSiteFilesInput.addEventListener("change", () => {
   targetSiteDirectoryInput.value = "";
   void uploadLocalPage(targetSiteFilesInput, false);
@@ -1514,6 +1683,8 @@ targetSiteDirectoryInput.addEventListener("change", () => {
 cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
 comparisonCancelButton.addEventListener("click", handleCancelLiveAssessment);
 targetInput.addEventListener("input", () => {
+  uploadedLocalSourceFiles = [];
+  updateSourceContextSelection();
   updateRecognizedTargetLabel();
   clearTargetValidationError();
   targetSiteStatus.textContent = "Using the page URL above.";

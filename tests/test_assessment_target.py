@@ -265,6 +265,9 @@ class AssessmentTargetTests(unittest.TestCase):
 
         self.assertIn('data-version="fixed"', fixed_page)
         self.assertIn('data-version="broken"', broken_page)
+        self.assertIn('id="message"', broken_page)
+        self.assertIn('tabindex="-1"', broken_page)
+        self.assertIn('<button id="unnamed-action" type="button"></button>', broken_page)
         self.assertIn('form.addEventListener("submit"', fixed_page)
         self.assertIn('event.preventDefault()', broken_page)
 
@@ -2091,11 +2094,10 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual('web_search="disabled"', args[args.index("--config") + 1])
         self.assertFalse(kwargs["shell"])
         self.assertTrue(any(argument.startswith("--image=") for argument in args))
-        self.assertTrue(
-            args[-1].startswith("You are the autonomous Codex keyboard-journey planner.")
-        )
-        self.assertNotIn("screenshotDataUrl", args[-1])
-        self.assertNotIn(context["pageEvidence"]["screenshotDataUrl"], args[-1])
+        self.assertEqual("-", args[-1])
+        self.assertEqual(subprocess.PIPE, kwargs["stdin"])
+        self.assertNotIn("screenshotDataUrl", " ".join(args))
+        self.assertNotIn(context["pageEvidence"]["screenshotDataUrl"], " ".join(args))
         self.assertEqual(
             {"PATH", "HOME", "CODEX_HOME", "TMPDIR", "LANG"},
             set(kwargs["env"]),
@@ -2335,7 +2337,7 @@ class AssessmentTargetTests(unittest.TestCase):
             self.assertEqual(201, status)
             self.assertEqual("fixed", run["targetVersion"])
 
-    def test_an_arbitrary_host_header_does_not_define_the_controlled_origin(self):
+    def test_an_arbitrary_host_header_is_rejected(self):
         body = json.dumps({"targetUrl": self.base_url + "/demo/fixed"}).encode("utf-8")
         request = Request(
             self.base_url + "/api/runs",
@@ -2344,22 +2346,20 @@ class AssessmentTargetTests(unittest.TestCase):
             method="POST",
         )
 
-        with urlopen(request, timeout=2) as response:
-            run = json.loads(response.read().decode("utf-8"))
-
-        self.assertEqual(201, response.status)
-        self.assertEqual(self.base_url + "/demo/fixed", run["targetUrl"])
+        with self.assertRaises(HTTPError) as error:
+            urlopen(request, timeout=2)
+        self.assertEqual(421, error.exception.code)
+        error.exception.close()
 
         landing_request = Request(
             self.base_url + "/",
             headers={"Host": "attacker.example"},
             method="GET",
         )
-        with urlopen(landing_request, timeout=2) as landing_response:
-            landing_page = landing_response.read().decode("utf-8")
-
-        self.assertIn('href="/demo/fixed"', landing_page)
-        self.assertNotIn("attacker.example", landing_page)
+        with self.assertRaises(HTTPError) as error:
+            urlopen(landing_request, timeout=2)
+        self.assertEqual(421, error.exception.code)
+        error.exception.close()
 
     def raw_request(self, path):
         with urlopen(self.base_url + path, timeout=2) as response:

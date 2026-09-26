@@ -1208,7 +1208,7 @@ def _execute_assessment(
     typed_values: Dict[str, str] = {}
     covered_focus_ids = set()
     try:
-        if run.get("targetVersion") == "local":
+        if run.get("targetVersion") in {"local", "fixed", "broken"}:
             browser = IsolatedKeyboardBrowser(
                 run["targetUrl"], restrict_network=True
             )
