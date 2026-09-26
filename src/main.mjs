@@ -11,6 +11,7 @@ if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 }
 
 const form = document.querySelector("#assessment-form");
+const intro = document.querySelector("#top");
 const targetInput = document.querySelector("#target-url");
 const targetSiteFilesInput = document.querySelector("#target-site-files");
 const targetSiteDirectoryInput = document.querySelector("#target-site-directory");
@@ -44,6 +45,8 @@ const liveRecordJson = document.querySelector("#live-record-json");
 const liveTerminal = document.querySelector("#live-terminal");
 const liveResult = document.querySelector("#live-result");
 const liveRunReport = document.querySelector("#live-run-report");
+const reportEmptyState = document.querySelector("#report-empty-state");
+const reportEmptyNewAssessmentButton = document.querySelector("#report-empty-new-assessment");
 const runReportTemplate = document.querySelector("#run-report-template");
 const liveRunProgress = document.querySelector("#live-run-progress");
 const liveProgressLabel = document.querySelector("#live-progress-label");
@@ -68,6 +71,7 @@ const setupSection = document.querySelector("#setup");
 const newAssessmentButton = document.querySelector("#new-assessment");
 const navButtons = {
   setup: document.querySelector("#nav-setup"),
+  report: document.querySelector("#nav-report"),
   comparison: document.querySelector("#nav-comparison"),
 };
 let liveRecordUrl;
@@ -77,6 +81,7 @@ let reportRenderSequence = 0;
 let activeLiveRunId = null;
 let activeRunContext = null;
 let workflowInProgress = false;
+let latestRunRecord = null;
 
 const MAX_SOURCE_CONTEXT_FILE_BYTES = 512 * 1024;
 const MAX_SOURCE_CONTEXT_REQUEST_BYTES = 5 * 1024 * 1024;
@@ -100,12 +105,47 @@ const SOURCE_CONTEXT_BINARY_EXTENSIONS = new Set([
 
 /** setActiveView keeps one focused app screen visible without scrolling the document. */
 function setActiveView(view) {
-  setupSection.hidden = view !== "setup";
-  comparisonSection.hidden = view !== "comparison";
-  liveAssessmentSection.hidden = view !== "live";
+  const activeView = view === "live" ? "report" : view;
+  intro.hidden = activeView !== "setup";
+  setupSection.hidden = activeView !== "setup";
+  comparisonSection.hidden = activeView !== "comparison";
+  liveAssessmentSection.hidden = activeView !== "report";
   for (const [key, button] of Object.entries(navButtons)) {
-    if (key === view) button.setAttribute("aria-current", "page");
+    if (key === activeView) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
+  }
+}
+
+/** showReportView displays the latest real run or explains how to create the first report. */
+function showReportView() {
+  if (workflowInProgress) return;
+  setActiveView("report");
+  liveTerminal.hidden = true;
+  liveResult.hidden = !latestRunRecord;
+  reportEmptyState.hidden = Boolean(latestRunRecord);
+}
+
+/** loadLatestRunReport restores the latest saved real run after a page reload. */
+async function loadLatestRunReport() {
+  try {
+    const response = await fetch("/api/runs/latest");
+    if (!response.ok) return;
+    const record = await response.json();
+    if (!record || typeof record.id !== "string" || !record.id) return;
+    latestRunRecord = record;
+    renderRunReport(record, liveRunReport);
+    renderSourceReview(record, null);
+    const serialized = JSON.stringify(record, null, 2);
+    liveRecordJson.textContent = serialized;
+    if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
+    liveRecordUrl = URL.createObjectURL(new Blob([serialized], { type: "application/json" }));
+    liveRecordDownload.href = liveRecordUrl;
+    liveRecordDownload.download = `access-trace-${record.id}.json`;
+    liveRecordDownload.hidden = false;
+    liveRecordDetails.hidden = false;
+    reportEmptyState.hidden = true;
+  } catch {
+    // The report's empty state remains available if no local run can be loaded.
   }
 }
 
@@ -794,9 +834,10 @@ function renderRunReport(record, root) {
 
   const successCondition = stopping.successCondition || assessment.successCondition || record?.successCondition;
   const successMatched = stopping.successMatched ?? record?.successMatched;
+  const hasGoal = Boolean(assessment.goal || record?.goal);
   const successText = typeof successCondition === "string" && successCondition
     ? `${successCondition} · ${successMatched === true ? "Reached" : successMatched === false ? "Not reached" : "Result not recorded"}`
-    : "Not configured";
+    : hasGoal ? "Not configured" : "Not applicable for a whole-page check";
   setField(report, "success", successText);
   setField(report, "target", assessment.targetUrl || record?.targetUrl || "Not recorded");
   setField(report, "goal", assessment.goal || record?.goal || "No goal configured");
@@ -1026,6 +1067,7 @@ async function handleLiveAssessment() {
       : "Result saved";
     setRunStage(100, finalStage, `Run saved with status ${result.status}.`);
     liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
+    latestRunRecord = result;
     renderRunReport(result, liveRunReport);
     renderSourceReview(result, sourceReviewSelection);
     const serialized = JSON.stringify(result, null, 2);
@@ -1038,6 +1080,8 @@ async function handleLiveAssessment() {
     liveRecordDetails.hidden = false;
     liveTerminal.hidden = true;
     liveResult.hidden = false;
+    reportEmptyState.hidden = true;
+    setActiveView("report");
     liveRunReport.querySelector('[data-field="heading"]').focus({ preventScroll: true });
   } catch (error) {
     liveAssessmentStatus.textContent = error instanceof Error
@@ -1381,8 +1425,13 @@ navButtons.setup.addEventListener("click", () => {
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });
+navButtons.report.addEventListener("click", showReportView);
 navButtons.comparison.addEventListener("click", handleComparisonRequest);
 newAssessmentButton.addEventListener("click", () => {
+  setActiveView("setup");
+  targetInput.focus({ preventScroll: true });
+});
+reportEmptyNewAssessmentButton.addEventListener("click", () => {
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });
@@ -1412,3 +1461,4 @@ updateRecognizedTargetLabel();
 updateScopePreview();
 populateConsistencyOptions();
 updateConsistencyPreview();
+void loadLatestRunReport();

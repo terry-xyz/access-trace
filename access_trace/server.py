@@ -173,6 +173,13 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"status": "ok"})
             return
+        if path == "/api/runs/latest":
+            run = self.server.run_store.latest()
+            if run is None:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "No completed run found"}})
+                return
+            self.send_json(HTTPStatus.OK, run)
+            return
         asset = STATIC_ASSETS.get(path)
         if asset is not None:
             self.send_file(asset[0], asset[1])

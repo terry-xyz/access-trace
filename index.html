@@ -22,6 +22,7 @@
         </a>
         <nav aria-label="Page navigation" class="header-nav">
           <button id="nav-setup" type="button" aria-current="page">New assessment</button>
+          <button id="nav-report" type="button">Report</button>
           <button id="nav-comparison" type="button">Compare</button>
         </nav>
         <span class="system-state"><i aria-hidden="true"></i> LOCAL SESSION</span>
@@ -151,7 +152,13 @@
         </form>
       </section>
 
-      <section id="live-assessment" class="report-section live-run-result" aria-labelledby="live-assessment-heading" hidden>
+      <section id="live-assessment" class="report-section live-run-result" aria-label="Assessment report" hidden>
+        <div id="report-empty-state" class="report-empty-state" hidden>
+          <p class="step-label">RUN REPORT</p>
+          <h2 id="report-empty-heading">No report yet</h2>
+          <p>Complete an assessment to create a report from its recorded run data.</p>
+          <button id="report-empty-new-assessment" class="primary-button" type="button">New assessment <span aria-hidden="true">→</span></button>
+        </div>
         <div id="live-terminal" class="terminal-screen">
           <div class="report-heading-row">
             <div>

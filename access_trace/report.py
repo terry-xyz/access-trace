@@ -43,7 +43,6 @@ REVIEW_OUTPUT_SCHEMA = {
             "type": "array",
             "minItems": 1,
             "maxItems": MAX_REVIEW_REFERENCES,
-            "uniqueItems": True,
             "items": {"type": "string", "maxLength": 80},
         },
         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},

@@ -57,9 +57,9 @@ The app shows run progress and the live report when the assessment finishes.
 AccessTrace invokes the installed Codex CLI with the saved login and validates
 each returned keyboard action locally. Planner actions remain limited to
 keyboard input and bounded fictional text. The fixed and broken demos support
-the goal `Submit the contact form`; leave the goal empty for a whole-site
-keyboard assessment. **Sample report** and **Compare demos** show representative
-sample data; they do not run browser checks.
+the goal `Submit the contact form`; leave the goal empty for a whole-page
+keyboard assessment. **Report** opens the latest completed run in this page;
+**Compare demos** runs fresh checks against the built-in demos.
 
 Redacted run records are written under `.access-trace/runs/`. The live result
 can also be viewed or downloaded from the page. To use a different port, change

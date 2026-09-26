@@ -40,3 +40,21 @@ class RunStore:
             return None
         with path.open("r", encoding="utf-8") as source:
             return json.load(source)
+
+    def latest(self) -> Optional[Dict]:
+        """Return the most recently saved terminal run, skipping partial records."""
+        terminal_statuses = {"BLOCKED", "CANCELLED", "COMPLETED", "INCONCLUSIVE"}
+        candidates = sorted(
+            self.directory.glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        for path in candidates:
+            try:
+                with path.open("r", encoding="utf-8") as source:
+                    run = json.load(source)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(run, dict) and run.get("status") in terminal_statuses:
+                return run
+        return None
