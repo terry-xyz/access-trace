@@ -80,3 +80,159 @@ a:hover { color: #fff; }
   .source-fields { grid-template-columns: 1fr; }
   .form-actions .primary-button { width: 100%; }
 }
+
+/* Centered assessment panel adapted from the selected layout prototype. */
+html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; }
+html { background: #050505; }
+body {
+  min-height: 100dvh;
+  cursor: crosshair;
+  color: #f4f4f4;
+  background: #050505;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+button { cursor: pointer; }
+input, textarea { cursor: text; }
+a { cursor: pointer; }
+.brand-intro { display: none; }
+.site-header { height: 58px; border-color: #242424; background: #050505; }
+.header-inner { width: min(1240px, calc(100% - 48px)); }
+.brand-logo { width: 112px; }
+.header-nav button {
+  min-height: 34px;
+  border-color: transparent;
+  border-radius: 2px;
+  color: #aaa;
+  background: transparent;
+  font-size: 10px;
+}
+.header-nav button:hover,
+.header-nav button[aria-current="page"] { border-color: #444; color: #fff; background: transparent; }
+.system-state,
+.intro,
+.setup-meta,
+.action-note,
+.privacy-summary,
+#target-hint,
+#site-page-limit-hint,
+#goal-hint { display: none !important; }
+.page-shell {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: calc(100dvh - 58px);
+  align-items: center;
+  justify-content: center;
+  padding: 30px 20px 48px;
+}
+.setup-card {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: min(430px, 100%);
+  max-height: none;
+  margin: auto;
+  overflow: visible;
+  transform: none;
+  border: 1px solid #252525;
+  border-radius: 2px;
+  background: #0b0b0b;
+  box-shadow: none;
+  padding: 32px 34px 28px;
+}
+.section-heading {
+  justify-content: center;
+  border-bottom: 1px solid #222;
+  padding-bottom: 18px;
+}
+.section-heading h2 {
+  color: #f4f4f4;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+#assessment-form { display: flex; flex-direction: column; gap: 16px; }
+.source-fields,
+.assessment-fields { display: contents; }
+.field-label-row { margin-bottom: 8px; }
+.field-group label {
+  color: #c9c9c9;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.field-label-row .optional-label,
+.field-label-row .required-label { display: none; }
+.field-group input,
+.field-group textarea {
+  min-height: 42px;
+  border: 1px solid #303030;
+  border-radius: 2px;
+  color: #f4f4f4;
+  background: #090909;
+  padding: 10px 11px;
+  font-size: 12px;
+}
+.field-group input:focus,
+.field-group textarea:focus {
+  border-color: #d7e9ee;
+  background: #0c0c0c;
+  outline: 1px solid #d7e9ee;
+  outline-offset: 2px;
+}
+.field-group textarea { height: 64px; min-height: 64px; }
+.field-hint,
+.scope-status:not(#target-site-status) { display: none; }
+#target-site-status { color: #bfbfbf; }
+.page-scan-options { gap: 10px; margin-top: 9px; }
+.page-only-option,
+.page-limit-option { color: #bdbdbd; font-size: 10px; }
+.page-limit-option input { width: 54px; min-height: 30px; }
+.form-actions { border-color: #292929; padding-top: 16px; flex-wrap: nowrap; }
+.form-actions .primary-button {
+  width: auto;
+  min-height: 48px;
+  flex: 1 1 auto;
+  border: 1px solid #4b4b4b;
+  border-radius: 2px;
+  color: #fff;
+  background: transparent;
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.form-actions .primary-button:hover:not(:disabled) {
+  border-color: #f2f2f2;
+  color: #050505;
+  background: #f2f2f2;
+}
+.secondary-button {
+  min-height: 42px;
+  border-color: #4b4b4b;
+  border-radius: 2px;
+  color: #fff;
+  background: transparent;
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.secondary-button:hover:not(:disabled) { border-color: #f2f2f2; color: #050505; background: #f2f2f2; }
+.help-icon {
+  border-color: #555;
+  color: #aaa;
+  background: #090909;
+}
+.tooltip { border-color: #444; background: #101010; }
+
+@media (max-width: 560px) {
+  .header-inner { width: calc(100% - 28px); }
+  .brand-logo { width: 96px; }
+  .page-shell { min-height: calc(100dvh - 58px); align-items: flex-start; padding: 36px 14px 24px; }
+  .setup-card { padding: 26px 20px 22px; }
+}
