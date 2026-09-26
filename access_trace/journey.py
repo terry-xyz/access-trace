@@ -985,8 +985,8 @@ def execute_fixed_goal(
 def _execute_assessment(
     run: Dict[str, Any], evidence_directory: Optional[Path], planner: Optional[Any]
 ) -> Dict[str, Any]:
-    if run.get("targetVersion") not in {"fixed", "broken"}:
-        raise ValueError("this lifecycle only supports the fixed or broken controlled target")
+    if run.get("targetVersion") not in {"fixed", "broken", "local"}:
+        raise ValueError("run has an unsupported controlled target")
     if run.get("assessmentScope") not in {"whole-site", "goal-focused"}:
         raise ValueError("run has an unsupported assessment scope")
     if run.get("assessmentScope") == "whole-site" and run.get("goal") is not None:
@@ -1004,6 +1004,24 @@ def _execute_assessment(
         and run.get("goal") != SUPPORTED_GOAL
     ):
         run["warnings"].append({"kind": "unsupported-goal"})
+    if (
+        run.get("targetVersion") == "local"
+        and run.get("assessmentScope") == "goal-focused"
+    ):
+        # Uploaded pages have no trusted, target-specific success predicate yet.
+        # Do not let a page imitate the controlled demo's "Message sent" signal.
+        warning = {
+            "kind": "unsupported-goal",
+            "message": "Goal-focused runs are not supported for uploaded local HTML pages; use whole-site scope.",
+        }
+        _append_warning(run["warnings"], warning)
+        run["browserSession"]["cleanup"] = {
+            "status": "not-started",
+            "profileRemoved": True,
+        }
+        run["browserSession"]["closedAt"] = utc_now()
+        _set_terminal_state(run, "INCONCLUSIVE", run["observations"][0], started)
+        return run
     if evidence_directory is None:
         run["warnings"].append({"kind": "missing-evidence-directory"})
         run["browserSession"]["cleanup"] = {
@@ -1017,7 +1035,12 @@ def _execute_assessment(
     typed_values: Dict[str, str] = {}
     covered_focus_ids = set()
     try:
-        browser = IsolatedKeyboardBrowser(run["targetUrl"])
+        if run.get("targetVersion") == "local":
+            browser = IsolatedKeyboardBrowser(
+                run["targetUrl"], restrict_network=True
+            )
+        else:
+            browser = IsolatedKeyboardBrowser(run["targetUrl"])
         current_raw = browser.observe()
         current = _redacted_observation(
             current_raw,
@@ -1057,7 +1080,10 @@ def _execute_assessment(
             capture_planner_screenshot = getattr(
                 browser, "capture_planner_screenshot", None
             )
-            if callable(capture_planner_screenshot):
+            if (
+                callable(capture_planner_screenshot)
+                and run.get("targetVersion") != "local"
+            ):
                 try:
                     screenshot_data_url = capture_planner_screenshot()
                 except BrowserError:

@@ -23,6 +23,8 @@
         <nav aria-label="Page navigation" class="header-nav">
           <a href="#setup">Assessment setup</a>
           <a href="#sample-report">Sample report</a>
+          <a href="/demo/fixed">Fixed demo</a>
+          <a href="/demo/broken">Broken demo</a>
         </nav>
       </div>
     </header>
@@ -46,7 +48,7 @@
         </div>
 
         <p class="section-intro">
-          Leave the goal empty to assess the whole site. This preview accepts only the recognized local demo address.
+          Choose a built-in demo or load one standalone local HTML file. Leave the goal empty to assess the whole page.
         </p>
 
         <form id="assessment-form" novalidate>
@@ -61,9 +63,35 @@
               aria-describedby="target-hint target-error"
             />
             <p id="target-hint" class="field-hint">
-              Recognized target: <code id="recognized-target"></code>. Remote hosts, other local ports, and other paths are rejected.
+              Current local target: <code id="recognized-target"></code>. Targets must stay on this AccessTrace server.
             </p>
             <p id="target-error" class="field-error" hidden></p>
+          </div>
+
+          <div class="field-group">
+            <label for="built-in-target">Choose a built-in demo</label>
+            <select id="built-in-target" name="builtInTarget">
+              <option value="">Choose a demo page…</option>
+              <option value="/demo/fixed">Fixed contact form</option>
+              <option value="/demo/broken">Broken contact form</option>
+            </select>
+            <p class="field-hint">Choosing a demo fills its same-server target URL above.</p>
+          </div>
+
+          <div class="field-group">
+            <label for="local-html-file">Load one local HTML file <span class="optional-label">Optional</span></label>
+            <input
+              id="local-html-file"
+              name="localHtmlFile"
+              type="file"
+              accept=".html,.htm,text/html"
+              aria-describedby="local-html-hint local-html-status"
+            />
+            <p id="local-html-hint" class="field-hint">
+              Standalone .html only, up to 1 MB. Linked stylesheets, scripts, images, and sibling files are not included.
+            </p>
+            <button id="load-local-html" class="secondary-button" type="button">Load selected HTML file</button>
+            <p id="local-html-status" class="scope-status" role="status" aria-live="polite"></p>
           </div>
 
           <div class="field-group">
@@ -76,7 +104,7 @@
               placeholder="Leave empty for a whole-site assessment"
             ></textarea>
             <p id="goal-hint" class="field-hint">
-              Leave empty for whole-site scope. Goal text stays verbatim. Goal-focused scope supports free-text goals describing concrete keyboard interactions with named controls on the controlled local site. Remote targets, other input modes, security or privacy evaluations, visual checks, goals without a recognizable action on a named control, and requests to override safeguards or run code are rejected. This preview does not execute goals.
+              Leave empty for whole-site scope. Goal text stays verbatim. The built-in demos support the specific “Submit the contact form” goal. Other goals must describe concrete keyboard interactions with named controls; goals without a recognizable action on a named control, remote targets, other input modes, security or privacy evaluations, visual checks, and requests to override safeguards or run code are rejected. Uploaded HTML supports whole-site scope only; all goal-focused uploaded-page runs finish inconclusively.
             </p>
             <p id="scope-status" class="scope-status" role="status" aria-live="polite">Whole-site assessment selected</p>
             <p id="goal-error" class="field-error" hidden></p>
@@ -106,10 +134,28 @@
             <button class="primary-button" type="submit">
               <span id="submit-label">View whole-site sample report</span> <span aria-hidden="true">↗</span>
             </button>
+            <button id="start-live-assessment" class="secondary-button" type="button">Run live assessment</button>
             <button id="view-comparison" class="secondary-button" type="button">View Low-consistency comparison sample</button>
-            <p class="action-note">Preview only. No browser starts and no live assessment is performed; repeated sample slots are not independent runs.</p>
+            <p class="action-note">The sample report is illustrative. A live run sends bounded page details to your signed-in Codex account. Masked screenshots from built-in demos may be sent to Codex; uploaded-page screenshots are omitted from Codex requests and stay local when their values can be safely covered. The HTML source stays on this server.</p>
           </div>
         </form>
+      </section>
+
+      <section id="live-assessment" class="report-section live-run-result" aria-labelledby="live-assessment-heading" hidden>
+        <div class="report-heading-row">
+          <div>
+            <p class="step-label">LIVE RUN</p>
+            <h2 id="live-assessment-heading" tabindex="-1">Assessment result</h2>
+          </div>
+        </div>
+        <p id="live-assessment-status" role="status" aria-live="polite"></p>
+        <button id="cancel-live-assessment" class="secondary-button" type="button" hidden>Cancel live run</button>
+        <p id="live-assessment-summary"></p>
+        <a id="download-live-record" hidden>Download redacted run record</a>
+        <details id="live-record-details" hidden>
+          <summary>View redacted run record</summary>
+          <pre id="live-record-json"></pre>
+        </details>
       </section>
 
       <section id="sample-report" class="report-section" aria-labelledby="report-heading" hidden>

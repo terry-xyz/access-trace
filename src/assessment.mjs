@@ -1,6 +1,5 @@
 export const CONTROLLED_TARGET_URL = "http://127.0.0.1:4173/";
 
-const TARGET_ERROR = `Use the controlled local demo at ${CONTROLLED_TARGET_URL}`;
 const UNSAFE_GOAL_PATTERNS = [
   /\b(?:ignore|override|disregard)\b.*\b(?:instructions|rules|safeguards|guardrails)\b/i,
   /\b(?:run|execute)\b.*\b(?:javascript|shell commands?|arbitrary code)\b/i,
@@ -65,32 +64,58 @@ function describesSecurityAssessment(candidate) {
   return evaluatesSecurityTopic || evaluatesSensitiveDataHandling;
 }
 
-/** validateTargetUrl accepts only the normalized controlled endpoint so other loopback services remain out of scope. */
-export function validateTargetUrl(value) {
+/** validateTargetUrl accepts only this app's built-in demos or an opaque uploaded-page route. */
+export function validateTargetUrl(value, baseOrigin = CONTROLLED_TARGET_URL) {
   const candidate = typeof value === "string" ? value.trim() : "";
 
   if (candidate === "") {
     return {
       valid: false,
       normalizedUrl: "",
-      message: "Enter the controlled local demo address.",
+      message: "Choose one of this AccessTrace server's local targets.",
     };
   }
 
   try {
-    const normalizedUrl = new URL(candidate).href;
-    if (normalizedUrl === CONTROLLED_TARGET_URL) {
+    const target = new URL(candidate);
+    const base = new URL(baseOrigin);
+    const normalizedUrl = target.href;
+    const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+    const portFor = (url) => url.port || (url.protocol === "https:" ? "443" : "80");
+    const sameLocalServer = target.protocol === "http:"
+      && base.protocol === "http:"
+      && loopbackHosts.has(target.hostname)
+      && loopbackHosts.has(base.hostname)
+      && portFor(target) === portFor(base)
+      && !target.username
+      && !target.password
+      && !target.search
+      && !target.hash;
+    const isBuiltInDemo = target.pathname === "/demo/fixed"
+      || target.pathname === "/demo/broken";
+    const isUploadedLocalPage = /^\/sites\/[0-9a-f]{32}$/.test(target.pathname);
+    const isLegacySampleAddress = baseOrigin === CONTROLLED_TARGET_URL
+      && normalizedUrl === CONTROLLED_TARGET_URL;
+
+    if (isLegacySampleAddress || (sameLocalServer && (isBuiltInDemo || isUploadedLocalPage))) {
       return { valid: true, normalizedUrl, message: "" };
     }
   } catch {
     return {
       valid: false,
       normalizedUrl: "",
-      message: "Enter a valid URL for the controlled local demo.",
+      message: "Enter a valid URL for this AccessTrace server.",
     };
   }
 
-  return { valid: false, normalizedUrl: "", message: TARGET_ERROR };
+  const baseDescription = baseOrigin === CONTROLLED_TARGET_URL
+    ? CONTROLLED_TARGET_URL
+    : baseOrigin;
+  return {
+    valid: false,
+    normalizedUrl: "",
+    message: `Use a built-in demo or uploaded local HTML page from ${baseDescription}`,
+  };
 }
 
 /** getAssessmentScope treats an empty goal as a whole-site assessment and any supplied text as goal-focused. */

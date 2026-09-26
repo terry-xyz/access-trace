@@ -254,6 +254,8 @@ button, input, select, textarea { font: inherit; }
 .secondary-button:hover { border-color: #415fcb; background: #f6f8ff; }
 .secondary-button:focus-visible { outline-color: #111e5d; outline-offset: 3px; }
 .action-note { margin: 0; color: #5b6880; font-size: 0.77rem; }
+.live-run-result { margin-top: 1rem; }
+#live-record-json { max-height: 32rem; overflow: auto; border: 1px solid var(--line); border-radius: 0.55rem; background: #f7f9fc; padding: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.72rem; }
 
 .report-section { padding-top: 2.2rem; scroll-margin-top: 1rem; }
 .sample-notice { display: flex; align-items: flex-start; gap: 0.8rem; border: 1px solid #e9d6a9; border-radius: 0.75rem; background: var(--amber-wash); padding: 0.9rem 1rem; color: #563c18; }

@@ -9,6 +9,7 @@ import base64
 import binascii
 from collections import deque
 import json
+import math
 import os
 import shutil
 import signal
@@ -50,6 +51,21 @@ PERMITTED_KEYS = {
 MAX_TYPED_CHARACTERS = 80
 MAX_PLANNER_SCREENSHOT_BYTES = 256 * 1024
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+WEBRTC_LOCKDOWN_SCRIPT = r"""
+(() => {
+  for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection"]) {
+    Object.defineProperty(globalThis, name, {
+      value: undefined,
+      configurable: false,
+      writable: false,
+    });
+    if (typeof globalThis[name] !== "undefined") {
+      throw new Error("WebRTC is unavailable during local HTML assessment");
+    }
+  }
+  return true;
+})()
+"""
 OBSERVATION_SCRIPT = r"""
 (() => {
   const compact = (value) => String(value || "").trim().replace(/\s+/g, " ").slice(0, 80);
@@ -140,14 +156,6 @@ OBSERVATION_SCRIPT = r"""
   };
 })()
 """
-
-EDITABLE_BOUNDS_SCRIPT = r"""
-(() => Array.from(document.querySelectorAll("input, textarea")).map((node) => {
-  const rect = node.getBoundingClientRect();
-  return {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom};
-}))()
-"""
-
 
 def _read_exact(source: socket.socket, length: int) -> bytes:
     chunks = []
@@ -291,6 +299,8 @@ class _WebSocket:
         self._next_call_id = 1
         self._events = deque(maxlen=256)
         self.events_overflowed = False
+        self.event_handler = None
+        self._checked_command_ids = set()
 
     def _remember_event(self, message: Dict[str, Any]) -> None:
         method = message.get("method")
@@ -409,9 +419,12 @@ class _WebSocket:
         while True:
             message = self.receive()
             if isinstance(message.get("method"), str):
+                if callable(self.event_handler):
+                    self.event_handler(message)
                 self._remember_event(message)
                 continue
             if message.get("id") != call_id:
+                self._consume_checked_response(message)
                 continue
             if "error" in message:
                 raise BrowserError("browser rejected the requested operation")
@@ -423,14 +436,32 @@ class _WebSocket:
         self.send({"id": call_id, "method": method, "params": params or {}})
         return call_id
 
+    def send_checked_call(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> int:
+        call_id = self.send_call(method, params)
+        self._checked_command_ids.add(call_id)
+        return call_id
+
+    def _consume_checked_response(self, message: Dict[str, Any]) -> None:
+        call_id = message.get("id")
+        if call_id not in self._checked_command_ids:
+            return
+        self._checked_command_ids.remove(call_id)
+        if "error" in message:
+            raise BrowserError("browser rejected the uploaded-page network policy")
+
     def wait_for_calls(self, call_ids) -> None:
         pending = set(call_ids)
         while pending:
             message = self.receive()
             if isinstance(message.get("method"), str):
+                if callable(self.event_handler):
+                    self.event_handler(message)
                 self._remember_event(message)
                 continue
             message_id = message.get("id")
+            self._consume_checked_response(message)
             if message_id not in pending:
                 continue
             if "error" in message:
@@ -496,10 +527,95 @@ def _is_process_alive(pid: int) -> bool:
     return True
 
 
+class _UploadedPageRequestPolicy:
+    """Allow one main-frame document request, then fail all network requests."""
+
+    def __init__(
+        self, connection: _WebSocket, target_url: str, main_frame_id: Optional[str]
+    ):
+        self.connection = connection
+        self.target = urlsplit(target_url)
+        self.main_frame_id = main_frame_id
+        self.initial_document_allowed = False
+
+    def _allows_request(
+        self,
+        url: Any,
+        method: Any,
+        resource_type: Any,
+        frame_id: Any,
+    ) -> bool:
+        if (
+            self.initial_document_allowed
+            or self.main_frame_id is None
+            or frame_id != self.main_frame_id
+            or resource_type != "Document"
+            or method != "GET"
+            or not isinstance(url, str)
+        ):
+            return False
+        try:
+            request = urlsplit(url)
+            request_port = request.port or (80 if request.scheme == "http" else 443)
+            target_port = self.target.port or (
+                80 if self.target.scheme == "http" else 443
+            )
+        except ValueError:
+            return False
+        matches_target = (
+            request.scheme == "http"
+            and request.scheme == self.target.scheme
+            and request.hostname == self.target.hostname
+            and request_port == target_port
+            and request.path == self.target.path
+            and not request.username
+            and not request.password
+            and not request.query
+            and not request.fragment
+        )
+        if matches_target:
+            # Consume the sole allow before continuing it: if CDP handling fails,
+            # any retry or subsequent navigation remains blocked.
+            self.initial_document_allowed = True
+        return matches_target
+
+    def handle_event(self, message: Dict[str, Any]) -> None:
+        if message.get("method") != "Fetch.requestPaused":
+            return
+        params = message.get("params")
+        if not isinstance(params, dict):
+            raise BrowserError("browser paused a request without policy details")
+        request_id = params.get("requestId")
+        request = params.get("request")
+        if not isinstance(request_id, str) or not isinstance(request, dict):
+            raise BrowserError("browser paused a request without a request identifier")
+
+        is_request_stage = (
+            "responseStatusCode" not in params
+            and "responseErrorReason" not in params
+        )
+        if is_request_stage and self._allows_request(
+            request.get("url"),
+            request.get("method"),
+            params.get("resourceType"),
+            params.get("frameId"),
+        ):
+            self.connection.send_checked_call(
+                "Fetch.continueRequest", {"requestId": request_id}
+            )
+            return
+        # Fetch pauses before the browser sends the request. Redirect follow-ups,
+        # reloads, form submissions, popups, and subresources are all denied.
+        self.connection.send_checked_call(
+            "Fetch.failRequest",
+            {"requestId": request_id, "errorReason": "BlockedByClient"},
+        )
+
+
 class IsolatedKeyboardBrowser:
     """A fresh, keyboard-only Chrome session with bounded observations."""
 
-    def __init__(self, target_url: str):
+    def __init__(self, target_url: str, restrict_network: bool = False):
         chrome = _find_chrome()
         if chrome is None:
             raise BrowserError("Chrome is not available for a real browser run")
@@ -508,10 +624,13 @@ class IsolatedKeyboardBrowser:
         self.connection: Optional[_WebSocket] = None
         self.browser_connection: Optional[_WebSocket] = None
         self.target_url = target_url
+        self.restrict_network = restrict_network
+        self.request_policy: Optional[_UploadedPageRequestPolicy] = None
         self.target_id: Optional[str] = None
         self._page_monitor_active = False
         self._main_frame_id: Optional[str] = None
         self._page_open: Optional[bool] = None
+        self._dom_dialog_open: Optional[bool] = None
         self._popup_observed: Optional[bool] = None
         self._popup_attempted: Optional[bool] = None
         self._crashed: Optional[bool] = None
@@ -523,21 +642,26 @@ class IsolatedKeyboardBrowser:
         self._navigation_started = False
         self.debug_port = self._free_port()
         try:
+            chrome_arguments = [
+                chrome,
+                "--headless=new",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--remote-allow-origins=*",
+                "--remote-debugging-address=127.0.0.1",
+                "--remote-debugging-port={0}".format(self.debug_port),
+                "--user-data-dir={0}".format(self.profile_directory),
+                "--force-device-scale-factor=1",
+                "--window-size=1280,900",
+            ]
+            if self.restrict_network:
+                chrome_arguments.extend(
+                    ["--dns-prefetch-disable", "--disable-preconnect"]
+                )
             self.process = subprocess.Popen(
-                [
-                    chrome,
-                    "--headless=new",
-                    "--disable-gpu",
-                    "--disable-dev-shm-usage",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--remote-allow-origins=*",
-                    "--remote-debugging-address=127.0.0.1",
-                    "--remote-debugging-port={0}".format(self.debug_port),
-                    "--user-data-dir={0}".format(self.profile_directory),
-                    "--force-device-scale-factor=1",
-                    "--window-size=1280,900",
-                ],
+                chrome_arguments,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -560,6 +684,16 @@ class IsolatedKeyboardBrowser:
                 main_frame.get("id") if isinstance(main_frame, dict) else None
             )
             self.connection.call("Network.enable")
+            if self.restrict_network:
+                self._install_uploaded_page_webrtc_lockdown()
+                self.request_policy = _UploadedPageRequestPolicy(
+                    self.connection, target_url, self._main_frame_id
+                )
+                self.connection.event_handler = self.request_policy.handle_event
+                self.connection.call(
+                    "Fetch.enable",
+                    {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+                )
             self._page_monitor_active = True
             self._popup_attempted = False
             self._native_dialog_open = False
@@ -576,6 +710,38 @@ class IsolatedKeyboardBrowser:
                     "isolated browser startup cleanup could not be verified"
                 ) from cleanup_error
             raise BrowserError("unable to start the isolated browser") from error
+
+    def _install_uploaded_page_webrtc_lockdown(self) -> None:
+        if self.connection is None:
+            raise BrowserError("browser is not connected")
+        installed = self.connection.call(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": WEBRTC_LOCKDOWN_SCRIPT},
+        )
+        if not isinstance(installed, dict) or not isinstance(
+            installed.get("identifier"), str
+        ):
+            raise BrowserError("browser could not install the WebRTC lockdown")
+
+        current_document = self.connection.call(
+            "Runtime.evaluate",
+            {
+                "expression": WEBRTC_LOCKDOWN_SCRIPT,
+                "returnByValue": True,
+                "awaitPromise": False,
+            },
+        )
+        result = (
+            current_document.get("result", {}).get("value")
+            if isinstance(current_document, dict)
+            else None
+        )
+        if (
+            not isinstance(current_document, dict)
+            or current_document.get("exceptionDetails") is not None
+            or result is not True
+        ):
+            raise BrowserError("browser could not apply the WebRTC lockdown")
 
     @staticmethod
     def _free_port() -> int:
@@ -947,6 +1113,7 @@ class IsolatedKeyboardBrowser:
             and isinstance(raw_lifecycle.get("dialogOpen"), bool)
             else None
         )
+        self._dom_dialog_open = dialog_open
         self._collect_page_events()
         self._refresh_target_state()
         if isinstance(value.get("url"), str):
@@ -959,6 +1126,8 @@ class IsolatedKeyboardBrowser:
     def _mark_page_monitor_unavailable(self) -> None:
         self._page_monitor_active = False
         self._native_dialog_open = None
+        if self._dom_dialog_open is not True:
+            self._dom_dialog_open = None
         if self._dialog_observed is not True:
             self._dialog_observed = None
         if self._popup_attempted is not True:
@@ -974,24 +1143,218 @@ class IsolatedKeyboardBrowser:
         if self.connection is None:
             raise BrowserError("browser is not connected")
         self._preflight_keyboard_action(None)
-        bounds_result = self.connection.call(
-            "Runtime.evaluate",
-            {"expression": EDITABLE_BOUNDS_SCRIPT, "returnByValue": True},
-        )
-        bounds = bounds_result.get("result", {}).get("value")
-        if not isinstance(bounds, list) or not all(isinstance(bound, dict) for bound in bounds):
-            raise BrowserError("browser returned no safe screenshot bounds")
-        screenshot_result = self.connection.call("Page.captureScreenshot", {"format": "png"})
-        encoded = screenshot_result.get("data") if isinstance(screenshot_result, dict) else None
-        if not isinstance(encoded, str):
-            raise BrowserError("browser returned no screenshot")
+        script_execution_disabled = False
+        animation_playback_paused = False
         try:
-            screenshot = base64.b64decode(encoded, validate=True)
-        except (ValueError, binascii.Error) as error:
-            raise BrowserError("browser returned an invalid screenshot") from error
-        redacted = _redact_png(screenshot, bounds)
-        self._preflight_keyboard_action(None)
-        return redacted
+            # Keep the DOM and layout stable from geometry collection through
+            # capture; uploaded page scripts cannot move controls between them.
+            self.connection.call("Animation.enable")
+            self.connection.call("Animation.setPlaybackRate", {"playbackRate": 0})
+            animation_playback_paused = True
+            self.connection.call(
+                "Emulation.setScriptExecutionDisabled", {"value": True}
+            )
+            script_execution_disabled = True
+
+            frame_tree_result = self.connection.call("Page.getFrameTree")
+            frame_tree = (
+                frame_tree_result.get("frameTree")
+                if isinstance(frame_tree_result, dict)
+                else None
+            )
+            main_frame = frame_tree.get("frame") if isinstance(frame_tree, dict) else None
+            child_frames = (
+                frame_tree.get("childFrames", [])
+                if isinstance(frame_tree, dict)
+                else None
+            )
+            if (
+                not isinstance(main_frame, dict)
+                or not isinstance(main_frame.get("id"), str)
+                or not isinstance(child_frames, list)
+                or child_frames
+            ):
+                raise BrowserError("screenshot redaction cannot safely cover nested frames")
+
+            self.connection.call("DOM.enable")
+            self.connection.call("CSS.enable")
+            document_result = self.connection.call(
+                "DOM.getDocument", {"depth": -1, "pierce": True}
+            )
+            root = document_result.get("root") if isinstance(document_result, dict) else None
+            if not isinstance(root, dict):
+                raise BrowserError("browser returned no DOM for screenshot redaction")
+            bounds = self._editable_bounds_from_dom(root)
+
+            screenshot_result = self.connection.call(
+                "Page.captureScreenshot", {"format": "png"}
+            )
+            encoded = (
+                screenshot_result.get("data")
+                if isinstance(screenshot_result, dict)
+                else None
+            )
+            if not isinstance(encoded, str):
+                raise BrowserError("browser returned no screenshot")
+            try:
+                screenshot = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as error:
+                raise BrowserError("browser returned an invalid screenshot") from error
+            redacted = _redact_png(screenshot, bounds)
+            return redacted
+        finally:
+            restore_error = None
+            if script_execution_disabled:
+                try:
+                    self.connection.call(
+                        "Emulation.setScriptExecutionDisabled", {"value": False}
+                    )
+                except BrowserError as error:
+                    restore_error = error
+            if animation_playback_paused:
+                try:
+                    self.connection.call(
+                        "Animation.setPlaybackRate", {"playbackRate": 1}
+                    )
+                except BrowserError as error:
+                    restore_error = restore_error or error
+            if restore_error is not None:
+                raise BrowserError("browser could not restore page execution after screenshot") from restore_error
+
+    def _editable_bounds_from_dom(self, root: Dict[str, Any]) -> list:
+        """Collect geometry through CDP, including controls in shadow roots."""
+        editable_nodes = []
+        pending = [(root, ())]
+        visited = set()
+        computed_style_cache = {}
+        while pending:
+            node, ancestor_ids = pending.pop()
+            if not isinstance(node, dict):
+                raise BrowserError("browser returned an invalid DOM node")
+            backend_node_id = node.get("backendNodeId")
+            if backend_node_id is not None:
+                if not isinstance(backend_node_id, int) or isinstance(backend_node_id, bool):
+                    raise BrowserError("browser returned an invalid DOM backend id")
+                if backend_node_id in visited:
+                    continue
+                visited.add(backend_node_id)
+
+            node_name = node.get("nodeName")
+            if isinstance(node_name, str) and node_name.startswith("#"):
+                normalized_name = node_name.upper()
+            elif isinstance(node_name, str):
+                normalized_name = node_name.upper()
+            else:
+                raise BrowserError("browser returned a DOM node without a name")
+
+            attributes = node.get("attributes", [])
+            if not isinstance(attributes, list) or len(attributes) % 2:
+                raise BrowserError("browser returned invalid DOM attributes")
+            if not all(isinstance(value, str) for value in attributes):
+                raise BrowserError("browser returned invalid DOM attributes")
+            attribute_map = {
+                attributes[index].lower(): attributes[index + 1]
+                for index in range(0, len(attributes), 2)
+            }
+            is_editable = normalized_name in {"INPUT", "TEXTAREA", "SELECT"}
+            if normalized_name == "INPUT" and attribute_map.get("type", "text").lower() == "hidden":
+                is_editable = False
+            role_tokens = attribute_map.get("role", "").lower().split()
+            contenteditable = attribute_map.get("contenteditable")
+            is_editable = is_editable or any(
+                role in {"textbox", "searchbox", "combobox"}
+                for role in role_tokens
+            ) or (
+                contenteditable is not None
+                and contenteditable.lower() in {"", "true", "plaintext-only"}
+            )
+            if is_editable:
+                if backend_node_id is None:
+                    raise BrowserError("editable DOM node had no backend id")
+                editable_nodes.append((backend_node_id, ancestor_ids))
+                if len(editable_nodes) > 256:
+                    raise BrowserError("page has too many editable nodes to redact safely")
+
+            # Template contents are inert and not painted, so deliberately omit
+            # templateContent nodes from screenshot redaction geometry.
+            for child_key in ("children", "shadowRoots"):
+                children = node.get(child_key, [])
+                if children is None:
+                    continue
+                if not isinstance(children, list):
+                    raise BrowserError("browser returned an invalid DOM subtree")
+                next_ancestors = ancestor_ids
+                if backend_node_id is not None and not normalized_name.startswith("#"):
+                    next_ancestors = ancestor_ids + (backend_node_id,)
+                pending.extend((child, next_ancestors) for child in children)
+            content_document = node.get("contentDocument")
+            if content_document is not None:
+                raise BrowserError("screenshot redaction cannot cover frame content")
+
+        bounds = []
+        for backend_node_id, ancestor_ids in editable_nodes:
+            try:
+                box_result = self.connection.call(
+                    "DOM.getBoxModel", {"backendNodeId": backend_node_id}
+                )
+                model = box_result.get("model") if isinstance(box_result, dict) else None
+                border = model.get("border") if isinstance(model, dict) else None
+                if not isinstance(border, list) or len(border) < 8 or len(border) % 2:
+                    raise BrowserError("browser returned no safe editable-node geometry")
+                coordinates = [float(value) for value in border]
+            except (BrowserError, TypeError, ValueError, OverflowError) as error:
+                if self._node_is_hidden(ancestor_ids + (backend_node_id,), computed_style_cache):
+                    continue
+                raise BrowserError("browser returned no safe editable-node geometry") from error
+            if not all(math.isfinite(value) for value in coordinates):
+                raise BrowserError("browser returned invalid editable-node geometry")
+            left = min(coordinates[0::2])
+            top = min(coordinates[1::2])
+            right = max(coordinates[0::2])
+            bottom = max(coordinates[1::2])
+            if right <= left or bottom <= top:
+                raise BrowserError("browser returned invalid editable-node geometry")
+            bounds.append({"left": left, "top": top, "right": right, "bottom": bottom})
+        return bounds
+
+    def _node_is_hidden(self, backend_node_ids, cache) -> bool:
+        """Ignore an unrendered control only when CDP confirms hidden styling."""
+        for backend_node_id in backend_node_ids:
+            if backend_node_id not in cache:
+                node_result = self.connection.call(
+                    "DOM.pushNodesByBackendIdsToFrontend",
+                    {"backendNodeIds": [backend_node_id]},
+                )
+                node_ids = node_result.get("nodeIds") if isinstance(node_result, dict) else None
+                node_id = node_ids[0] if isinstance(node_ids, list) and len(node_ids) == 1 else None
+                if not isinstance(node_id, int) or isinstance(node_id, bool) or node_id <= 0:
+                    raise BrowserError("browser could not resolve a hidden control node")
+                result = self.connection.call(
+                    "CSS.getComputedStyleForNode", {"nodeId": node_id}
+                )
+                styles = result.get("computedStyle") if isinstance(result, dict) else None
+                if not isinstance(styles, list):
+                    raise BrowserError("browser returned no computed style for hidden control")
+                cache[backend_node_id] = {
+                    item.get("name"): item.get("value")
+                    for item in styles
+                    if isinstance(item, dict)
+                    and isinstance(item.get("name"), str)
+                    and isinstance(item.get("value"), str)
+                }
+            style = cache[backend_node_id]
+            if (
+                style.get("display") == "none"
+                or style.get("visibility") in {"hidden", "collapse"}
+                or style.get("content-visibility") == "hidden"
+            ):
+                return True
+            try:
+                if float(style.get("opacity", "1")) == 0:
+                    return True
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return False
 
     def capture_planner_screenshot(self) -> Optional[str]:
         """Return a bounded redacted PNG data URL for multimodal planner input."""
@@ -1157,7 +1520,7 @@ class IsolatedKeyboardBrowser:
         self._record_main_frame_url(current_url)
         self._collect_page_events()
         self._refresh_target_state()
-        lifecycle = self._lifecycle(current_url)
+        lifecycle = self._lifecycle(current_url, self._dom_dialog_open)
         if any(
             lifecycle.get(field) is None
             for field in (

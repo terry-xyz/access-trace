@@ -1,6 +1,7 @@
 """Public data contract for the first Journey & Evidence run boundary."""
 
 import uuid
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ SUPPORTED_TARGET_PATHS = {
     "/demo/fixed": "fixed",
     "/demo/broken": "broken",
 }
+LOCAL_HTML_TARGET_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})$")
 
 
 class ValidationError(ValueError):
@@ -52,11 +54,17 @@ def validate_target_url(
         raise ValidationError("targetUrl must use the controlled server port")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValidationError("targetUrl must not contain credentials, a query, or a fragment")
-    if path not in SUPPORTED_TARGET_PATHS:
-        raise ValidationError("targetUrl must select the fixed or broken controlled demo")
+    if path in SUPPORTED_TARGET_PATHS:
+        target_version = SUPPORTED_TARGET_PATHS[path]
+    elif LOCAL_HTML_TARGET_PATTERN.fullmatch(path):
+        target_version = "local"
+    else:
+        raise ValidationError(
+            "targetUrl must select a controlled demo or an uploaded local HTML page"
+        )
 
     normalized = parsed._replace(path=path).geturl()
-    return normalized, SUPPORTED_TARGET_PATHS[path]
+    return normalized, target_version
 
 
 def normalize_goal(goal: Any) -> Optional[str]:
@@ -146,19 +154,22 @@ def _controls() -> list:
 
 def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
     goal = run_request["goal"]
+    target_version = run_request["targetVersion"]
+    is_controlled_demo = target_version in {"fixed", "broken"}
+    supports_contact_goal = is_controlled_demo
     observation = {
         "kind": "settled-observation",
         "observedAt": utc_now(),
         "url": run_request["targetUrl"],
-        "title": DEMO_TITLE,
+        "title": DEMO_TITLE if is_controlled_demo else None,
         "focus": {
             "role": "document",
-            "accessibleName": "Fictional contact form",
+            "accessibleName": "Fictional contact form" if is_controlled_demo else None,
             "tag": "body",
             "stableId": "document",
             "isStable": True,
         },
-        "controls": _controls(),
+        "controls": _controls() if is_controlled_demo else [],
         "warnings": [],
         "lifecycle": {
             "pageOpen": None,
@@ -189,14 +200,24 @@ def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
         }
     else:
         observation["success"] = {
-            "condition": "Message sent" if goal == SUPPORTED_GOAL else None,
+            "condition": "Message sent"
+            if supports_contact_goal and goal == SUPPORTED_GOAL
+            else None,
             "matched": False,
         }
         observation["goalProgress"] = {
             "goal": goal,
-            "status": "not-started" if goal == SUPPORTED_GOAL else "unsupported",
+            "status": (
+                "not-started"
+                if supports_contact_goal and goal == SUPPORTED_GOAL
+                else "unsupported"
+            ),
             "completed": False,
-            "support": "supported" if goal == SUPPORTED_GOAL else "unsupported",
+            "support": (
+                "supported"
+                if supports_contact_goal and goal == SUPPORTED_GOAL
+                else "unsupported"
+            ),
         }
         observation["coverage"] = None
 
@@ -221,7 +242,10 @@ def create_run(
         "assessmentScope": run_request["assessmentScope"],
         "goal": run_request["goal"],
         "successCondition": (
-            "Message sent" if run_request["goal"] == SUPPORTED_GOAL else None
+            "Message sent"
+            if run_request["targetVersion"] in {"fixed", "broken"}
+            and run_request["goal"] == SUPPORTED_GOAL
+            else None
         ),
         "simulationMode": run_request["simulationMode"],
         "interactionProfile": INTERACTION_PROFILE,
@@ -235,7 +259,16 @@ def create_run(
         "interactionCount": 0,
         "actions": [],
         "observations": [observation],
-        "warnings": [],
+        "warnings": (
+            [
+                {
+                    "kind": "unsupported-goal",
+                    "message": "Goal-focused runs are not supported for uploaded local HTML pages; use whole-site scope.",
+                }
+            ]
+            if run_request["targetVersion"] == "local" and run_request["goal"] is not None
+            else []
+        ),
         "recoveryEvidence": [],
         "stoppingPoint": None,
         "stoppingScreenshotRef": None,

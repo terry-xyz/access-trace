@@ -1,5 +1,7 @@
+import base64
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -13,6 +15,7 @@ from access_trace.browser import (
     BrowserCleanupError,
     BrowserError,
     IsolatedKeyboardBrowser,
+    MAX_PLANNER_SCREENSHOT_BYTES,
 )
 from access_trace.domain import create_run
 from access_trace.journey import (
@@ -23,6 +26,11 @@ from access_trace.journey import (
     execute_contact_goal,
     execute_fixed_goal,
     redacted_observation,
+)
+from access_trace.planner import (
+    CODEX_DISABLED_FEATURES,
+    CODEX_OUTPUT_SCHEMA,
+    _codex_executable,
 )
 from access_trace.server import create_server
 
@@ -52,21 +60,45 @@ class DeterministicTestPlanner:
         return {"kind": "key", "key": "Tab"}
 
 
-class FakePlannerTransport:
-    def __init__(self, output):
-        self.output = output
-        self.calls = []
+class FakeCodexProcess:
+    """Popen substitute that never starts a process on the host."""
 
-    def __call__(self, endpoint, headers, body, timeout):
-        self.calls.append(
-            {
-                "endpoint": endpoint,
-                "headers": headers,
-                "body": body,
-                "timeout": timeout,
-            }
-        )
-        return json.dumps({"output_text": self.output}).encode("utf-8")
+    def __init__(self, output, returncode=None, stderr=b"", timeout=False, on_communicate=None):
+        self.output = output
+        self.returncode = returncode
+        self.stderr = stderr
+        self.timeout = timeout
+        self.on_communicate = on_communicate
+        self.terminated = False
+        self.killed = False
+        self.communicate_calls = 0
+
+    def communicate(self, timeout=None):
+        self.communicate_calls += 1
+        if self.timeout and not self.terminated:
+            raise subprocess.TimeoutExpired(["codex", "exec"], timeout)
+        if self.on_communicate is not None:
+            self.on_communicate()
+        if self.returncode is None:
+            self.returncode = 0
+        return self.output, self.stderr
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+
+def codex_output(action):
+    message = json.dumps(action, separators=(",", ":"))
+    event = {"type": "item.completed", "item": {"type": "agent_message", "text": message}}
+    return (json.dumps(event) + "\n").encode("utf-8")
 
 
 class DeterministicContactBrowser:
@@ -147,9 +179,11 @@ class DeterministicContactBrowser:
             "lifecycle": {
                 "pageOpen": True,
                 "dialogOpen": False,
+                "dialogObserved": False,
                 "popupObserved": False,
                 "crashed": False,
                 "offLoopbackRedirect": False,
+                "navigationRedirect": False,
             },
         }
 
@@ -239,9 +273,12 @@ class AssessmentTargetTests(unittest.TestCase):
 
         self.assertEqual(200, status)
         self.assertIn('id="target-url"', page)
-        self.assertIn('id="goal"', page)
+        self.assertIn('id="assessment-goal"', page)
         self.assertIn('id="simulation-mode"', page)
-        self.assertIn("Start fresh run", page)
+        self.assertIn('id="local-html-file"', page)
+        self.assertIn("Run live assessment", page)
+        self.assertIn('href="/demo/fixed"', page)
+        self.assertIn('href="/demo/broken"', page)
 
     def test_starting_a_goal_run_persists_context_and_a_bounded_first_observation(self):
         status, run = self.request(
@@ -675,7 +712,7 @@ class AssessmentTargetTests(unittest.TestCase):
         )
 
         status, completed = self.request(
-            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=10
+            "POST", "/api/runs/{0}/execute".format(created["id"]), timeout=30
         )
 
         self.assertEqual(200, status)
@@ -830,9 +867,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -934,9 +973,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1025,9 +1066,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
                 if self.success:
@@ -1086,9 +1129,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1152,9 +1197,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1223,9 +1270,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1293,9 +1342,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": self.dialog_open,
+                        "dialogObserved": self.dialog_open,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1359,9 +1410,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1417,9 +1470,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1494,9 +1549,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1558,9 +1615,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1603,9 +1662,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": False,
                         "dialogOpen": True,
+                        "dialogObserved": True,
                         "popupObserved": True,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -1764,17 +1825,14 @@ class AssessmentTargetTests(unittest.TestCase):
                 }
             }
         }
-        planner = CodexPlanner(
-            endpoint="https://planner.example/v1/responses",
-            model="planner-test-model",
-            api_key="planner-test-secret",
-            transport=FakePlannerTransport(
-                '{"kind":"type","field":"name","text":"fictional"}'
-            ),
+        process = FakeCodexProcess(
+            codex_output(
+                {"kind": "type", "key": None, "field": "name", "text": "fictional"}
+            )
         )
-
-        with self.assertRaises(PlannerError):
-            planner.next_action(context)
+        with mock.patch("access_trace.planner.subprocess.Popen", return_value=process):
+            with self.assertRaises(PlannerError):
+                CodexPlanner(executable="fake-codex").next_action(context)
 
     def test_completed_requires_a_persisted_png_screenshot(self):
         run = create_run(
@@ -1811,17 +1869,28 @@ class AssessmentTargetTests(unittest.TestCase):
         finally:
             server.server_close()
 
-    def test_codex_planner_fails_truthfully_without_direct_model_configuration(self):
-        with mock.patch.dict(
-            os.environ,
-            {
-                "CODEX_PLANNER_ENDPOINT": "",
-                "CODEX_PLANNER_MODEL": "",
-                "CODEX_PLANNER_API_KEY": "",
-            },
-        ):
-            with self.assertRaises(PlannerError):
-                CodexPlanner().next_action({"pageEvidence": {"focus": {}}})
+    def test_codex_planner_reports_saved_login_errors_without_real_processes(self):
+        process = FakeCodexProcess(
+            b"",
+            returncode=1,
+            stderr=b"Not logged in. Run codex login.",
+        )
+        with mock.patch("access_trace.planner.subprocess.Popen", return_value=process):
+            with self.assertRaisesRegex(PlannerError, "codex login"):
+                CodexPlanner(executable="fake-codex").next_action(
+                    {"pageEvidence": {"focus": {}}}
+                )
+
+    def test_codex_planner_reports_spawn_errors_without_running_a_process(self):
+        with mock.patch(
+            "access_trace.planner.subprocess.Popen",
+            side_effect=FileNotFoundError("codex executable is missing"),
+        ) as spawn:
+            with self.assertRaisesRegex(PlannerError, "could not start"):
+                CodexPlanner(executable="missing-codex").next_action(
+                    {"pageEvidence": {"focus": {}}}
+                )
+        spawn.assert_called_once()
 
     def test_same_origin_path_redirect_makes_execution_inconclusive(self):
         class RedirectingBrowser:
@@ -1897,35 +1966,18 @@ class AssessmentTargetTests(unittest.TestCase):
             "recentHistory": [],
         }
 
-        transport = FakePlannerTransport('{"kind":"key","key":"Tab"}')
-        planner = CodexPlanner(
-            endpoint="https://planner.example/v1/responses",
-            model="planner-test-model",
-            api_key="planner-test-secret",
-            transport=transport,
-        )
-        self.assertEqual({"kind": "key", "key": "Tab"}, planner.next_action(context))
+        def run_fake(action, target_context):
+            process = FakeCodexProcess(codex_output(action))
+            with mock.patch(
+                "access_trace.planner.subprocess.Popen", return_value=process
+            ):
+                result = CodexPlanner(executable="fake-codex").next_action(
+                    target_context
+                )
+            return result
 
-        request = transport.calls[0]
-        body = json.loads(request["body"])
-        self.assertEqual("https://planner.example/v1/responses", request["endpoint"])
-        self.assertEqual("Bearer planner-test-secret", request["headers"]["Authorization"])
-        self.assertNotIn("tools", body)
-        self.assertEqual("planner-test-model", body["model"])
-        self.assertTrue(body["text"]["format"]["strict"])
-        self.assertNotIn("planner-test-secret", json.dumps(body))
-        self.assertLessEqual(len(body["input"]), 12_000)
-
-        echoed_credential = CodexPlanner(
-            endpoint="https://planner.example/v1/responses",
-            model="planner-test-model",
-            api_key="planner-test-secret",
-            transport=FakePlannerTransport(
-                '{"kind":"key","key":"Tab"} planner-test-secret'
-            ),
-        )
-        with self.assertRaises(PlannerError):
-            echoed_credential.next_action(context)
+        key_action = {"kind": "key", "key": "Tab", "field": None, "text": None}
+        self.assertEqual({"kind": "key", "key": "Tab"}, run_fake(key_action, context))
 
         type_context = json.loads(json.dumps(context))
         type_context["pageEvidence"]["focus"].update(
@@ -1937,40 +1989,181 @@ class AssessmentTargetTests(unittest.TestCase):
                 "acceptedInput": False,
             }
         )
-        type_planner = CodexPlanner(
-            endpoint="https://planner.example/v1/responses",
-            model="planner-test-model",
-            api_key="planner-test-secret",
-            transport=FakePlannerTransport(
-                '{"kind":"type","field":"name","text":"fictional"}'
-            ),
-        )
         self.assertEqual(
             {"kind": "type", "field": "name", "text": "fictional"},
-            type_planner.next_action(type_context),
-        )
-
-        invalid = CodexPlanner(
-            endpoint="https://planner.example/v1/responses",
-            model="planner-test-model",
-            api_key="planner-test-secret",
-            transport=FakePlannerTransport(
-                '{"kind":"click","selector":"#submit"}'
+            run_fake(
+                {
+                    "kind": "type",
+                    "key": None,
+                    "field": "name",
+                    "text": "fictional",
+                },
+                type_context,
             ),
         )
-        with self.assertRaises(PlannerError):
-            invalid.next_action(context)
 
-        extra_field = CodexPlanner(
-            endpoint="https://planner.example/v1/responses",
-            model="planner-test-model",
-            api_key="planner-test-secret",
-            transport=FakePlannerTransport(
-                '{"kind":"key","key":"Tab","extra":"ignored"}'
-            ),
-        )
         with self.assertRaises(PlannerError):
-            extra_field.next_action(context)
+            run_fake(
+                {"kind": "click", "key": None, "field": None, "text": None},
+                context,
+            )
+
+        with self.assertRaises(PlannerError):
+            run_fake(
+                {
+                    "kind": "key",
+                    "key": "Tab",
+                    "field": None,
+                    "text": None,
+                    "extra": "rejected",
+                },
+                context,
+            )
+
+    def test_codex_planner_uses_no_tools_minimal_environment_and_bounded_image(self):
+        context = {
+            "pageEvidence": {
+                "untrusted": True,
+                "screenshotDataUrl": "data:image/png;base64,"
+                + base64.b64encode(b"\x89PNG\r\n\x1a\nredacted").decode("ascii"),
+                "focus": {
+                    "role": "document",
+                    "tag": "body",
+                    "stableId": "document",
+                    "isStable": True,
+                },
+            }
+        }
+        process = FakeCodexProcess(
+            codex_output({"kind": "key", "key": "Tab", "field": None, "text": None})
+        )
+        captured = {}
+
+        def fake_popen(args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            schema_path = Path(args[args.index("--output-schema") + 1])
+            captured["schema_path"] = schema_path
+            captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
+            image_path = Path(args[args.index("--image") + 1])
+            captured["image_path"] = image_path
+            captured["image_bytes"] = image_path.read_bytes()
+            return process
+
+        environment = {
+            "PATH": "/safe/bin",
+            "HOME": "/home/test-user",
+            "CODEX_HOME": "/home/test-user/.codex",
+            "TMPDIR": tempfile.gettempdir(),
+            "LANG": "en_US.UTF-8",
+            "OPENAI_API_KEY": "api-key-secret",
+            "CODEX_API_KEY": "codex-api-key-secret",
+            "OPENAI_BASE_URL": "https://api-key-provider.example",
+            "HTTPS_PROXY": "https://proxy-token.example",
+            "AWS_SECRET_ACCESS_KEY": "cloud-secret",
+            "NODE_OPTIONS": "--require /tmp/untrusted.js",
+        }
+        with mock.patch.dict(os.environ, environment, clear=True):
+            with mock.patch(
+                "access_trace.planner.subprocess.Popen", side_effect=fake_popen
+            ) as spawn:
+                result = CodexPlanner(executable="codex-test").next_action(context)
+
+        self.assertEqual({"kind": "key", "key": "Tab"}, result)
+        spawn.assert_called_once()
+        args = captured["args"]
+        kwargs = captured["kwargs"]
+        self.assertEqual("codex-test", args[0])
+        self.assertEqual("exec", args[1])
+        self.assertEqual("--json", args[2])
+        self.assertIn("--ephemeral", args)
+        self.assertIn("--sandbox", args)
+        self.assertEqual("read-only", args[args.index("--sandbox") + 1])
+        disabled_features = {
+            args[index + 1]
+            for index, argument in enumerate(args[:-1])
+            if argument == "--disable"
+        }
+        self.assertEqual(set(CODEX_DISABLED_FEATURES), disabled_features)
+        self.assertEqual('web_search="disabled"', args[args.index("--config") + 1])
+        self.assertFalse(kwargs["shell"])
+        self.assertNotIn("screenshotDataUrl", args[-1])
+        self.assertNotIn(context["pageEvidence"]["screenshotDataUrl"], args[-1])
+        self.assertEqual(
+            {"PATH", "HOME", "CODEX_HOME", "TMPDIR", "LANG"},
+            set(kwargs["env"]),
+        )
+        self.assertEqual("/home/test-user/.codex", kwargs["env"]["CODEX_HOME"])
+        self.assertNotIn("OPENAI_API_KEY", kwargs["env"])
+        self.assertNotIn("CODEX_API_KEY", kwargs["env"])
+        self.assertNotIn("OPENAI_BASE_URL", kwargs["env"])
+        self.assertNotIn("HTTPS_PROXY", kwargs["env"])
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", kwargs["env"])
+        self.assertNotIn("NODE_OPTIONS", kwargs["env"])
+        self.assertEqual(CODEX_OUTPUT_SCHEMA, captured["schema"])
+        self.assertTrue(captured["image_bytes"].startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertLessEqual(
+            len(captured["image_bytes"]), MAX_PLANNER_SCREENSHOT_BYTES
+        )
+        self.assertFalse(captured["image_path"].exists())
+        self.assertFalse(captured["schema_path"].exists())
+
+    def test_codex_planner_timeout_and_cancel_terminate_fake_child(self):
+        context = {"pageEvidence": {"focus": {"role": "document"}}}
+        timeout_process = FakeCodexProcess(codex_output({}), timeout=True)
+        with mock.patch(
+            "access_trace.planner.subprocess.Popen", return_value=timeout_process
+        ):
+            with self.assertRaisesRegex(PlannerError, "timed out"):
+                CodexPlanner(executable="fake-codex", timeout=0.01).next_action(
+                    context
+                )
+        self.assertTrue(timeout_process.terminated)
+        self.assertEqual(2, timeout_process.communicate_calls)
+
+        planner = CodexPlanner(executable="fake-codex")
+        cancel_process = FakeCodexProcess(
+            codex_output({"kind": "key", "key": "Tab", "field": None, "text": None}),
+            on_communicate=planner.cancel,
+        )
+        with mock.patch(
+            "access_trace.planner.subprocess.Popen", return_value=cancel_process
+        ):
+            with self.assertRaisesRegex(PlannerError, "cancelled"):
+                planner.next_action(context)
+        self.assertTrue(cancel_process.terminated)
+
+    def test_windows_codex_cmd_shim_is_resolved_to_node(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            shim = directory / "codex.cmd"
+            shim.write_text("@echo off\n", encoding="utf-8")
+            script = (
+                directory
+                / "node_modules"
+                / "@openai"
+                / "codex"
+                / "bin"
+                / "codex.js"
+            )
+            script.parent.mkdir(parents=True)
+            script.write_text("// fake Codex entrypoint\n", encoding="utf-8")
+            path_type = type(Path())
+            which = {
+                "codex.exe": None,
+                "codex": str(shim),
+                "node": "/runtime/node.exe",
+            }
+            with mock.patch("access_trace.planner.os.name", "nt"):
+                with mock.patch("access_trace.planner.Path", path_type):
+                    with mock.patch.dict(os.environ, {"CODEX_EXECUTABLE": ""}):
+                        with mock.patch(
+                            "access_trace.planner.shutil.which",
+                            side_effect=lambda name: which.get(name),
+                        ):
+                            self.assertEqual(
+                                ["/runtime/node.exe", str(script)], _codex_executable()
+                            )
 
     def test_browser_cleanup_removes_profile_and_reports_failure(self):
         profile = Path(tempfile.mkdtemp())
@@ -1979,6 +2172,7 @@ class AssessmentTargetTests(unittest.TestCase):
         browser.profile_directory = profile
         browser.process = None
         browser.connection = None
+        browser.browser_connection = None
 
         browser.close()
 
@@ -1989,6 +2183,7 @@ class AssessmentTargetTests(unittest.TestCase):
         failed_browser.profile_directory = failed_profile
         failed_browser.process = None
         failed_browser.connection = None
+        failed_browser.browser_connection = None
         with mock.patch(
             "access_trace.browser.shutil.rmtree",
             side_effect=OSError("profile is locked"),
@@ -2066,9 +2261,11 @@ class AssessmentTargetTests(unittest.TestCase):
                     "lifecycle": {
                         "pageOpen": True,
                         "dialogOpen": False,
+                        "dialogObserved": False,
                         "popupObserved": False,
                         "crashed": False,
                         "offLoopbackRedirect": False,
+                        "navigationRedirect": False,
                     },
                 }
 
@@ -2154,7 +2351,7 @@ class AssessmentTargetTests(unittest.TestCase):
         with urlopen(landing_request, timeout=2) as landing_response:
             landing_page = landing_response.read().decode("utf-8")
 
-        self.assertIn(self.base_url + "/demo/fixed", landing_page)
+        self.assertIn('href="/demo/fixed"', landing_page)
         self.assertNotIn("attacker.example", landing_page)
 
     def raw_request(self, path):

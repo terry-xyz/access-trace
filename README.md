@@ -1,65 +1,50 @@
 # AccessTrace
 
-AccessTrace currently has two separate entry points: a static report preview
-and a Python journey-and-evidence server. The preview uses representative sample
-data and does not start assessments or load records from the server. Connecting
-the server's versioned evidence handoff to the report is still integration work.
+AccessTrace runs the app, the fixed and broken demo pages, and the assessment API
+from one local server. The report and comparison previews are representative
+sample data; a live run starts a fresh keyboard-only browser session and shows
+the redacted run record.
 
-## Report and comparison preview
+## Run AccessTrace
 
-The accessible preview provides setup validation, sample reports, and an
-original-versus-agent-updated comparison. It does not run a browser assessment.
-Comparison slots reuse representative sample evidence; they are not independent
-runs, and report values and evidence are labeled as sample data. A configured
-goal is shown as entered, but the representative evidence is not evidence about
-that goal. The preview accepts only `http://127.0.0.1:4173/` as its target.
+Requirements: Python 3.9 or later, the Codex CLI signed in to the developer's
+Codex account, and Google Chrome or Chromium for live browser runs. If needed,
+sign in once with `codex login`. No OpenAI API key or planner endpoint/model
+configuration is required.
 
-From the repository root, serve the static files:
-
-```sh
-python3 -m http.server 4173 --bind 127.0.0.1
-```
-
-Then open <http://127.0.0.1:4173/>.
-
-## Journey and evidence server
-
-The Python server provides the controlled fixed and broken contact-form pages,
-assessment endpoints, and redacted run records. Start it from the repository
-root:
+From the repository root, start the single server:
 
 ```sh
 python3 -m access_trace --port 8080
 ```
 
-Open <http://127.0.0.1:8080/>. The controlled targets are:
+Open <http://127.0.0.1:8080/>. The built-in demo pages are served by that same
+server:
 
 - <http://127.0.0.1:8080/demo/fixed>
 - <http://127.0.0.1:8080/demo/broken>
 
-Create a run with `POST /api/runs` and a JSON body containing `targetUrl`, an
-optional `goal`, and optional boolean `simulationMode` (default `true`). A run
-without a goal performs a whole-site keyboard assessment; a supplied goal
-performs a goal-focused assessment. The returned record is written as redacted
-JSON under `.access-trace/runs/` and can be read with `GET /api/runs/<id>`.
-For an `IN_PROGRESS` run, `POST /api/runs/<id>/execute` starts a fresh isolated
-Chrome session and performs the bounded keyboard journey. The production
-planner requires `CODEX_PLANNER_ENDPOINT`, `CODEX_PLANNER_MODEL`, and
-`CODEX_PLANNER_API_KEY`; without that configuration, the run ends
-inconclusively.
+Choose a built-in page or select **Load selected HTML file** to upload one local
+standalone `.html` or `.htm` file (UTF-8, up to 1 MiB). Its copied page is served
+from the same AccessTrace server; you do not need to start a second web server.
+Linked stylesheets, scripts, images, and sibling files are not included. Uploaded
+pages support whole-site assessment only; goal-focused runs are reported as
+inconclusive because AccessTrace has no trusted success condition for arbitrary
+uploaded content.
 
-For the supported contact-form goal, the fixed target can complete after
-verified keyboard activation. The broken target can be blocked only after
-repeated semantic Submit evidence, failed Enter and Space activation, and
-relevant recovery. Records retain redacted action and focus evidence, field
-character counts and validation metadata, recovery evidence, and a stopping
-screenshot reference; they do not retain typed field values or clipboard
-contents. Each record exposes an `evidenceHandoff` projection with version
-`access-trace.evidence.v1` for downstream report work. Whole-site completion
-uses declared controlled-page focus coverage, not the contact form's “Message
-sent” confirmation. Unsupported goals remain in the record and finish
-inconclusively rather than being reinterpreted.
+Uploaded-page browser sessions allow only requests for that exact page URL,
+disable DNS prefetch and speculative preconnection, and make the WebRTC peer
+connection APIs unavailable before page scripts run. The page is sandboxed, and
+the run fails closed if the browser cannot install either lockdown.
 
-The report preview and journey server are not connected yet: starting an
-assessment through the server does not populate the preview, which continues to
-show representative sample data.
+Use **Run live assessment** to create and execute a run. AccessTrace invokes the
+installed Codex CLI with the saved login and validates each returned keyboard
+action locally. Planner actions remain limited to keyboard input and bounded
+fictional text. The fixed and broken demos support the goal `Submit the contact
+form`; leave the goal empty for a whole-site keyboard assessment. The report and
+comparison preview buttons still show sample data, not live results.
+
+Redacted run records are written under `.access-trace/runs/`; uploaded HTML
+copies are kept under `.access-trace/runs/sites/`. The live result can also be
+viewed or downloaded from the page. To use a different port, change `8080` in
+the command and open that port in the browser.

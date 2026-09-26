@@ -18,8 +18,21 @@ import {
 
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
+const builtInTargetInput = document.querySelector("#built-in-target");
+const recognizedTarget = document.querySelector("#recognized-target");
 const goalInput = document.querySelector("#assessment-goal");
 const simulationInput = document.querySelector("#simulation-mode");
+const localHtmlFileInput = document.querySelector("#local-html-file");
+const localHtmlStatus = document.querySelector("#local-html-status");
+const loadLocalHtmlButton = document.querySelector("#load-local-html");
+const liveAssessmentButton = document.querySelector("#start-live-assessment");
+const cancelLiveAssessmentButton = document.querySelector("#cancel-live-assessment");
+const liveAssessmentSection = document.querySelector("#live-assessment");
+const liveAssessmentStatus = document.querySelector("#live-assessment-status");
+const liveAssessmentSummary = document.querySelector("#live-assessment-summary");
+const liveRecordDownload = document.querySelector("#download-live-record");
+const liveRecordDetails = document.querySelector("#live-record-details");
+const liveRecordJson = document.querySelector("#live-record-json");
 const consistencyInput = document.querySelector("#comparison-consistency");
 const targetError = document.querySelector("#target-error");
 const goalError = document.querySelector("#goal-error");
@@ -32,6 +45,8 @@ const comparisonButton = document.querySelector("#view-comparison");
 const comparisonSection = document.querySelector("#sample-comparison");
 const comparisonHeading = document.querySelector("#comparison-heading");
 let recordUrl;
+let liveRecordUrl;
+let activeLiveRunId = null;
 
 const ASSESSMENT_EVIDENCE_PRESENTATION = {
   action: {
@@ -80,6 +95,7 @@ function updateScopePreview() {
   setError(goalInput, goalError, "");
   report.hidden = true;
   comparisonSection.hidden = true;
+  if (!activeLiveRunId) liveAssessmentSection.hidden = true;
 }
 
 /** renderOrderedActions shows the bounded keyboard action sequence from the representative sample. */
@@ -363,7 +379,7 @@ function validateCurrentConfiguration() {
   setError(targetInput, targetError, "");
   setError(goalInput, goalError, "");
 
-  const validation = validateTargetUrl(targetInput.value);
+  const validation = validateTargetUrl(targetInput.value, window.location.origin);
   if (!validation.valid) {
     setError(targetInput, targetError, validation.message);
     targetInput.focus();
@@ -390,6 +406,156 @@ function handleAssessmentSubmit(event) {
   event.preventDefault();
   const configuration = validateCurrentConfiguration();
   if (configuration) showSampleReport(configuration);
+}
+
+/** handleLocalHtmlUpload stores one self-contained page on this server and selects its opaque route. */
+async function handleLocalHtmlUpload() {
+  const file = localHtmlFileInput.files?.[0];
+  if (!file) {
+    localHtmlStatus.textContent = "Choose one .html or .htm file first.";
+    return;
+  }
+  if (!/\.html?$/i.test(file.name)) {
+    localHtmlStatus.textContent = "Choose a standalone .html or .htm file.";
+    return;
+  }
+  if (file.size > 1024 * 1024) {
+    localHtmlStatus.textContent = "The HTML file must be 1 MB or smaller.";
+    return;
+  }
+
+  loadLocalHtmlButton.disabled = true;
+  localHtmlStatus.textContent = "Loading the local HTML file…";
+  try {
+    const response = await fetch("/api/sites", {
+      method: "POST",
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+      body: file,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "The HTML file could not be loaded.");
+
+    targetInput.value = result.targetUrl;
+    builtInTargetInput.value = "";
+    updateRecognizedTargetLabel();
+    clearTargetValidationError();
+    localHtmlStatus.textContent = `Loaded ${file.name}. This local page is selected as the target.`;
+  } catch (error) {
+    localHtmlStatus.textContent = error instanceof Error
+      ? error.message
+      : "The HTML file could not be loaded.";
+  } finally {
+    loadLocalHtmlButton.disabled = false;
+  }
+}
+
+/** selectBuiltInTarget keeps demo selection on the same server origin as the app. */
+function selectBuiltInTarget() {
+  if (!builtInTargetInput.value) return;
+  targetInput.value = `${window.location.origin}${builtInTargetInput.value}`;
+  updateRecognizedTargetLabel();
+  clearTargetValidationError();
+}
+
+/** updateRecognizedTargetLabel mirrors the active built-in or uploaded route without retaining stale text. */
+function updateRecognizedTargetLabel() {
+  const validation = validateTargetUrl(targetInput.value, window.location.origin);
+  recognizedTarget.textContent = validation.valid
+    ? validation.normalizedUrl
+    : "Choose a built-in demo or load a local HTML file";
+}
+
+/** handleLiveAssessment creates and executes one real run, then exposes its redacted JSON record. */
+async function handleLiveAssessment() {
+  const configuration = validateCurrentConfiguration();
+  if (!configuration) return;
+
+  liveAssessmentSection.hidden = false;
+  liveAssessmentStatus.textContent = "Creating a fresh local run…";
+  liveAssessmentSummary.textContent = "";
+  liveRecordDownload.hidden = true;
+  liveRecordDetails.hidden = true;
+  liveAssessmentButton.disabled = true;
+
+  try {
+    const createResponse = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetUrl: configuration.targetUrl,
+        goal: configuration.goal,
+        simulationMode: configuration.simulationMode,
+      }),
+    });
+    const created = await createResponse.json();
+    if (!createResponse.ok) {
+      throw new Error(created.error?.message || "The run could not be created.");
+    }
+
+    liveAssessmentStatus.textContent = `Run ${created.id} is executing in a fresh isolated browser…`;
+    activeLiveRunId = created.id;
+    cancelLiveAssessmentButton.hidden = false;
+    cancelLiveAssessmentButton.disabled = false;
+    const executeResponse = await fetch(`/api/runs/${encodeURIComponent(created.id)}/execute`, {
+      method: "POST",
+    });
+    const result = await executeResponse.json();
+    if (!executeResponse.ok) {
+      throw new Error(result.error?.message || "The run could not be completed.");
+    }
+
+    const unsupportedGoal = result.warnings?.find((warning) => warning.kind === "unsupported-goal");
+    liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
+    liveAssessmentSummary.textContent = unsupportedGoal?.message
+      || `${result.interactionCount} keyboard actions recorded. The JSON record contains the redacted observations and warnings.`;
+    const serialized = JSON.stringify(result, null, 2);
+    liveRecordJson.textContent = serialized;
+    if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
+    liveRecordUrl = URL.createObjectURL(new Blob([serialized], { type: "application/json" }));
+    liveRecordDownload.href = liveRecordUrl;
+    liveRecordDownload.download = `access-trace-${result.id}.json`;
+    liveRecordDownload.hidden = false;
+    liveRecordDetails.hidden = false;
+    document.querySelector("#live-assessment-heading").focus({ preventScroll: true });
+    liveAssessmentSection.scrollIntoView({ behavior: "auto", block: "start" });
+  } catch (error) {
+    liveAssessmentStatus.textContent = error instanceof Error
+      ? error.message
+      : "The local assessment could not be completed.";
+  } finally {
+    activeLiveRunId = null;
+    cancelLiveAssessmentButton.hidden = true;
+    cancelLiveAssessmentButton.disabled = false;
+    liveAssessmentButton.disabled = false;
+  }
+}
+
+/** handleCancelLiveAssessment asks the server to cancel the registered planner while execute remains pending. */
+async function handleCancelLiveAssessment() {
+  const runId = activeLiveRunId;
+  if (!runId) return;
+
+  cancelLiveAssessmentButton.disabled = true;
+  liveAssessmentStatus.textContent = "Requesting cancellation…";
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST",
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error?.message || "The run could not be cancelled.");
+    }
+    if (activeLiveRunId === runId) {
+      liveAssessmentStatus.textContent = "Cancellation requested. Waiting for the run to finish…";
+    }
+  } catch (error) {
+    if (activeLiveRunId === runId) {
+      liveAssessmentStatus.textContent = error instanceof Error
+        ? error.message
+        : "The run could not be cancelled.";
+      cancelLiveAssessmentButton.disabled = false;
+    }
+  }
 }
 
 /** getComparisonSettings records the same selected run count and context for both versions. */
@@ -1068,12 +1234,14 @@ function clearTargetValidationError() {
   setError(targetInput, targetError, "");
   report.hidden = true;
   comparisonSection.hidden = true;
+  if (!activeLiveRunId) liveAssessmentSection.hidden = true;
 }
 
 /** clearStaleSampleReport prevents an old preview from appearing to describe changed simulation settings. */
 function clearStaleSampleReport() {
   report.hidden = true;
   comparisonSection.hidden = true;
+  if (!activeLiveRunId) liveAssessmentSection.hidden = true;
 }
 
 /** updateConsistencyPreview keeps the comparison action's promised run count aligned with the selector. */
@@ -1099,12 +1267,21 @@ function populateConsistencyOptions() {
 
 form.addEventListener("submit", handleAssessmentSubmit);
 comparisonButton.addEventListener("click", handleComparisonRequest);
-targetInput.addEventListener("input", clearTargetValidationError);
+loadLocalHtmlButton.addEventListener("click", handleLocalHtmlUpload);
+builtInTargetInput.addEventListener("change", selectBuiltInTarget);
+liveAssessmentButton.addEventListener("click", handleLiveAssessment);
+cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
+targetInput.addEventListener("input", () => {
+  updateRecognizedTargetLabel();
+  clearTargetValidationError();
+});
 goalInput.addEventListener("input", updateScopePreview);
 simulationInput.addEventListener("change", clearStaleSampleReport);
 consistencyInput.addEventListener("change", updateConsistencyPreview);
-targetInput.value = WHOLE_SITE_SAMPLE.target;
-document.querySelector("#recognized-target").textContent = WHOLE_SITE_SAMPLE.target;
+const defaultTarget = `${window.location.origin}/demo/fixed`;
+targetInput.value = defaultTarget;
+builtInTargetInput.value = "/demo/fixed";
+updateRecognizedTargetLabel();
 
 renderReportSample(WHOLE_SITE_SAMPLE);
 updateScopePreview();
