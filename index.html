@@ -151,6 +151,15 @@
             <span class="action-note">Local run · keyboard only</span>
             <button class="help-icon privacy-help" type="button" aria-label="About privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. Local page files are uploaded to this AccessTrace server and served in an isolated browser page; external requests from uploaded pages are blocked. A local screenshot copy is kept only when values can be covered safely. Optional code context is sent only when you press Fix on an eligible report. Approving a patch asks you to choose a writable folder and checks the reviewed files before applying changes.</span></button>
           </div>
+          <section class="privacy-summary" aria-labelledby="privacy-summary-heading">
+            <h3 id="privacy-summary-heading">AccessTrace doesn’t use your data for advertising or tracking.</h3>
+            <ul>
+              <li>Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not.</li>
+              <li>Local page files you choose are uploaded to this local AccessTrace server and kept isolated from external network requests.</li>
+              <li>Code context is sent to Codex only when you press <strong>Fix</strong>. A proposed change is written only after you approve it.</li>
+              <li>Run reports are saved on this machine in <code>.access-trace/runs/</code>.</li>
+            </ul>
+          </section>
         </form>
       </section>
 
@@ -196,6 +205,7 @@
             <div id="source-review-proposed-fix-block" hidden><strong>Suggested fix</strong><p id="source-review-proposed-fix"></p></div>
             <p id="source-review-file-counts" class="source-review-file-counts"></p>
             <p id="source-review-write-note" class="source-review-write-note">Approval writes changes to a folder you choose. Select the same source folder you reviewed; AccessTrace checks that the files have not changed before writing.</p>
+            <p class="source-review-write-note" role="note">AI-generated suggestion. It may be incorrect or introduce security issues. Review the full patch and have a developer check it before applying it to a client site.</p>
             <div class="source-review-actions">
               <button id="source-review-fix" class="primary-button" type="button">Fix</button>
               <button id="source-review-approve" class="primary-button" type="button" hidden>Approve and apply</button>

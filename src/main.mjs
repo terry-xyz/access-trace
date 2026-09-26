@@ -1054,6 +1054,7 @@ function renderRunReport(record, root) {
 
 /** handleLiveAssessment creates and executes one real run, then exposes its redacted JSON record. */
 async function handleLiveAssessment() {
+  if (sourceReviewBusy) return;
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
   const sourceSelectionForRun = [...selectedSourceFiles];
@@ -1149,21 +1150,27 @@ async function handleLiveAssessment() {
 
 /** handleSourceFix sends source files only after an explicit Fix action on the report. */
 async function handleSourceFix() {
-  if (!latestRunRecord?.id || sourceReviewBusy || latestSourceSelection.length === 0) return;
+  if (!latestRunRecord?.id || sourceReviewBusy || workflowInProgress || latestSourceSelection.length === 0) return;
+  const runId = latestRunRecord.id;
+  const sourceSelection = [...latestSourceSelection];
   sourceReviewBusy = true;
   sourceReviewFixButton.disabled = true;
   sourceReviewActionStatus.textContent = "Reading selected files and preparing the source review…";
   let prepared;
   try {
-    prepared = await prepareSourceContext(latestSourceSelection);
+    prepared = await prepareSourceContext(sourceSelection);
     if (!prepared.files.length) throw new Error("No eligible text files were available for review.");
-    const response = await fetch(`/api/runs/${encodeURIComponent(latestRunRecord.id)}/source-review`, {
+    if (latestRunRecord?.id !== runId) throw new Error("The active report changed. Run Fix again on the current report.");
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: prepared.body,
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result?.error?.message || "The source review could not be completed.");
+    if (latestRunRecord?.id !== runId || result?.id !== runId) {
+      throw new Error("The source review response did not match the active report.");
+    }
     latestRunRecord = result;
     const serialized = JSON.stringify(result, null, 2);
     liveRecordJson.textContent = serialized;
@@ -1219,10 +1226,29 @@ async function handleSourceFixApproval() {
     || sourceReviewBusy
     || !canApproveSourceReview(reviewedSourceFiles.length, latestRunRecord?.sourceReview)
   ) return;
+  const runId = latestRunRecord.id;
+  const approvalReview = latestRunRecord.sourceReview;
+  const reviewSnapshot = JSON.stringify(approvalReview);
+  const reviewedFilesSnapshot = reviewedSourceFiles.map(({ path, content }) => ({ path, content }));
+  const assertApprovalStateCurrent = () => {
+    if (
+      latestRunRecord?.id !== runId
+      || latestRunRecord.sourceReview !== approvalReview
+      || JSON.stringify(latestRunRecord.sourceReview) !== reviewSnapshot
+      || reviewedSourceFiles.length !== reviewedFilesSnapshot.length
+      || reviewedSourceFiles.some((file, index) => (
+        file.path !== reviewedFilesSnapshot[index]?.path
+        || file.content !== reviewedFilesSnapshot[index]?.content
+      ))
+    ) throw new Error("The report or proposal changed during approval. Review it again before applying.");
+  };
   if (typeof window.showDirectoryPicker !== "function") {
     sourceReviewActionStatus.textContent = "Direct folder editing is not supported in this browser. Download the patch and apply it manually.";
     return;
   }
+  sourceReviewBusy = true;
+  sourceReviewFixButton.disabled = true;
+  sourceReviewApproveButton.disabled = true;
   let rootHandle;
   try {
     rootHandle = await window.showDirectoryPicker({ mode: "readwrite" });
@@ -1230,13 +1256,15 @@ async function handleSourceFixApproval() {
     sourceReviewActionStatus.textContent = error?.name === "AbortError"
       ? "Folder selection canceled. No files were changed."
       : "A writable folder could not be selected. No files were changed.";
+    sourceReviewBusy = false;
+    sourceReviewFixButton.disabled = false;
+    sourceReviewApproveButton.disabled = false;
     return;
   }
 
-  sourceReviewBusy = true;
-  sourceReviewApproveButton.disabled = true;
   sourceReviewActionStatus.textContent = "Checking the reviewed files before applying the approved patch…";
   try {
+    assertApprovalStateCurrent();
     let permission;
     try {
       permission = typeof rootHandle.queryPermission === "function"
@@ -1249,10 +1277,10 @@ async function handleSourceFixApproval() {
       throw new Error("Write permission could not be confirmed. No files were changed. Choose the folder again and allow write access, or download the patch.");
     }
     if (permission !== "granted") throw new Error("Write access was not granted. No files were changed. Choose the folder again and allow write access, or download the patch.");
-    let approvalSourceFiles = reviewedSourceFiles;
+    let approvalSourceFiles = reviewedFilesSnapshot;
     const handlesByPath = new Map();
     if (!approvalSourceFiles.length) {
-      const review = latestRunRecord.sourceReview;
+      const review = approvalReview;
       const paths = Array.isArray(review?.relevantPaths) ? review.relevantPaths : [];
       const digests = review?.sourceDigests && typeof review.sourceDigests === "object"
         ? review.sourceDigests
@@ -1270,7 +1298,6 @@ async function handleSourceFixApproval() {
         approvalSourceFiles.push({ path, content });
         handlesByPath.set(path, handle);
       }
-      reviewedSourceFiles = approvalSourceFiles;
     }
     for (const baseline of approvalSourceFiles) {
       const handle = await lookupDirectoryFile(rootHandle, baseline.path);
@@ -1280,13 +1307,15 @@ async function handleSourceFixApproval() {
       }
       handlesByPath.set(baseline.path, handle);
     }
-    const response = await fetch(`/api/runs/${encodeURIComponent(latestRunRecord.id)}/source-fix-approve`, {
+    assertApprovalStateCurrent();
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-fix-approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourceContext: { files: approvalSourceFiles } }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result?.error?.message || "The approved patch could not be prepared.");
+    assertApprovalStateCurrent();
     const changedFiles = validateApplicableFiles(approvalSourceFiles, result.appliableFiles);
 
     const writableTargets = [];
@@ -1304,12 +1333,20 @@ async function handleSourceFixApproval() {
 
     const written = [];
     for (const target of writableTargets) {
+      let writable;
       try {
-        const writable = await target.handle.createWritable();
+        assertApprovalStateCurrent();
+        writable = await target.handle.createWritable();
+        assertApprovalStateCurrent();
         await writable.write(target.content);
         await writable.close();
         written.push(target.path);
       } catch (error) {
+        try {
+          await writable?.abort(error);
+        } catch {
+          // Preserve the write failure; abort is best-effort stream cleanup.
+        }
         throw new Error(written.length
           ? `Writing stopped at ${target.path}; already changed: ${written.join(", ")}. ${error instanceof Error ? error.message : "Write failed."}`
           : `Could not write ${target.path}; no files were changed. ${error instanceof Error ? error.message : "Write failed."}`);
@@ -1323,6 +1360,7 @@ async function handleSourceFixApproval() {
     sourceReviewActionStatus.textContent = error instanceof Error ? error.message : "The patch could not be applied.";
   } finally {
     sourceReviewBusy = false;
+    sourceReviewFixButton.disabled = false;
     sourceReviewApproveButton.disabled = false;
   }
 }
@@ -1377,6 +1415,7 @@ function getComparisonSettings(configuration) {
 
 /** handleComparisonRequest runs paired demo slots in order and keeps each response isolated. */
 async function handleComparisonRequest() {
+  if (sourceReviewBusy) return;
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
 
@@ -1661,6 +1700,7 @@ navButtons.setup.addEventListener("click", () => {
 navButtons.report.addEventListener("click", showReportView);
 navButtons.comparison.addEventListener("click", handleComparisonRequest);
 newAssessmentButton.addEventListener("click", () => {
+  if (sourceReviewBusy) return;
   setActiveView("setup");
   targetInput.focus({ preventScroll: true });
 });

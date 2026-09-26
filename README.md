@@ -41,6 +41,8 @@ Codex CLI before then. The reviewer explains the root cause and suggests a fix
 when the evidence supports one. It may return no patch when the source and run
 evidence do not support a specific change. Review the explanation and patch, then
 choose **Approve and apply** to write the proposed changes to your source files.
+AI-generated suggestions can be incorrect or introduce security issues. Review
+the full patch and have a developer check it before applying it to a client site.
 Saved proposals remain visible after a page reload; Approve asks for the source
 folder again and checks its files against the saved digests before writing.
 
