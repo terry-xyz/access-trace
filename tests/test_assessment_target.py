@@ -276,7 +276,7 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertIn('id="assessment-goal"', page)
         self.assertIn('id="simulation-mode"', page)
         self.assertIn('id="local-html-file"', page)
-        self.assertIn("Run live assessment", page)
+        self.assertIn("Start assessment", page)
         self.assertIn('href="/demo/fixed"', page)
         self.assertIn('href="/demo/broken"', page)
 

@@ -33,6 +33,12 @@ const liveAssessmentSummary = document.querySelector("#live-assessment-summary")
 const liveRecordDownload = document.querySelector("#download-live-record");
 const liveRecordDetails = document.querySelector("#live-record-details");
 const liveRecordJson = document.querySelector("#live-record-json");
+const liveTerminal = document.querySelector("#live-terminal");
+const liveResult = document.querySelector("#live-result");
+const liveRunProgress = document.querySelector("#live-run-progress");
+const liveProgressLabel = document.querySelector("#live-progress-label");
+const liveProgressPercent = document.querySelector("#live-progress-percent");
+const terminalLog = document.querySelector("#terminal-log");
 const consistencyInput = document.querySelector("#comparison-consistency");
 const targetError = document.querySelector("#target-error");
 const goalError = document.querySelector("#goal-error");
@@ -44,9 +50,50 @@ const reportHeading = document.querySelector("#report-heading");
 const comparisonButton = document.querySelector("#view-comparison");
 const comparisonSection = document.querySelector("#sample-comparison");
 const comparisonHeading = document.querySelector("#comparison-heading");
+const setupSection = document.querySelector("#setup");
+const sampleReportButton = document.querySelector("#view-sample-report");
+const newAssessmentButton = document.querySelector("#new-assessment");
+const navButtons = {
+  setup: document.querySelector("#nav-setup"),
+  sample: document.querySelector("#nav-sample-report"),
+  comparison: document.querySelector("#nav-comparison"),
+};
 let recordUrl;
 let liveRecordUrl;
 let activeLiveRunId = null;
+
+/** setActiveView keeps one focused app screen visible without scrolling the document. */
+function setActiveView(view) {
+  setupSection.hidden = view !== "setup";
+  report.hidden = view !== "sample";
+  comparisonSection.hidden = view !== "comparison";
+  liveAssessmentSection.hidden = view !== "live";
+  for (const [key, button] of Object.entries(navButtons)) {
+    if (key === view) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+}
+
+/** setRunStage reports completed workflow steps; page coverage appears in the final report. */
+function setRunStage(value, label, message) {
+  liveRunProgress.value = value;
+  liveRunProgress.setAttribute("aria-valuetext", `${value}% · ${label}`);
+  liveProgressPercent.textContent = String(value);
+  liveProgressLabel.textContent = label;
+  if (message) {
+    const entry = document.createElement("li");
+    const time = document.createElement("time");
+    time.textContent = new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date());
+    const text = document.createElement("span");
+    text.textContent = message;
+    entry.append(time, text);
+    terminalLog.append(entry);
+  }
+}
 
 const ASSESSMENT_EVIDENCE_PRESENTATION = {
   action: {
@@ -85,17 +132,11 @@ function setError(input, container, message) {
 function updateScopePreview() {
   const scope = getAssessmentScope(goalInput.value);
   const isWholeSite = scope === "whole-site";
-  scopeStatus.textContent = isWholeSite
-    ? "Whole-site assessment selected"
-    : "Goal-focused assessment selected";
+  scopeStatus.textContent = isWholeSite ? "Whole page" : "Goal focused";
   scopeChip.textContent = isWholeSite ? "Whole site" : "Goal focused";
-  submitLabel.textContent = isWholeSite
-    ? "View whole-site sample report"
-    : "View goal-focused sample report";
+  submitLabel.textContent = "Start assessment";
   setError(goalInput, goalError, "");
-  report.hidden = true;
-  comparisonSection.hidden = true;
-  if (!activeLiveRunId) liveAssessmentSection.hidden = true;
+  if (!activeLiveRunId) setActiveView("setup");
 }
 
 /** renderOrderedActions shows the bounded keyboard action sequence from the representative sample. */
@@ -366,10 +407,8 @@ function showSampleReport(configuration) {
 
   renderReportSample(sample);
   prepareSampleRecord(sample, context);
-  comparisonSection.hidden = true;
-  report.hidden = false;
+  setActiveView("sample");
   reportHeading.focus({ preventScroll: true });
-  reportHeading.scrollIntoView({ behavior: "auto", block: "start" });
 }
 
 /** validateCurrentConfiguration applies the same target and goal boundary to reports and comparisons. */
@@ -401,11 +440,10 @@ function validateCurrentConfiguration() {
   };
 }
 
-/** handleAssessmentSubmit validates the target and goal before showing the matching sample report. */
+/** handleAssessmentSubmit starts the configured live assessment. */
 function handleAssessmentSubmit(event) {
   event.preventDefault();
-  const configuration = validateCurrentConfiguration();
-  if (configuration) showSampleReport(configuration);
+  void handleLiveAssessment();
 }
 
 /** handleLocalHtmlUpload stores one self-contained page on this server and selects its opaque route. */
@@ -465,17 +503,133 @@ function updateRecognizedTargetLabel() {
     : "Choose a built-in demo or load a local HTML file";
 }
 
+/** appendTextItems renders bounded evidence without interpreting page-provided text as markup. */
+function appendTextItems(list, entries, describe) {
+  const fragment = document.createDocumentFragment();
+  for (const entry of entries) {
+    const item = document.createElement("li");
+    item.textContent = describe(entry);
+    fragment.append(item);
+  }
+  list.replaceChildren(fragment);
+}
+
+/** renderLiveAssessmentResult presents only facts recorded in the completed run. */
+function renderLiveAssessmentResult(result, configuration) {
+  const evidence = result.evidenceHandoff ?? {};
+  const stopping = result.stoppingPoint ?? evidence.stopping?.point ?? {};
+  const coverage = stopping.coverage ?? evidence.progress?.coverage ?? null;
+  const reporting = evidence.reporting ?? {};
+  const status = String(result.status ?? "INCONCLUSIVE").toUpperCase();
+  const isWholeSite = configuration.scope === "whole-site";
+  const outcomeLabel = status === "COMPLETED"
+    ? "Completed"
+    : status === "BLOCKED"
+      ? "Blocked"
+      : "Inconclusive";
+
+  document.querySelector("#live-result-status").textContent = outcomeLabel;
+  document.querySelector("#live-result-status").dataset.outcome = status.toLowerCase();
+  document.querySelector("#live-outcome-heading").textContent = outcomeLabel;
+  document.querySelector("#live-result-target").textContent = result.targetUrl ?? configuration.targetUrl;
+  document.querySelector("#live-result-scope").textContent = isWholeSite ? "Whole page" : "Goal focused";
+  document.querySelector("#live-result-actions").textContent = `${Number(result.interactionCount) || 0} keyboard actions`;
+  document.querySelector("#live-result-coverage").textContent = coverage
+    && Number.isFinite(coverage.controlsObserved)
+    && Number.isFinite(coverage.controlsExpected)
+    ? `${coverage.controlsObserved} of ${coverage.controlsExpected} controls`
+    : "Not available";
+  document.querySelector("#live-result-success").textContent = isWholeSite
+    ? "Not used for whole-page checks"
+    : stopping.successMatched === true
+      ? "Reached"
+      : stopping.successMatched === false
+        ? "Not reached"
+        : "Not checked";
+  document.querySelector("#live-result-duration").textContent = Number.isFinite(result.durationMs)
+    ? `${(result.durationMs / 1000).toFixed(1)} seconds`
+    : "Not recorded";
+  document.querySelector("#live-result-simulation").textContent = result.simulationMode ? "On" : "Off";
+
+  const summary = status === "COMPLETED"
+    ? isWholeSite
+      ? "The run checked the expected page controls by keyboard."
+      : "The run reached the configured success condition by keyboard."
+    : status === "BLOCKED"
+      ? "A repeatable keyboard stopping point blocked the configured task."
+      : "The run ended without enough evidence for a reliable result.";
+  liveAssessmentSummary.textContent = summary;
+  document.querySelector("#live-result-explanation").textContent = (
+    typeof reporting.explanation === "string" && reporting.explanation.trim()
+  ) ? reporting.explanation : summary;
+
+  const focus = stopping.focus;
+  document.querySelector("#live-result-stopping").textContent = focus
+    ? `Stopping point: ${focus.accessibleName || focus.stableId || focus.tag || "unknown control"} (${focus.role || focus.tag || "unknown role"}).`
+    : "No stopping point was recorded.";
+  const screenshotRef = evidence.stopping?.screenshotRef ?? result.stoppingScreenshotRef;
+  const screenshotLine = document.querySelector("#live-result-screenshot");
+  screenshotLine.hidden = typeof screenshotRef !== "string" || screenshotRef.length === 0;
+  screenshotLine.textContent = screenshotLine.hidden ? "" : `Stopping screenshot: ${screenshotRef}`;
+
+  const confidence = reporting.confidence;
+  const confidenceLine = document.querySelector("#live-result-confidence");
+  confidenceLine.hidden = typeof confidence !== "string" || confidence.length === 0;
+  confidenceLine.textContent = confidenceLine.hidden ? "" : `Confidence: ${confidence}`;
+
+  const fix = reporting.proposedFix;
+  const fixBlock = document.querySelector("#live-result-fix-block");
+  fixBlock.hidden = typeof fix !== "string" || fix.trim() === "";
+  document.querySelector("#live-result-fix").textContent = fixBlock.hidden ? "" : fix;
+
+  const warnings = Array.isArray(result.warnings)
+    ? result.warnings.map((warning) => warning?.message || String(warning?.kind || "Run warning").replaceAll("-", " "))
+    : [];
+  for (const [label, failure] of [["Agent", result.agentFailure], ["Browser", result.browserFailure]]) {
+    if (failure && typeof failure === "object") {
+      const detail = failure.kind || failure.message || "failure recorded";
+      warnings.push(`${label}: ${String(detail).replaceAll("-", " ")}`);
+    }
+  }
+  const warningBlock = document.querySelector("#live-result-warnings-block");
+  warningBlock.hidden = warnings.length === 0;
+  appendTextItems(document.querySelector("#live-result-warnings"), warnings, (warning) => warning);
+
+  const actions = Array.isArray(result.actions) ? result.actions : (evidence.actions ?? []);
+  appendTextItems(document.querySelector("#live-actions-list"), actions, (action) => {
+    const actionText = action.kind === "type"
+      ? `Typed ${action.characterCount ?? 0} characters in ${action.field || "a field"}`
+      : `${action.key || action.kind || "Keyboard action"}`;
+    return `${action.sequence ? `${action.sequence}. ` : ""}${actionText} · ${action.status || "recorded"}`;
+  });
+  const observations = Array.isArray(result.observations) ? result.observations : (evidence.observations ?? []);
+  appendTextItems(document.querySelector("#live-focus-list"), observations, (observation) => {
+    const focusRecord = observation.focus ?? {};
+    const name = focusRecord.accessibleName || focusRecord.stableId || focusRecord.tag || "Page";
+    return `${name} · ${focusRecord.role || focusRecord.tag || "focus not identified"}`;
+  });
+  const recovery = Array.isArray(result.recoveryEvidence) ? result.recoveryEvidence : (evidence.terminal?.recoveryEvidence ?? []);
+  appendTextItems(document.querySelector("#live-recovery-list"), recovery, (item) => (
+    typeof item === "string" ? item : item.message || item.key || item.kind || "Recovery check recorded"
+  ));
+}
+
 /** handleLiveAssessment creates and executes one real run, then exposes its redacted JSON record. */
 async function handleLiveAssessment() {
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
 
-  liveAssessmentSection.hidden = false;
+  setActiveView("live");
+  liveTerminal.hidden = false;
+  liveResult.hidden = true;
+  terminalLog.replaceChildren();
+  setRunStage(25, "Settings checked", "Local target and assessment settings checked.");
   liveAssessmentStatus.textContent = "Creating a fresh local run…";
   liveAssessmentSummary.textContent = "";
   liveRecordDownload.hidden = true;
   liveRecordDetails.hidden = true;
   liveAssessmentButton.disabled = true;
+  for (const button of Object.values(navButtons)) button.disabled = true;
 
   try {
     const createResponse = await fetch("/api/runs", {
@@ -492,10 +646,12 @@ async function handleLiveAssessment() {
       throw new Error(created.error?.message || "The run could not be created.");
     }
 
-    liveAssessmentStatus.textContent = `Run ${created.id} is executing in a fresh isolated browser…`;
+    setRunStage(50, "Run created", "Local run record created.");
     activeLiveRunId = created.id;
     cancelLiveAssessmentButton.hidden = false;
     cancelLiveAssessmentButton.disabled = false;
+    setRunStage(75, "Assessment running", "Isolated keyboard assessment started.");
+    liveAssessmentStatus.textContent = "The isolated browser is checking the page…";
     const executeResponse = await fetch(`/api/runs/${encodeURIComponent(created.id)}/execute`, {
       method: "POST",
     });
@@ -504,10 +660,9 @@ async function handleLiveAssessment() {
       throw new Error(result.error?.message || "The run could not be completed.");
     }
 
-    const unsupportedGoal = result.warnings?.find((warning) => warning.kind === "unsupported-goal");
+    setRunStage(100, "Result saved", `Run saved with status ${result.status}.`);
     liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
-    liveAssessmentSummary.textContent = unsupportedGoal?.message
-      || `${result.interactionCount} keyboard actions recorded. The JSON record contains the redacted observations and warnings.`;
+    renderLiveAssessmentResult(result, configuration);
     const serialized = JSON.stringify(result, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -516,17 +671,20 @@ async function handleLiveAssessment() {
     liveRecordDownload.download = `access-trace-${result.id}.json`;
     liveRecordDownload.hidden = false;
     liveRecordDetails.hidden = false;
-    document.querySelector("#live-assessment-heading").focus({ preventScroll: true });
-    liveAssessmentSection.scrollIntoView({ behavior: "auto", block: "start" });
+    liveTerminal.hidden = true;
+    liveResult.hidden = false;
+    document.querySelector("#live-result-heading").focus({ preventScroll: true });
   } catch (error) {
     liveAssessmentStatus.textContent = error instanceof Error
       ? error.message
       : "The local assessment could not be completed.";
+    setRunStage(liveRunProgress.value, "Run needs attention", "The run did not return a completed result.");
   } finally {
     activeLiveRunId = null;
     cancelLiveAssessmentButton.hidden = true;
     cancelLiveAssessmentButton.disabled = false;
     liveAssessmentButton.disabled = false;
+    for (const button of Object.values(navButtons)) button.disabled = false;
   }
 }
 
@@ -638,10 +796,8 @@ function handleComparisonRequest() {
   const [original, updated] = createComparisonSamples(configuration, settings);
   const comparison = buildSiteComparison(original, updated);
   renderComparison(comparison);
-  report.hidden = true;
-  comparisonSection.hidden = false;
+  setActiveView("comparison");
   comparisonHeading.focus({ preventScroll: true });
-  comparisonHeading.scrollIntoView({ behavior: "auto", block: "start" });
 }
 
 /** renderComparison puts score, metric, and coverage changes ahead of its supporting reports. */
@@ -1248,7 +1404,7 @@ function clearStaleSampleReport() {
 function updateConsistencyPreview() {
   const level = consistencyInput.value;
   const runsPerVersion = CONSISTENCY_RUN_COUNTS[level];
-  comparisonButton.textContent = `View ${level}-consistency comparison sample (${formatCount(runsPerVersion, "run")} per version)`;
+  comparisonButton.textContent = `Compare demos · ${formatCount(runsPerVersion, "run")} per version`;
   clearStaleSampleReport();
 }
 
@@ -1267,9 +1423,26 @@ function populateConsistencyOptions() {
 
 form.addEventListener("submit", handleAssessmentSubmit);
 comparisonButton.addEventListener("click", handleComparisonRequest);
+sampleReportButton.addEventListener("click", () => {
+  const configuration = validateCurrentConfiguration();
+  if (configuration) showSampleReport(configuration);
+});
+navButtons.setup.addEventListener("click", () => {
+  if (activeLiveRunId) return;
+  setActiveView("setup");
+  targetInput.focus({ preventScroll: true });
+});
+navButtons.sample.addEventListener("click", () => {
+  const configuration = validateCurrentConfiguration();
+  if (configuration) showSampleReport(configuration);
+});
+navButtons.comparison.addEventListener("click", handleComparisonRequest);
+newAssessmentButton.addEventListener("click", () => {
+  setActiveView("setup");
+  targetInput.focus({ preventScroll: true });
+});
 loadLocalHtmlButton.addEventListener("click", handleLocalHtmlUpload);
 builtInTargetInput.addEventListener("change", selectBuiltInTarget);
-liveAssessmentButton.addEventListener("click", handleLiveAssessment);
 cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
 targetInput.addEventListener("input", () => {
   updateRecognizedTargetLabel();

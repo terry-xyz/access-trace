@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Review a representative keyboard assessment with clear scope, score, metrics, and evidence."
+      content="Run a local keyboard assessment and review the evidence."
     />
     <title>AccessTrace — Keyboard assessment</title>
     <link rel="stylesheet" href="./src/styles.css" />
@@ -21,21 +21,19 @@
           <span>AccessTrace</span>
         </a>
         <nav aria-label="Page navigation" class="header-nav">
-          <a href="#setup">Assessment setup</a>
-          <a href="#sample-report">Sample report</a>
-          <a href="/demo/fixed">Fixed demo</a>
-          <a href="/demo/broken">Broken demo</a>
+          <button id="nav-setup" type="button" aria-current="page">New assessment</button>
+          <button id="nav-sample-report" type="button">Sample report</button>
+          <button id="nav-comparison" type="button">Compare</button>
         </nav>
+        <span class="system-state"><i aria-hidden="true"></i> LOCAL SESSION</span>
       </div>
     </header>
 
     <main id="main-content" class="page-shell">
       <div id="top" class="intro">
-        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> KEYBOARD ACCESSIBILITY · LOCAL ASSESSMENT</p>
-        <h1>Make the result easy to trust.</h1>
-        <p class="intro-copy">
-          Set the scope, confirm the local target, then read the checks and evidence behind a keyboard assessment.
-        </p>
+        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> KEYBOARD ASSESSMENT</p>
+        <h1>See what your keyboard can reach.</h1>
+        <p class="intro-copy">Choose a local page. Review the evidence when the run ends.</p>
       </div>
 
       <section id="setup" class="setup-card" aria-labelledby="setup-heading">
@@ -44,16 +42,18 @@
             <p class="step-label">01 <span aria-hidden="true">/</span> CONFIGURATION</p>
             <h2 id="setup-heading">Set up an assessment</h2>
           </div>
-          <span class="local-badge"><span aria-hidden="true">●</span> Controlled local target</span>
+          <div class="setup-meta">
+            <a href="/demo/fixed">Open fixed demo</a>
+            <a href="/demo/broken">Open broken demo</a>
+            <span class="local-badge"><span aria-hidden="true">●</span> Local target</span>
+          </div>
         </div>
 
-        <p class="section-intro">
-          Choose a built-in demo or load one standalone local HTML file. Leave the goal empty to assess the whole page.
-        </p>
+        <p class="section-intro">Choose a local page and set the checks you want to run.</p>
 
         <form id="assessment-form" novalidate>
           <div class="field-group">
-            <label for="target-url">Controlled local target <span class="required-label">Required</span></label>
+            <div class="field-label-row"><label for="target-url">Local page <span class="required-label">Required</span></label><button class="help-icon" type="button" aria-label="About local pages" aria-describedby="tip-local-page"><span aria-hidden="true">?</span><span id="tip-local-page" class="tooltip" role="tooltip">Only pages served by this AccessTrace server can run. Remote websites are not accepted.</span></button></div>
             <input
               id="target-url"
               name="targetUrl"
@@ -62,24 +62,21 @@
               required
               aria-describedby="target-hint target-error"
             />
-            <p id="target-hint" class="field-hint">
-              Current local target: <code id="recognized-target"></code>. Targets must stay on this AccessTrace server.
-            </p>
+            <p id="target-hint" class="field-hint">Current page: <code id="recognized-target"></code></p>
             <p id="target-error" class="field-error" hidden></p>
           </div>
 
           <div class="field-group">
-            <label for="built-in-target">Choose a built-in demo</label>
+            <div class="field-label-row"><label for="built-in-target">Built-in demo</label><button class="help-icon" type="button" aria-label="About the built-in demos" aria-describedby="tip-demos"><span aria-hidden="true">?</span><span id="tip-demos" class="tooltip" role="tooltip">The fixed demo works with a keyboard. The broken demo has one keyboard barrier.</span></button></div>
             <select id="built-in-target" name="builtInTarget">
               <option value="">Choose a demo page…</option>
               <option value="/demo/fixed">Fixed contact form</option>
               <option value="/demo/broken">Broken contact form</option>
             </select>
-            <p class="field-hint">Choosing a demo fills its same-server target URL above.</p>
           </div>
 
-          <div class="field-group">
-            <label for="local-html-file">Load one local HTML file <span class="optional-label">Optional</span></label>
+          <div class="field-group local-file-field">
+            <div class="field-label-row"><label for="local-html-file">Your HTML file <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About local HTML files" aria-describedby="tip-local-html"><span aria-hidden="true">?</span><span id="tip-local-html" class="tooltip" role="tooltip">One standalone .html file, up to 1 MB. Linked files are not included. The file is kept on this server.</span></button></div>
             <input
               id="local-html-file"
               name="localHtmlFile"
@@ -87,43 +84,40 @@
               accept=".html,.htm,text/html"
               aria-describedby="local-html-hint local-html-status"
             />
-            <p id="local-html-hint" class="field-hint">
-              Standalone .html only, up to 1 MB. Linked stylesheets, scripts, images, and sibling files are not included.
-            </p>
-            <button id="load-local-html" class="secondary-button" type="button">Load selected HTML file</button>
+            <p id="local-html-hint" class="field-hint">One standalone .html file, up to 1 MB.</p>
+            <button id="load-local-html" class="secondary-button compact-button" type="button">Load file</button>
             <p id="local-html-status" class="scope-status" role="status" aria-live="polite"></p>
           </div>
 
           <div class="field-group">
-            <label for="assessment-goal">Assessment goal <span class="optional-label">Optional</span></label>
+            <div class="field-label-row"><label for="assessment-goal">Goal <span class="optional-label">Optional</span></label><button class="help-icon" type="button" aria-label="About assessment goals" aria-describedby="tip-goal"><span aria-hidden="true">?</span><span id="tip-goal" class="tooltip" role="tooltip">Leave blank to check the whole page. For a goal, name a button or field and say what to do with the keyboard (concrete keyboard interactions with named controls). Not supported: goals without a recognizable action on a named control, security or privacy evaluations, visual checks, or remote pages; requests to override safeguards or run code are rejected. Uploaded pages can only be checked as a whole.</span></button></div>
             <textarea
               id="assessment-goal"
               name="goal"
               rows="2"
               aria-describedby="goal-hint scope-status goal-error"
-              placeholder="Leave empty for a whole-site assessment"
+              placeholder="Leave blank for a whole-page check"
             ></textarea>
-            <p id="goal-hint" class="field-hint">
-              Leave empty for whole-site scope. Goal text stays verbatim. The built-in demos support the specific “Submit the contact form” goal. Other goals must describe concrete keyboard interactions with named controls; goals without a recognizable action on a named control, remote targets, other input modes, security or privacy evaluations, visual checks, and requests to override safeguards or run code are rejected. Uploaded HTML supports whole-site scope only; all goal-focused uploaded-page runs finish inconclusively.
-            </p>
-            <p id="scope-status" class="scope-status" role="status" aria-live="polite">Whole-site assessment selected</p>
+            <p id="goal-hint" class="field-hint">Leave blank for a whole-page check.</p>
+            <p id="scope-status" class="scope-status" role="status" aria-live="polite">Whole page</p>
             <p id="goal-error" class="field-error" hidden></p>
           </div>
 
           <div class="field-group comparison-consistency-field">
-            <label for="comparison-consistency">Comparison consistency</label>
+            <div class="field-label-row"><label for="comparison-consistency">Comparison runs</label><button class="help-icon" type="button" aria-label="About comparison runs" aria-describedby="tip-comparison"><span aria-hidden="true">?</span><span id="tip-comparison" class="tooltip" role="tooltip">Each version gets the same number of runs. More runs give a steadier demo comparison.</span></button></div>
             <select id="comparison-consistency" name="consistencyLevel" aria-describedby="comparison-consistency-hint"></select>
-            <p id="comparison-consistency-hint" class="field-hint">Low is the default. The selected number of runs applies equally to the original and agent-updated versions.</p>
+            <p id="comparison-consistency-hint" class="field-hint">Low is the default.</p>
           </div>
 
           <div class="settings-row">
             <label class="toggle-card" for="simulation-mode">
               <input id="simulation-mode" name="simulationMode" type="checkbox" checked />
               <span class="toggle-copy">
-                <span class="toggle-title">Simulation mode <span class="default-label">ON BY DEFAULT</span></span>
-                <span class="toggle-hint">Keep the local run clearly marked as a simulation. This does not change target validation.</span>
+                <span class="toggle-title">Simulation mode <span class="default-label">DEFAULT</span></span>
+                <span class="toggle-hint">Mark this run as a simulation.</span>
               </span>
             </label>
+            <button class="help-icon settings-help" type="button" aria-label="About simulation mode" aria-describedby="tip-simulation"><span aria-hidden="true">?</span><span id="tip-simulation" class="tooltip" role="tooltip">This labels the run as a local simulation. It does not change what pages are allowed.</span></button>
             <div class="mode-preview" aria-live="polite">
               <span class="mode-preview-label">CURRENT SCOPE</span>
               <span id="scope-chip" class="scope-chip">Whole site</span>
@@ -131,47 +125,104 @@
           </div>
 
           <div class="form-actions">
-            <button class="primary-button" type="submit">
-              <span id="submit-label">View whole-site sample report</span> <span aria-hidden="true">↗</span>
+            <button id="start-live-assessment" class="primary-button" type="submit">
+              <span id="submit-label">Start assessment</span> <span aria-hidden="true">→</span>
             </button>
-            <button id="start-live-assessment" class="secondary-button" type="button">Run live assessment</button>
-            <button id="view-comparison" class="secondary-button" type="button">View Low-consistency comparison sample</button>
-            <p class="action-note">The sample report is illustrative. A live run sends bounded page details to your signed-in Codex account. Masked screenshots from built-in demos may be sent to Codex; uploaded-page screenshots are omitted from Codex requests and stay local when their values can be safely covered. The HTML source stays on this server.</p>
+            <button id="view-sample-report" class="secondary-button" type="button">Sample report</button>
+            <button id="view-comparison" class="secondary-button" type="button">Compare demos</button>
+            <span class="action-note">Local run · keyboard only</span>
+            <button class="help-icon privacy-help" type="button" aria-label="About samples and privacy" aria-describedby="tip-privacy"><span aria-hidden="true">?</span><span id="tip-privacy" class="tooltip tooltip-end" role="tooltip">Sample data is an example. Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not sent. A local copy is kept only when values can be covered safely. Your HTML file stays on this server.</span></button>
           </div>
         </form>
       </section>
 
       <section id="live-assessment" class="report-section live-run-result" aria-labelledby="live-assessment-heading" hidden>
-        <div class="report-heading-row">
-          <div>
-            <p class="step-label">LIVE RUN</p>
-            <h2 id="live-assessment-heading" tabindex="-1">Assessment result</h2>
+        <div id="live-terminal" class="terminal-screen">
+          <div class="report-heading-row">
+            <div>
+              <p class="step-label">ASSESSMENT RUN</p>
+              <h2 id="live-assessment-heading" tabindex="-1">Running keyboard checks</h2>
+            </div>
+            <button id="cancel-live-assessment" class="secondary-button" type="button" hidden>Stop run</button>
+          </div>
+          <div class="terminal-progress-block">
+            <div class="terminal-progress-label"><span id="live-progress-label">Waiting to start</span><strong><span id="live-progress-percent">0</span>%</strong></div>
+            <progress id="live-run-progress" value="0" max="100" aria-label="Run stage progress" aria-valuetext="Waiting to start"></progress>
+            <p class="terminal-progress-note">Run stage, not page coverage <button class="help-icon" type="button" aria-label="About run progress" aria-describedby="tip-progress"><span aria-hidden="true">?</span><span id="tip-progress" class="tooltip" role="tooltip">Progress follows run stages. The final report shows how much of the page was checked.</span></button></p>
+          </div>
+          <div class="terminal-window" aria-label="Assessment activity">
+            <div class="terminal-window-bar"><span></span><span></span><span></span><strong>access-trace / local-run</strong></div>
+            <ol id="terminal-log" class="terminal-log" aria-live="polite"></ol>
+            <p id="live-assessment-status" class="terminal-status-line" role="status" aria-live="polite">Preparing the local run…</p>
           </div>
         </div>
-        <p id="live-assessment-status" role="status" aria-live="polite"></p>
-        <button id="cancel-live-assessment" class="secondary-button" type="button" hidden>Cancel live run</button>
-        <p id="live-assessment-summary"></p>
-        <a id="download-live-record" hidden>Download redacted run record</a>
-        <details id="live-record-details" hidden>
-          <summary>View redacted run record</summary>
-          <pre id="live-record-json"></pre>
-        </details>
+
+        <div id="live-result" class="live-result" hidden>
+          <div class="report-heading-row">
+            <div>
+              <p class="step-label">RUN REPORT</p>
+              <h2 id="live-result-heading" tabindex="-1">Assessment result</h2>
+              <p class="report-subtitle">Evidence for this keyboard run.</p>
+            </div>
+            <span id="live-result-status" class="terminal-status"><span class="status-dot" aria-hidden="true"></span></span>
+          </div>
+          <div class="live-result-grid">
+            <section class="live-outcome-card" aria-labelledby="live-outcome-heading">
+              <p class="card-kicker">RESULT</p>
+              <h3 id="live-outcome-heading">—</h3>
+              <p id="live-assessment-summary"></p>
+              <dl class="live-result-facts">
+                <div><dt>Page</dt><dd id="live-result-target">—</dd></div>
+                <div><dt>Scope</dt><dd id="live-result-scope">—</dd></div>
+                <div><dt>Actions</dt><dd id="live-result-actions">—</dd></div>
+                <div><dt>Checked</dt><dd id="live-result-coverage">—</dd></div>
+                <div><dt>Success</dt><dd id="live-result-success">—</dd></div>
+                <div><dt>Duration</dt><dd id="live-result-duration">—</dd></div>
+                <div><dt>Simulation</dt><dd id="live-result-simulation">—</dd></div>
+              </dl>
+            </section>
+            <section class="live-evidence-card" aria-labelledby="live-evidence-heading">
+              <p class="card-kicker">WHAT HAPPENED</p>
+              <h3 id="live-evidence-heading">Evidence summary</h3>
+              <p id="live-result-explanation"></p>
+              <p id="live-result-stopping"></p>
+              <p id="live-result-screenshot" class="live-screenshot-reference" hidden></p>
+              <p id="live-result-confidence" class="live-confidence" hidden></p>
+              <div id="live-result-fix-block" hidden><strong>Possible fix</strong><p id="live-result-fix"></p></div>
+              <div class="live-warnings-block" id="live-result-warnings-block" hidden><strong>Notes</strong><ul id="live-result-warnings"></ul></div>
+            </section>
+          </div>
+          <div class="live-result-actions">
+            <a id="download-live-record" class="secondary-button" hidden>Download run record</a>
+            <button id="new-assessment" class="primary-button" type="button">New assessment <span aria-hidden="true">→</span></button>
+            <details id="live-record-details" hidden>
+              <summary>View full run record</summary>
+              <pre id="live-record-json"></pre>
+            </details>
+            <details id="live-evidence-details">
+              <summary>View actions and focus evidence</summary>
+              <div class="live-evidence-lists">
+                <section><h3>Keyboard actions</h3><ol id="live-actions-list"></ol></section>
+                <section><h3>Focus observations</h3><ol id="live-focus-list"></ol></section>
+                <section><h3>Recovery checks</h3><ul id="live-recovery-list"></ul></section>
+              </div>
+            </details>
+          </div>
+        </div>
       </section>
 
       <section id="sample-report" class="report-section" aria-labelledby="report-heading" hidden>
         <div class="sample-notice" role="status">
           <span class="notice-icon" aria-hidden="true">S</span>
-          <div>
-            <strong>Representative sample — not live assessment</strong>
-            <p>The goal above remains visible, but these actions and findings are representative sample data, not evidence about that goal. No browser run has taken place.</p>
-          </div>
+          <strong>Sample data</strong>
+          <button class="help-icon" type="button" aria-label="Sample data help" aria-describedby="tip-sample"><span aria-hidden="true">?</span><span id="tip-sample" class="tooltip" role="tooltip">Representative sample — not live assessment. This is example data, not evidence about that goal. It does not describe your selected page.</span></button>
         </div>
 
         <div class="report-heading-row">
           <div>
-            <p class="step-label">02 <span aria-hidden="true">/</span> TERMINAL REPORT</p>
-            <h2 id="report-heading" tabindex="-1">Assessment report</h2>
-            <p class="report-subtitle">Keyboard accessibility evidence for the configured assessment.</p>
+            <p class="step-label">REPORT PREVIEW</p>
+            <h2 id="report-heading" tabindex="-1">Keyboard assessment</h2>
+            <p class="report-subtitle">A quick look at the final report.</p>
           </div>
           <span class="terminal-status"><span class="status-dot" aria-hidden="true"></span><span id="terminal-status-value" data-sample-fact="terminalStatus"></span></span>
         </div>
@@ -236,6 +287,9 @@
           </div>
         </section>
 
+        <details class="report-more-details">
+          <summary>View report details and evidence</summary>
+          <div class="report-more-content">
         <div class="report-columns">
           <section class="report-panel" aria-labelledby="wcag-heading">
             <p class="card-kicker">STANDARDS CONTEXT</p>
@@ -323,23 +377,23 @@
           </details>
         </section>
 
-        <p class="limitation-banner"><span aria-hidden="true">i</span> This result is only keyboard-assessment evidence for the configured local site. It is not a full accessibility or WCAG conformance assessment.</p>
+        <p class="limitation-banner"><span aria-hidden="true">i</span> Evidence for one local keyboard assessment.</p>
+          </div>
+        </details>
       </section>
 
       <section id="sample-comparison" class="report-section comparison-section" aria-labelledby="comparison-heading" hidden>
         <div class="sample-notice" role="status">
           <span class="notice-icon" aria-hidden="true">S</span>
-          <div>
-            <strong>Representative sample — not live assessment</strong>
-            <p>The selected level determines how many sample slots appear for each version. No browser runs take place; repeat slots reuse representative sample evidence and are not independent observations.</p>
-          </div>
+          <strong>Sample comparison</strong>
+          <button class="help-icon" type="button" aria-label="Sample comparison help" aria-describedby="tip-sample-comparison"><span aria-hidden="true">?</span><span id="tip-sample-comparison" class="tooltip" role="tooltip">These are examples, not separate browser runs. Repeated sample rows reuse the same evidence.</span></button>
         </div>
 
         <div class="report-heading-row">
           <div>
-            <p class="step-label">03 <span aria-hidden="true">/</span> ORIGINAL AND UPDATED</p>
-            <h2 id="comparison-heading" tabindex="-1">Compare the original and agent-updated site</h2>
-            <p class="report-subtitle">Compare the displayed scores, metric changes, coverage, and evidence under the same assessment settings.</p>
+            <p class="step-label">COMPARISON PREVIEW</p>
+            <h2 id="comparison-heading" tabindex="-1">Compare demo results</h2>
+            <p class="report-subtitle">The same keyboard checks, shown side by side.</p>
           </div>
         </div>
 
@@ -362,6 +416,9 @@
           </div>
         </section>
 
+        <details class="report-more-details comparison-more-details">
+          <summary>View runs, metric changes, and evidence</summary>
+          <div class="report-more-content">
         <section class="report-panel comparison-runs-panel" aria-labelledby="comparison-runs-heading">
           <p class="card-kicker">INDIVIDUAL RUNS</p>
           <h3 id="comparison-runs-heading">Every assessment run</h3>
@@ -411,7 +468,9 @@
           </details>
         </section>
 
-        <p class="limitation-banner"><span aria-hidden="true">i</span> This representative comparison is sample keyboard-assessment evidence for the configured local site. It is not a live assessment, a full accessibility assessment, or a WCAG conformance result.</p>
+        <p class="limitation-banner"><span aria-hidden="true">i</span> Sample keyboard-assessment comparison.</p>
+          </div>
+        </details>
       </section>
 
       <footer class="site-footer">
