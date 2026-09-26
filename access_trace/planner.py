@@ -265,13 +265,13 @@ def _codex_action_shape(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _json_candidates(value: Any):
+def _json_candidates(value: Any, candidate_shape=_codex_action_shape):
     """Yield candidate JSON objects from Codex JSONL final-message events."""
     if not isinstance(value, dict):
         return
-    compact = _codex_action_shape(value)
-    if compact is not None:
-        yield compact
+    candidate = candidate_shape(value)
+    if candidate is not None:
+        yield candidate
         return
     event_type = value.get("type")
     if isinstance(event_type, str) and event_type in {"item.completed", "item.updated"}:
@@ -280,7 +280,9 @@ def _json_candidates(value: Any):
             message = item.get("text")
             if isinstance(message, str):
                 try:
-                    yield from _json_candidates(json.loads(message.strip()))
+                    yield from _json_candidates(
+                        json.loads(message.strip()), candidate_shape
+                    )
                 except (json.JSONDecodeError, TypeError):
                     return
         return
@@ -288,15 +290,21 @@ def _json_candidates(value: Any):
     for key in ("decision", "result", "output", "response", "structured_output", "final_output"):
         nested = value.get(key)
         if isinstance(nested, dict):
-            yield from _json_candidates(nested)
+            yield from _json_candidates(nested, candidate_shape)
         elif isinstance(nested, str):
             try:
-                yield from _json_candidates(json.loads(nested.strip()))
+                yield from _json_candidates(
+                    json.loads(nested.strip()), candidate_shape
+                )
             except (json.JSONDecodeError, TypeError):
                 pass
 
 
-def _parse_codex_output(stdout: Union[bytes, str]) -> Dict[str, Any]:
+def _parse_codex_output(
+    stdout: Union[bytes, str],
+    candidate_shape=_codex_action_shape,
+    output_description: str = "action",
+) -> Dict[str, Any]:
     if isinstance(stdout, bytes):
         try:
             stdout = stdout.decode("utf-8")
@@ -309,16 +317,22 @@ def _parse_codex_output(stdout: Union[bytes, str]) -> Dict[str, Any]:
         if not line.strip():
             continue
         try:
-            candidates.extend(_json_candidates(json.loads(line)))
+            candidates.extend(_json_candidates(json.loads(line), candidate_shape))
         except (json.JSONDecodeError, TypeError):
             continue
     if not candidates:
         try:
-            candidates.extend(_json_candidates(json.loads(stdout.strip())))
+            candidates.extend(
+                _json_candidates(json.loads(stdout.strip()), candidate_shape)
+            )
         except (json.JSONDecodeError, TypeError):
             pass
     if len(candidates) != 1:
-        raise PlannerError("Codex CLI did not return exactly one schema-valid action")
+        raise PlannerError(
+            "Codex CLI did not return exactly one schema-valid {}".format(
+                output_description
+            )
+        )
     return candidates[0]
 
 
@@ -405,7 +419,14 @@ class CodexPlanner:
             except OSError:
                 pass
 
-    def _request(self, prompt: str, screenshot_data_url: Optional[str] = None) -> Dict[str, Any]:
+    def _request(
+        self,
+        prompt: str,
+        screenshot_data_url: Optional[str] = None,
+        output_schema: Dict[str, Any] = CODEX_OUTPUT_SCHEMA,
+        candidate_shape=_codex_action_shape,
+        output_description: str = "action",
+    ) -> Dict[str, Any]:
         """Run one ephemeral, read-only CLI turn in a fresh temporary directory."""
         if self._cancelled.is_set():
             raise PlannerError("Codex CLI planner was cancelled")
@@ -413,7 +434,7 @@ class CodexPlanner:
             directory = Path(temporary)
             schema_path = directory / "action-schema.json"
             schema_path.write_text(
-                json.dumps(CODEX_OUTPUT_SCHEMA, sort_keys=True) + "\n",
+                json.dumps(output_schema, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             args = self._command + [
@@ -505,7 +526,11 @@ class CodexPlanner:
                         process.returncode
                     )
                 )
-            return _parse_codex_output(stdout)
+            return _parse_codex_output(
+                stdout,
+                candidate_shape=candidate_shape,
+                output_description=output_description,
+            )
 
     @staticmethod
     def _stop_process(process: subprocess.Popen) -> None:
@@ -534,3 +559,40 @@ class CodexPlanner:
         prompt = _planner_prompt(context)
         action = self._request(prompt, screenshot_data_url)
         return validate_action(action, context)
+
+    def request_structured(
+        self,
+        prompt: str,
+        output_schema: Dict[str, Any],
+        screenshot_data_url: Optional[str] = None,
+        candidate_shape=None,
+        output_description: str = "response",
+    ) -> Dict[str, Any]:
+        """Run a bounded structured turn with a caller-provided output schema."""
+        if candidate_shape is None:
+            candidate_shape = _structured_object_shape
+        return self._request(
+            prompt,
+            screenshot_data_url=screenshot_data_url,
+            output_schema=output_schema,
+            candidate_shape=candidate_shape,
+            output_description=output_description,
+        )
+
+
+def _structured_object_shape(value: Any) -> Optional[Dict[str, Any]]:
+    """Accept a JSON object payload while leaving Codex event envelopes alone."""
+    if not isinstance(value, dict):
+        return None
+    event_type = value.get("type")
+    if isinstance(event_type, str) and event_type in {
+        "item.completed",
+        "item.updated",
+        "item.started",
+        "turn.started",
+        "turn.completed",
+        "thread.started",
+        "error",
+    }:
+        return None
+    return value
