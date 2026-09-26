@@ -1247,6 +1247,7 @@ def _execute_assessment(
     typed_values: Dict[str, str] = {}
     covered_focus_ids = set()
     visited_site_pages = set()
+    attempted_site_pages = set()
     pending_site_pages = []
     site_page_coverage = {}
     site_page_limit = run.get("sitePageLimit", configured_site_page_limit())
@@ -1332,6 +1333,7 @@ def _execute_assessment(
                         if (
                             link_key
                             and link_key not in visited_site_pages
+                            and link_key not in attempted_site_pages
                             and all(_site_page_key(item) != link_key for item in pending_site_pages)
                         ):
                             pending_site_pages.append(link)
@@ -1340,7 +1342,10 @@ def _execute_assessment(
                 next_page = pending_site_pages.pop(0)
                 next_key = _site_page_key(next_page)
                 if next_key:
-                    visited_site_pages.add(next_key)
+                    # Requested URLs can redirect or canonicalize to a page
+                    # already observed. Track attempts separately so aliases
+                    # do not consume the configured limit of unique pages.
+                    attempted_site_pages.add(next_key)
                 browser.navigate_to(next_page)
                 covered_focus_ids.clear()
                 next_observation = _redacted_observation(

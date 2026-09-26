@@ -549,6 +549,58 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertEqual(2, completed["stoppingPoint"]["coverage"]["areasObserved"])
         self.assertEqual("partial", completed["stoppingPoint"]["coverage"]["status"])
 
+    def test_redirected_link_does_not_consume_whole_site_page_limit(self):
+        target = self.base_url + "/docs/demos/fixed/index.html"
+        redirecting_link = self.base_url + "/docs/demos/fixed/redirect.html"
+        page_two = self.base_url + "/docs/demos/fixed/linked.html"
+        page_three = self.base_url + "/docs/demos/fixed/third.html"
+        run = create_run({"targetUrl": target, "sitePageLimit": 3}, self.server.server_port)
+        requested = []
+
+        class RedirectingBrowser:
+            def __init__(self, target_url):
+                self.url = target_url
+
+            def observe(self):
+                return {
+                    "url": self.url,
+                    "title": "Site page",
+                    "focus": {"role": "document", "stableId": "document", "isStable": True},
+                    "controls": [{"role": "link", "stableId": "link-one", "focusable": True}],
+                    "controlCount": 1,
+                    "pageContentVisible": True,
+                    "lifecycle": {
+                        "pageOpen": True, "dialogOpen": False, "dialogObserved": False,
+                        "popupObserved": False, "popupAttempted": False, "crashed": False,
+                        "offLoopbackRedirect": False, "navigationRedirect": False,
+                        "browserLoadError": False, "pageContentVisible": True,
+                        "headfulFallback": False,
+                    },
+                }
+
+            def press_key(self, key):
+                pass
+
+            def discover_site_links(self):
+                return [redirecting_link, page_two, page_three]
+
+            def navigate_to(self, url):
+                requested.append(url)
+                self.url = target if url == redirecting_link else url
+
+            def capture_redacted_screenshot(self, destination):
+                destination.write_bytes(b"\x89PNG\r\n\x1a\n")
+                return destination.name
+
+            def close(self):
+                return None
+
+        with mock.patch("access_trace.journey.IsolatedKeyboardBrowser", RedirectingBrowser):
+            completed = execute_assessment(run, self.run_directory)
+
+        self.assertEqual([redirecting_link, page_two, page_three], requested)
+        self.assertEqual(3, completed["stoppingPoint"]["coverage"]["areasObserved"])
+
     def test_whole_site_continues_when_tab_observation_temporarily_loses_page_content(self):
         target = self.base_url + "/docs/demos/fixed/index.html"
         linked = self.base_url + "/docs/demos/fixed/linked.html"
