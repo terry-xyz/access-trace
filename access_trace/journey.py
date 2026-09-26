@@ -1420,6 +1420,12 @@ def _execute_assessment(
                             "all" if site_page_limit == 0 else site_page_limit,
                         )
                     )
+                    if site_page_limit == 0:
+                        _report_run_progress("Inspecting the starting page; the configured limit is all pages.")
+                    else:
+                        _report_run_progress(
+                            "Inspecting page 1 of {0}.".format(site_page_limit)
+                        )
                     pages = discovery.get("pages")
                     if isinstance(pages, list) and pages:
                         site_discovery_complete = True
@@ -1486,6 +1492,15 @@ def _execute_assessment(
                     # already observed. Track attempts separately so aliases
                     # do not consume the configured limit of unique pages.
                     attempted_site_pages.add(next_key)
+                page_number = len(visited_site_pages) + 1
+                if site_page_limit == 0:
+                    _report_run_progress(
+                        "Opening discovered page {0}.".format(page_number)
+                    )
+                else:
+                    _report_run_progress(
+                        "Opening page {0} of {1}.".format(page_number, site_page_limit)
+                    )
                 browser.navigate_to(next_page)
                 next_raw_observation = browser.observe()
                 observed_page_key = _site_page_key(next_raw_observation.get("url"))

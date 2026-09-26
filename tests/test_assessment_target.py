@@ -564,6 +564,12 @@ class AssessmentTargetTests(unittest.TestCase):
         self.assertTrue(
             any("Scraping up to 3" in event.get("message", "") for event in progress_events)
         )
+        self.assertTrue(
+            any(event.get("message") == "Inspecting page 1 of 3." for event in progress_events)
+        )
+        self.assertTrue(
+            any(event.get("message") == "Opening page 2 of 3." for event in progress_events)
+        )
 
     def test_sitemap_scrape_uses_the_configured_page_limit_as_its_url_cap(self):
         class DiscoveryConnection:
