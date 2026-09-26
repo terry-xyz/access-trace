@@ -21,7 +21,7 @@ import time
 import urllib.request
 import zlib
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 
@@ -476,7 +476,7 @@ class _WebSocket:
             pass
 
 
-def _find_chrome() -> Optional[str]:
+def _find_chrome() -> Optional[List[str]]:
     candidates = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -484,10 +484,52 @@ def _find_chrome() -> Optional[str]:
         shutil.which("chromium"),
         shutil.which("chromium-browser"),
     ]
-    return next(
+    executable = next(
         (candidate for candidate in candidates if candidate and Path(candidate).is_file()),
         None,
     )
+    if executable is not None:
+        return [executable]
+
+    flatpak = shutil.which("flatpak")
+    if flatpak is None:
+        return None
+    try:
+        installed = subprocess.run(
+            [flatpak, "info", "org.chromium.Chromium"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if installed.returncode == 0:
+        return [flatpak, "run", "--command=chromium", "org.chromium.Chromium"]
+    return None
+
+
+def _process_ids_using_profile(profile_directory: Path):
+    # Flatpak can reparent its wrapper to the portal, so the unique profile is its identity.
+    profile_argument = "--user-data-dir={0}".format(profile_directory)
+    try:
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,args="], text=True, stderr=subprocess.DEVNULL
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise BrowserCleanupError(
+            "isolated browser process cleanup could not be checked"
+        ) from error
+    process_ids = set()
+    for line in output.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or profile_argument not in fields[1].split():
+            continue
+        try:
+            process_ids.add(int(fields[0]))
+        except ValueError:
+            continue
+    return process_ids
 
 
 def _descendant_process_ids(root_pid: int):
@@ -617,9 +659,12 @@ class IsolatedKeyboardBrowser:
     """A fresh, keyboard-only Chrome session with bounded observations."""
 
     def __init__(self, target_url: str, restrict_network: bool = False):
-        chrome = _find_chrome()
-        if chrome is None:
-            raise BrowserError("Chrome is not available for a real browser run")
+        chrome_command = _find_chrome()
+        if chrome_command is None:
+            raise BrowserError(
+                "Install Google Chrome or Chromium, or install the "
+                "org.chromium.Chromium Flatpak"
+            )
         self.profile_directory = Path(tempfile.mkdtemp(prefix="access-trace-browser-"))
         self.process: Optional[subprocess.Popen] = None
         self.connection: Optional[_WebSocket] = None
@@ -643,8 +688,7 @@ class IsolatedKeyboardBrowser:
         self._navigation_started = False
         self.debug_port = self._free_port()
         try:
-            chrome_arguments = [
-                chrome,
+            chrome_options = [
                 "--headless=new",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
@@ -658,15 +702,17 @@ class IsolatedKeyboardBrowser:
                 "--window-size=1280,900",
             ]
             if self.restrict_network:
-                chrome_arguments.extend(
+                chrome_options.extend(
                     ["--dns-prefetch-disable", "--disable-preconnect"]
                 )
+            chrome_arguments = [*chrome_command, *chrome_options]
             self.process = subprocess.Popen(
                 chrome_arguments,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
             browser_websocket_url = self._wait_for_browser()
             self.browser_connection = _WebSocket(browser_websocket_url)
             self.browser_connection.call(
@@ -1552,7 +1598,18 @@ class IsolatedKeyboardBrowser:
         cleanup_errors = []
         process = self.process
         if process is not None:
-            process_ids = _descendant_process_ids(process.pid) | {process.pid}
+            try:
+                profile_process_ids = _process_ids_using_profile(
+                    self.profile_directory
+                )
+            except BrowserCleanupError as error:
+                cleanup_errors.append(error)
+                profile_process_ids = set()
+            process_ids = (
+                _descendant_process_ids(process.pid)
+                | profile_process_ids
+                | {process.pid}
+            )
             process_errors = []
             for process_id in process_ids:
                 try:
