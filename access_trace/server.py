@@ -29,10 +29,8 @@ LOCAL_SITE_PATH_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})$")
 STATIC_ROOT = Path(__file__).resolve().parent.parent
 STATIC_ASSETS = {
     "/src/assessment.mjs": (STATIC_ROOT / "src" / "assessment.mjs", "text/javascript; charset=utf-8"),
-    "/src/comparison.mjs": (STATIC_ROOT / "src" / "comparison.mjs", "text/javascript; charset=utf-8"),
     "/src/live-comparison.mjs": (STATIC_ROOT / "src" / "live-comparison.mjs", "text/javascript; charset=utf-8"),
     "/src/main.mjs": (STATIC_ROOT / "src" / "main.mjs", "text/javascript; charset=utf-8"),
-    "/src/sample-report.mjs": (STATIC_ROOT / "src" / "sample-report.mjs", "text/javascript; charset=utf-8"),
     "/src/styles.css": (STATIC_ROOT / "src" / "styles.css", "text/css; charset=utf-8"),
 }
 
