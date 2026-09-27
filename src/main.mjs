@@ -590,6 +590,7 @@ async function handleSourceFix() {
   const runId = latestRunRecord.id;
   sourceReviewBusy = true;
   sourceReviewFixButton.disabled = true;
+  sourceReviewActionStatus.classList.remove("is-applied");
   sourceReviewActionStatus.textContent = "Reviewing files…";
   try {
     const prepared = await prepareSourceContext(latestSourceSelection);
@@ -699,6 +700,7 @@ async function handleSourceFixApproval() {
   sourceReviewBusy = true;
   sourceReviewFixButton.disabled = true;
   sourceReviewApproveButton.disabled = true;
+  sourceReviewActionStatus.classList.remove("is-applied");
   let root;
   try {
     const fileHandles = canPickDirectory ? null : await window.showOpenFilePicker({ multiple: true });
@@ -787,11 +789,13 @@ async function handleSourceFixApproval() {
     try {
       const refreshed = await refreshUploadedAssessmentCopy(writable);
       sourceReviewActionStatus.textContent = refreshed
-        ? `Applied to ${written.join(", ")}. Assessment copy updated; run it again to verify.`
-        : `Applied to ${written.join(", ")}. Re-upload the changed files before retesting.`;
+        ? `Fix applied to ${written.join(", ")}. Your updated assessment copy is ready. Run the assessment again to check the result.`
+        : `Fix applied to ${written.join(", ")}. Re-upload the changed files, then run the assessment again to check the result.`;
     } catch {
-      sourceReviewActionStatus.textContent = `Applied to ${written.join(", ")}; assessment copy not refreshed. Re-upload the changed files to retest.`;
+      sourceReviewActionStatus.textContent = `Fix applied to ${written.join(", ")}, but the assessment copy could not be updated. Re-upload the changed files, then run the assessment again to check the result.`;
     }
+    sourceReviewActionStatus.classList.add("is-applied");
+    showReportView();
   } catch (error) {
     sourceReviewActionStatus.textContent = error instanceof Error ? error.message : "The patch could not be applied. No files were changed.";
   } finally {

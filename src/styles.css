@@ -335,6 +335,7 @@ a:hover { color: #fff; }
 .source-review-result ul { margin: 5px 0; padding-left: 18px; overflow-wrap: anywhere; }
 .source-review-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 10px 0; }
 .source-review-actions p { flex: 1 1 220px; margin: 0; }
+.source-review-actions p.is-applied { flex-basis: 100%; border: 1px solid rgba(91, 190, 151, 0.48); border-radius: 5px; background: rgba(28, 92, 68, 0.2); padding: 10px 12px; color: #baf0d8; font-size: 12px; line-height: 1.5; font-weight: 600; }
 .source-review-result details { border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; }
 .source-review-result details summary { color: var(--cyan-soft); cursor: pointer; }
 .source-review-result pre { max-height: 24vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #c8d6d8; font: 9px/1.45 var(--mono); }
