@@ -1300,6 +1300,8 @@ def _execute_assessment(
     run["browserSession"]["startedAt"] = run["startedAt"]
     run["agentFailure"] = None
     run["browserFailure"] = None
+    headed_mode = run.get("headedMode") is True
+    run.setdefault("browserSession", {})["mode"] = "headed" if headed_mode else "headless"
     if evidence_directory is None:
         run["warnings"].append({"kind": "missing-evidence-directory"})
         run["browserSession"]["cleanup"] = {
@@ -1326,14 +1328,18 @@ def _execute_assessment(
                 run["targetUrl"],
                 restrict_network=True,
                 allow_site_navigation=run.get("pageOnly") is not True,
+                headless=not headed_mode,
             )
         else:
-            browser = IsolatedKeyboardBrowser(run["targetUrl"])
+            browser = IsolatedKeyboardBrowser(
+                run["targetUrl"], headless=not headed_mode
+            )
         _raise_if_run_cancelled()
         current_raw = browser.observe()
         _raise_if_run_cancelled()
         if (
             run.get("targetVersion") == "web"
+            and not headed_mode
             and current_raw.get("lifecycle", {}).get("browserLoadError") is not True
             and getattr(browser, "needs_headful_retry", lambda: False)()
         ):
@@ -1356,6 +1362,7 @@ def _execute_assessment(
             browser = None
             headless_browser.close()
             try:
+                run["browserSession"]["mode"] = "headed"
                 browser = IsolatedKeyboardBrowser(
                     run["targetUrl"], headless=False
                 )

@@ -130,6 +130,9 @@ def build_run_request(
     page_only = payload.get("pageOnly", False)
     if not isinstance(page_only, bool):
         raise ValidationError("pageOnly must be boolean")
+    headed_mode = payload.get("headedMode", False)
+    if not isinstance(headed_mode, bool):
+        raise ValidationError("headedMode must be boolean")
     site_page_limit = payload.get("sitePageLimit", configured_site_page_limit())
     if (
         not isinstance(site_page_limit, int)
@@ -144,6 +147,7 @@ def build_run_request(
         "assessmentScope": derived_scope,
         "goal": goal,
         "pageOnly": page_only,
+        "headedMode": headed_mode,
         "sitePageLimit": site_page_limit,
         "simulationMode": simulation_mode,
     }
@@ -277,6 +281,7 @@ def create_run(
         "assessmentScope": run_request["assessmentScope"],
         "goal": run_request["goal"],
         "pageOnly": run_request["pageOnly"],
+        "headedMode": run_request["headedMode"],
         "sitePageLimit": run_request["sitePageLimit"],
         "successCondition": (
             "Message sent"
@@ -289,6 +294,7 @@ def create_run(
         "browserSession": {
             "id": str(uuid.uuid4()),
             "isolation": "fresh",
+            "mode": "headed" if run_request["headedMode"] else "headless",
         },
         "startedAt": None,
         "completedAt": None,

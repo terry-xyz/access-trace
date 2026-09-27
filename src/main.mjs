@@ -10,6 +10,7 @@ import { canApproveSourceReview, getSourceReviewActions, hasPersistedSourceBasel
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
 const pageOnlyInput = document.querySelector("#page-only");
+const headedModeInput = document.querySelector("#headed-mode");
 const sitePageLimitInput = document.querySelector("#site-page-limit");
 const sitePageLimitError = document.querySelector("#site-page-limit-error");
 const targetSiteFilesInput = document.querySelector("#target-site-files");
@@ -419,6 +420,7 @@ function validateCurrentConfiguration() {
     scope: goalValidation.scope,
     goal: goalValidation.goal || null,
     pageOnly: pageOnlyInput.checked,
+    headedMode: headedModeInput.checked,
     sitePageLimit,
     simulationMode: simulationInput.checked,
   };
@@ -1061,6 +1063,12 @@ function renderRunReport(record, root) {
 
   const interactions = recordedNumber(stats.interactionCount ?? record?.interactionCount);
   setField(report, "interactions", interactions === null ? "—" : `${interactions}`);
+  const durationMs = recordedNumber(stats.durationMs ?? evidence.timing?.durationMs ?? record?.durationMs);
+  setField(report, "run-duration", formatRunDuration(durationMs));
+  const potentialGain = controlsObserved !== null && controlsExpected !== null
+    ? Math.max(0, controlsExpected - controlsObserved)
+    : null;
+  setReportProgressBar(report, "potential", potentialGain, controlsExpected);
 
   const displayCoverageScore = coverageScore === null
     ? null
@@ -1084,6 +1092,13 @@ function renderRunReport(record, root) {
   const completedFields = recordedNumber(goalProgress?.completedFields);
   const expectedFields = recordedNumber(goalProgress?.expectedFields);
   setReportProgressBar(report, "goal", completedFields, expectedFields);
+  const validationCounts = countValidationIssues(observations);
+  setReportProgressBar(
+    report,
+    "validation",
+    validationCounts.issues,
+    validationCounts.assessed,
+  );
 
   const screenshotRef = evidence.stopping?.screenshotRef ?? record?.stoppingScreenshotRef;
   if (typeof screenshotRef === "string" && screenshotRef) {
@@ -1200,6 +1215,33 @@ function renderRunReport(record, root) {
   referencesList.hidden = referencesList.childElementCount === 0;
 }
 
+function formatRunDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "—";
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes} min ${seconds} sec` : `${seconds} sec`;
+}
+
+function countValidationIssues(observations) {
+  const statesByField = new Map();
+  for (const observation of observations) {
+    const fields = observation?.goalProgress?.fields;
+    if (!fields || typeof fields !== "object" || Array.isArray(fields)) continue;
+    for (const [field, value] of Object.entries(fields)) {
+      const state = value?.validationState;
+      if (state !== "valid" && state !== "invalid") continue;
+      const states = statesByField.get(field) ?? new Set();
+      states.add(state);
+      statesByField.set(field, states);
+    }
+  }
+  return {
+    assessed: statesByField.size,
+    issues: [...statesByField.values()].filter((states) => states.has("invalid")).length,
+  };
+}
+
 /** handleLiveAssessment creates and executes one real run, then exposes its redacted JSON record. */
 async function handleLiveAssessment() {
   const configuration = validateCurrentConfiguration();
@@ -1224,6 +1266,7 @@ async function handleLiveAssessment() {
         targetUrl: configuration.targetUrl,
         goal: configuration.goal,
         pageOnly: configuration.pageOnly,
+        headedMode: configuration.headedMode,
         sitePageLimit: configuration.sitePageLimit,
         simulationMode: configuration.simulationMode,
       }),
@@ -1238,8 +1281,12 @@ async function handleLiveAssessment() {
 
     setRunStage(50, "Run created", "Local run record created.");
     setCancelableRun(created.id);
-    setRunStage(75, "Assessment running", "Isolated keyboard assessment started.");
-    liveAssessmentStatus.textContent = "The isolated browser is checking the page…";
+    setRunStage(75, "Assessment running", configuration.headedMode
+      ? "Visible isolated keyboard assessment started."
+      : "Isolated keyboard assessment started.");
+    liveAssessmentStatus.textContent = configuration.headedMode
+      ? "The visible isolated browser is checking the page…"
+      : "The isolated browser is checking the page…";
     const { response: executeResponse, result: executeResult } = await executeRun(created.id);
     let result = executeResult;
     if (!executeResponse.ok) {

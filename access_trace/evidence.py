@@ -339,6 +339,12 @@ def _browser_session(value: Any) -> Dict[str, Any]:
         }
     return {
         "isolation": _text(source.get("isolation"), 40),
+        "mode": (
+            source.get("mode")
+            if isinstance(source.get("mode"), str)
+            and source.get("mode") in {"headed", "headless"}
+            else None
+        ),
         "startedAt": _text(source.get("startedAt"), 80),
         "closedAt": _text(source.get("closedAt"), 80),
         "cleanup": safe_cleanup,

@@ -131,6 +131,8 @@ a[href],
 summary,
 .page-only-option,
 .page-only-option input,
+.headed-mode-option,
+.headed-mode-option input,
 [role="button"] { cursor: url("../assets/access-trace-hand-cursor.png?v=2") 7 3, pointer; }
 .field-group input:hover,
 .field-group textarea:hover,
@@ -232,7 +234,8 @@ summary,
 .source-fields,
 .assessment-fields { display: contents; }
 .field-label-row { margin-bottom: 8px; }
-.field-label-row > .page-only-option {
+.field-label-row > .page-only-option,
+.field-label-row > .headed-mode-option {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -244,8 +247,10 @@ summary,
   text-transform: none;
   cursor: url("../assets/access-trace-hand-cursor.png?v=2") 7 3, pointer;
 }
-.page-only-option input { width: 13px; height: 13px; min-height: 0; margin: 0; accent-color: var(--brand-emerald-light); }
-.page-only-option input:focus:not(:focus-visible) { outline: none; box-shadow: none; }
+.page-only-option input,
+.headed-mode-option input { width: 13px; height: 13px; min-height: 0; margin: 0; accent-color: var(--brand-emerald-light); }
+.page-only-option input:focus:not(:focus-visible),
+.headed-mode-option input:focus:not(:focus-visible) { outline: none; box-shadow: none; }
 .field-group label {
   color: #c9c9c9;
   font-size: 10px;
@@ -550,7 +555,8 @@ main#main-content.page-shell { width: 100%; max-width: none; }
   .coverage-score-pie { width: 140px; height: 140px; }
   .coverage-score-pie span { font-size: 30px; }
   .coverage-score-layout { margin: 20px 0 24px; }
-  .field-label-row > .page-only-option { font-size: 10px; }
+  .field-label-row > .page-only-option,
+  .field-label-row > .headed-mode-option { font-size: 10px; }
 }
 
 @media (max-width: 560px) {
@@ -561,5 +567,27 @@ main#main-content.page-shell { width: 100%; max-width: none; }
   .header-nav button { min-height: 28px; padding: 0 5px; font-size: 8px; }
   .page-shell { min-height: calc(100dvh - 58px); align-items: flex-start; padding: 100px 14px 24px; }
   .setup-card { padding: 26px 20px 22px; }
-  .field-label-row > .page-only-option { font-size: 9px; }
+  .field-label-row > .page-only-option,
+  .field-label-row > .headed-mode-option { font-size: 9px; }
+}
+
+@media (max-width: 480px) {
+  main#main-content.page-shell { padding: 92px 12px 24px; }
+  .setup-card { width: 100%; max-width: 430px; min-width: 0; padding: 24px 16px 20px; }
+  #assessment-form,
+  .source-fields,
+  .assessment-fields,
+  .field-group { width: 100%; min-width: 0; }
+  .target-label-row { align-items: flex-start; flex-wrap: wrap; column-gap: 10px; }
+  .target-label-row > label:first-child { flex: 1 1 100%; min-width: 0; }
+  .target-label-row > .page-only-option,
+  .target-label-row > .headed-mode-option { flex: 0 1 auto; max-width: 100%; margin-left: 0; }
+  .page-only-option input,
+  .headed-mode-option input { width: 16px; height: 16px; min-width: 16px; min-height: 16px; flex: 0 0 16px; }
+  .form-actions { flex-wrap: wrap; gap: 10px; }
+  .form-actions .primary-button { width: 100%; min-width: 0; }
+  .live-outcome-card,
+  .live-evidence-card,
+  .report-placeholder-card { min-height: 0; padding: 22px 16px 20px; }
+  .coverage-score-layout { gap: 14px; }
 }

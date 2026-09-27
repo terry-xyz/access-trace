@@ -46,7 +46,8 @@
         <form id="assessment-form" novalidate>
           <div class="source-fields">
           <div class="field-group">
-            <div class="field-label-row"><label for="target-url">Page URL <span class="required-label">Required</span></label><label class="page-only-option" for="page-only"><input id="page-only" name="pageOnly" type="checkbox" /> Only check this page</label></div>
+            <div class="field-label-row target-label-row"><label for="target-url">Page URL <span class="required-label">Required</span></label><label class="page-only-option" for="page-only"><input id="page-only" name="pageOnly" type="checkbox" /> Only check this page</label><label class="page-only-option headed-mode-option" for="headed-mode"><input id="headed-mode" name="headedMode" type="checkbox" aria-describedby="headed-mode-hint" /> Use headed mode</label></div>
+            <span id="headed-mode-hint" class="visually-hidden">Opens the isolated browser in a visible window during the assessment.</span>
             <input
               id="target-url"
               name="targetUrl"
@@ -204,11 +205,24 @@
                   <small data-field="pages-count"></small>
                 </div>
                 <div class="report-progress-row" data-field="goal-progress-row" hidden>
-                  <div class="report-progress-heading"><span>Goal progress</span><button class="help-icon" type="button" aria-label="About goal progress" aria-describedby="tip-goal-progress"><span aria-hidden="true">?</span><span id="tip-goal-progress" class="tooltip" role="tooltip">Completed goal fields compared with the fields the assessment expected to complete.</span></button><strong data-field="goal-percent">—</strong></div>
+                  <div class="report-progress-heading"><span>Form fields completed</span><button class="help-icon" type="button" aria-label="About form fields completed" aria-describedby="tip-goal-progress"><span aria-hidden="true">?</span><span id="tip-goal-progress" class="tooltip" role="tooltip">Goal fields completed compared with the fields the assessment expected to complete.</span></button><strong data-field="goal-percent">—</strong></div>
                   <progress data-field="goal-progress-bar" max="100" value="0" aria-label="Goal progress"></progress>
                   <small data-field="goal-count"></small>
                 </div>
+                <div class="report-progress-row" data-field="potential-progress-row" hidden>
+                  <div class="report-progress-heading"><span>Potential coverage gain</span><button class="help-icon" type="button" aria-label="About potential coverage gain" aria-describedby="tip-potential-gain"><span aria-hidden="true">?</span><span id="tip-potential-gain" class="tooltip" role="tooltip">Share of detected keyboard controls not yet reached. This is remaining coverage opportunity, not a predicted accessibility improvement.</span></button><strong data-field="potential-percent">—</strong></div>
+                  <progress data-field="potential-progress" max="100" value="0" aria-label="Potential coverage gain"></progress>
+                  <small data-field="potential-count"></small>
+                </div>
+                <div class="report-progress-row" data-field="validation-progress-row" hidden>
+                  <div class="report-progress-heading"><span>Validation issues found</span><button class="help-icon" type="button" aria-label="About validation issues found" aria-describedby="tip-validation-issues"><span aria-hidden="true">?</span><span id="tip-validation-issues" class="tooltip" role="tooltip">Share of assessed form fields observed in an invalid state at least once. Only fields with a recorded valid or invalid state are counted.</span></button><strong data-field="validation-percent">—</strong></div>
+                  <progress data-field="validation-progress" max="100" value="0" aria-label="Validation issues found"></progress>
+                  <small data-field="validation-count"></small>
+                </div>
               </div>
+              <dl class="run-metric-grid" aria-label="Run time">
+                <div><dt>Run time</dt><dd data-field="run-duration">—</dd></div>
+              </dl>
               <div class="interaction-metric">
                 <span>Keyboard interactions</span>
                 <button class="help-icon" type="button" aria-label="About keyboard interactions" aria-describedby="tip-interactions"><span aria-hidden="true">?</span><span id="tip-interactions" class="tooltip" role="tooltip">Number of keyboard actions recorded during the assessment.</span></button>
