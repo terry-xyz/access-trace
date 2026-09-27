@@ -1081,11 +1081,19 @@ function renderRunReport(record, root) {
     : "Overall coverage score unavailable for this run.");
   setField(report, "coverage-pie-value", showCoverageScore ? `${displayCoverageScore}%` : "—");
   setReportProgressBar(report, "controls", controlsObserved, controlsExpected);
+  const recordedPagesExpected = recordedNumber(coverage?.areasExpected);
+  const sitePageLimit = recordedNumber(assessment.sitePageLimit ?? record?.sitePageLimit);
+  const pagesExpected = assessmentScope === "whole-site"
+    && sitePageLimit !== null
+    && sitePageLimit > 0
+    && recordedPagesExpected !== null
+    ? Math.min(recordedPagesExpected, sitePageLimit)
+    : recordedPagesExpected;
   setReportProgressBar(
     report,
     "pages",
     recordedNumber(coverage?.areasObserved),
-    recordedNumber(coverage?.areasExpected),
+    pagesExpected,
   );
 
   const goalProgress = stats.goalProgress ?? stopping.goalProgress ?? evidence.progress?.goal;

@@ -200,9 +200,14 @@
                   <small data-field="controls-count"></small>
                 </div>
                 <div class="report-progress-row" data-field="pages-progress-row" hidden>
-                  <div class="report-progress-heading"><span>Pages covered</span><button class="help-icon" type="button" aria-label="About pages covered" aria-describedby="tip-pages-covered"><span aria-hidden="true">?</span><span id="tip-pages-covered" class="tooltip" role="tooltip">Pages observed during the assessment, compared with the pages discovered for the selected site.</span></button><strong data-field="pages-percent">—</strong></div>
+                  <div class="report-progress-heading"><span>Pages covered</span><button class="help-icon" type="button" aria-label="About pages covered" aria-describedby="tip-pages-covered"><span aria-hidden="true">?</span><span id="tip-pages-covered" class="tooltip" role="tooltip">Pages inspected out of the pages included by the selected site scan limit.</span></button><strong data-field="pages-percent">—</strong></div>
                   <progress data-field="pages-progress" max="100" value="0" aria-label="Pages covered"></progress>
                   <small data-field="pages-count"></small>
+                </div>
+                <div class="report-progress-row" data-field="validation-progress-row" hidden>
+                  <div class="report-progress-heading"><span>Validation issues found</span><button class="help-icon" type="button" aria-label="About validation issues found" aria-describedby="tip-validation-issues"><span aria-hidden="true">?</span><span id="tip-validation-issues" class="tooltip" role="tooltip">Share of assessed form fields observed in an invalid state at least once. Only fields with a recorded valid or invalid state are counted.</span></button><strong data-field="validation-percent">—</strong></div>
+                  <progress data-field="validation-progress" max="100" value="0" aria-label="Validation issues found"></progress>
+                  <small data-field="validation-count"></small>
                 </div>
                 <div class="report-progress-row" data-field="goal-progress-row" hidden>
                   <div class="report-progress-heading"><span>Form fields completed</span><button class="help-icon" type="button" aria-label="About form fields completed" aria-describedby="tip-goal-progress"><span aria-hidden="true">?</span><span id="tip-goal-progress" class="tooltip" role="tooltip">Goal fields completed compared with the fields the assessment expected to complete.</span></button><strong data-field="goal-percent">—</strong></div>
@@ -210,14 +215,9 @@
                   <small data-field="goal-count"></small>
                 </div>
                 <div class="report-progress-row" data-field="potential-progress-row" hidden>
-                  <div class="report-progress-heading"><span>Potential coverage gain</span><button class="help-icon" type="button" aria-label="About potential coverage gain" aria-describedby="tip-potential-gain"><span aria-hidden="true">?</span><span id="tip-potential-gain" class="tooltip" role="tooltip">Share of detected keyboard controls not yet reached. This is remaining coverage opportunity, not a predicted accessibility improvement.</span></button><strong data-field="potential-percent">—</strong></div>
-                  <progress data-field="potential-progress" max="100" value="0" aria-label="Potential coverage gain"></progress>
+                  <div class="report-progress-heading"><span>Remaining coverage gap</span><button class="help-icon" type="button" aria-label="About the remaining coverage gap" aria-describedby="tip-potential-gain"><span aria-hidden="true">?</span><span id="tip-potential-gain" class="tooltip" role="tooltip">Share of detected keyboard controls not reached during this assessment.</span></button><strong data-field="potential-percent">—</strong></div>
+                  <progress data-field="potential-progress" max="100" value="0" aria-label="Remaining coverage gap"></progress>
                   <small data-field="potential-count"></small>
-                </div>
-                <div class="report-progress-row" data-field="validation-progress-row" hidden>
-                  <div class="report-progress-heading"><span>Validation issues found</span><button class="help-icon" type="button" aria-label="About validation issues found" aria-describedby="tip-validation-issues"><span aria-hidden="true">?</span><span id="tip-validation-issues" class="tooltip" role="tooltip">Share of assessed form fields observed in an invalid state at least once. Only fields with a recorded valid or invalid state are counted.</span></button><strong data-field="validation-percent">—</strong></div>
-                  <progress data-field="validation-progress" max="100" value="0" aria-label="Validation issues found"></progress>
-                  <small data-field="validation-count"></small>
                 </div>
               </div>
               <dl class="run-metric-grid" aria-label="Run time">

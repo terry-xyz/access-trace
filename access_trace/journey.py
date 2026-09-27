@@ -322,17 +322,25 @@ def _site_page_key(value: Any) -> Optional[str]:
         return None
 
 
-def _combined_site_coverage(pages: Dict[str, Dict[str, Any]], pending: int) -> Dict[str, Any]:
+def _combined_site_coverage(
+    pages: Dict[str, Dict[str, Any]], pending: int, site_page_limit: int
+) -> Dict[str, Any]:
     controls_observed = sum(item.get("controlsObserved", 0) for item in pages.values())
     controls_expected = sum(item.get("controlsExpected", 0) for item in pages.values())
-    complete = pending == 0 and all(
+    discovered_count = len(pages) + pending
+    areas_expected = (
+        discovered_count
+        if site_page_limit == 0
+        else min(discovered_count, site_page_limit)
+    )
+    complete = len(pages) >= areas_expected and all(
         item.get("completed") is True for item in pages.values()
     )
     return {
         "status": "completed" if complete else "partial",
         "completed": complete,
         "areasObserved": len(pages),
-        "areasExpected": len(pages) + pending,
+        "areasExpected": areas_expected,
         "controlsObserved": controls_observed,
         "controlsExpected": controls_expected,
         "scorePercentage": (
@@ -1588,7 +1596,7 @@ def _execute_assessment(
                     },
                 )
             current["coverage"] = _combined_site_coverage(
-                site_page_coverage, len(pending_site_pages)
+                site_page_coverage, len(pending_site_pages), site_page_limit
             )
             _complete_with_screenshot(
                 run, current, started, browser, evidence_directory
