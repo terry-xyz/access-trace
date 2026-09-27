@@ -80,7 +80,7 @@ html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: aut
 html { background: #050505; }
 body {
   min-height: 100dvh;
-  cursor: url("../assets/access-trace-default-cursor.png") 1 1, auto;
+  cursor: url("../assets/access-trace-default-cursor.png?v=2") 1 1, auto;
   color: #f4f4f4;
   background: #050505;
   font-family: Inter, "Segoe UI", Arial, sans-serif;
@@ -131,11 +131,11 @@ a[href],
 summary,
 .page-only-option,
 .page-only-option input,
-[role="button"] { cursor: url("../assets/access-trace-hand-cursor.png") 1 1, pointer; }
+[role="button"] { cursor: url("../assets/access-trace-hand-cursor.png?v=2") 7 3, pointer; }
 .field-group input:hover,
 .field-group textarea:hover,
 .field-group select:hover,
-.page-limit-option input:hover { cursor: url("../assets/access-trace-hand-cursor.png") 1 1, pointer; }
+.page-limit-option input:hover { cursor: url("../assets/access-trace-hand-cursor.png?v=2") 7 3, pointer; }
 .site-header {
   position: fixed;
   z-index: 10;
@@ -242,7 +242,7 @@ summary,
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
-  cursor: url("../assets/access-trace-hand-cursor.png") 1 1, pointer;
+  cursor: url("../assets/access-trace-hand-cursor.png?v=2") 7 3, pointer;
 }
 .page-only-option input { width: 13px; height: 13px; min-height: 0; margin: 0; accent-color: var(--brand-emerald-light); }
 .page-only-option input:focus:not(:focus-visible) { outline: none; box-shadow: none; }
@@ -506,7 +506,7 @@ main#main-content.page-shell { width: 100%; max-width: none; }
   text-align: center;
   text-transform: uppercase;
   text-decoration: none;
-  cursor: url("../assets/access-trace-hand-cursor.png") 1 1, pointer;
+  cursor: url("../assets/access-trace-hand-cursor.png?v=2") 7 3, pointer;
 }
 .live-result-actions .primary-button:hover:not(:disabled),
 .live-result-actions .secondary-button:hover:not(:disabled),
@@ -528,7 +528,7 @@ main#main-content.page-shell { width: 100%; max-width: none; }
   background: transparent;
   box-shadow: none;
 }
-.run-report .live-evidence-details > summary { padding: 12px 0 0; border: 0; background: transparent; color: #aaa; cursor: url("../assets/access-trace-hand-cursor.png") 1 1, pointer; }
+.run-report .live-evidence-details > summary { padding: 12px 0 0; border: 0; background: transparent; color: #aaa; cursor: url("../assets/access-trace-hand-cursor.png?v=2") 7 3, pointer; }
 .run-report .live-evidence-lists { grid-template-columns: 1fr; padding: 12px 0 0; }
 .run-report .live-evidence-lists section:last-child { grid-column: auto; }
 
