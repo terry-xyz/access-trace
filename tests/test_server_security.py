@@ -50,7 +50,7 @@ class ServerSecurityTests(unittest.TestCase):
             self.assertNotIn("allow-same-origin", response.headers["Content-Security-Policy"])
 
     def test_site_file_safety_module_is_served(self):
-        for module_path in ("/src/site-files.mjs",):
+        for module_path in ("/src/site-files.mjs", "/src/source-context.mjs", "/src/source-apply.mjs"):
             with self.subTest(module_path=module_path):
                 with urlopen(self.base_url + module_path, timeout=2) as response:
                     self.assertEqual(200, response.status)

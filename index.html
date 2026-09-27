@@ -108,7 +108,7 @@
             <h3 id="privacy-summary-heading">AccessTrace doesn’t use your data for advertising or tracking.</h3>
             <ul>
               <li>Live runs send limited page details to your signed-in Codex. Masked demo screenshots may be shared; uploaded-page screenshots are not.</li>
-              <li>Local page files you choose are uploaded to this local AccessTrace server and kept isolated from external network requests.</li>
+              <li>Local page files you choose are uploaded to this local AccessTrace server and kept isolated from external network requests. Code files are sent to your signed-in Codex only after you press Fix.</li>
               <li>Run reports are saved on this machine in <code>.access-trace/runs/</code>.</li>
             </ul>
           </section>
@@ -149,6 +149,24 @@
 
         <div id="live-result" class="live-result" hidden>
           <div id="live-run-report" class="run-report-root"></div>
+          <section id="source-review-result" class="source-review-result" hidden aria-labelledby="source-review-heading">
+            <div class="source-review-heading"><div><p class="card-kicker">FIX WORKFLOW</p><h3 id="source-review-heading">Source review</h3></div><span id="source-review-status" class="source-review-status"></span></div>
+            <p id="source-review-summary"></p>
+            <div id="source-review-root-cause-block" hidden><strong>Root cause</strong><p id="source-review-root-cause"></p></div>
+            <div id="source-review-proposed-fix-block" hidden><strong>Suggested fix</strong><p id="source-review-proposed-fix"></p></div>
+            <details class="source-context-picker">
+              <summary>Choose source files</summary>
+              <div class="source-context-pickers">
+                <div><label for="source-context-files">Choose files</label><input id="source-context-files" type="file" multiple /></div>
+                <div><label for="source-context-directory">Choose a source folder</label><input id="source-context-directory" type="file" webkitdirectory directory multiple /></div>
+              </div>
+              <p id="source-context-status" class="scope-status" role="status" aria-live="polite">No files selected.</p>
+            </details>
+            <div id="source-review-relevant-block" hidden><strong id="source-review-files-label">Files to change</strong><ul id="source-review-relevant-paths"></ul></div>
+            <div class="source-review-actions"><button id="source-review-fix" class="primary-button" type="button" hidden>Fix</button><button id="source-review-approve" class="primary-button" type="button" hidden>Approve and apply</button><p id="source-review-action-status" role="status" aria-live="polite"></p></div>
+            <details id="source-review-patch-block" hidden><summary>Review patch</summary><pre id="source-review-patch"></pre></details>
+            <a id="download-source-patch" class="secondary-button" hidden>Download patch</a>
+          </section>
           <div class="live-result-actions">
             <a id="download-live-record" class="secondary-button" hidden>Download run record</a>
             <button id="new-assessment" class="primary-button" type="button">New assessment <span aria-hidden="true">→</span></button>

@@ -4,6 +4,8 @@ import {
   validateTargetUrl,
 } from "./assessment.mjs";
 import { filterSensitiveSiteFiles } from "./site-files.mjs";
+import { isSensitiveSourcePath } from "./source-context.mjs";
+import { canApproveSourceReview, getSourceReviewActions, hasPersistedSourceBaseline, isSafeSourcePath, validateApplicableFiles } from "./source-apply.mjs";
 
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
@@ -16,6 +18,25 @@ const targetSiteStatus = document.querySelector("#target-site-status");
 const recognizedTarget = document.querySelector("#recognized-target");
 const goalInput = document.querySelector("#assessment-goal");
 const simulationInput = document.querySelector("#simulation-mode");
+const sourceContextFilesInput = document.querySelector("#source-context-files");
+const sourceContextDirectoryInput = document.querySelector("#source-context-directory");
+const sourceContextStatus = document.querySelector("#source-context-status");
+const sourceReviewResult = document.querySelector("#source-review-result");
+const sourceReviewStatus = document.querySelector("#source-review-status");
+const sourceReviewSummary = document.querySelector("#source-review-summary");
+const sourceReviewRootCauseBlock = document.querySelector("#source-review-root-cause-block");
+const sourceReviewRootCause = document.querySelector("#source-review-root-cause");
+const sourceReviewProposedFixBlock = document.querySelector("#source-review-proposed-fix-block");
+const sourceReviewProposedFix = document.querySelector("#source-review-proposed-fix");
+const sourceReviewRelevantBlock = document.querySelector("#source-review-relevant-block");
+const sourceReviewRelevantPaths = document.querySelector("#source-review-relevant-paths");
+const sourceReviewFilesLabel = document.querySelector("#source-review-files-label");
+const sourceReviewPatchBlock = document.querySelector("#source-review-patch-block");
+const sourceReviewPatch = document.querySelector("#source-review-patch");
+const sourceReviewFixButton = document.querySelector("#source-review-fix");
+const sourceReviewApproveButton = document.querySelector("#source-review-approve");
+const sourceReviewActionStatus = document.querySelector("#source-review-action-status");
+const sourcePatchDownload = document.querySelector("#download-source-patch");
 const cancelLiveAssessmentButton = document.querySelector("#cancel-live-assessment");
 const liveAssessmentSection = document.querySelector("#live-assessment");
 const liveAssessmentStatus = document.querySelector("#live-assessment-status");
@@ -43,6 +64,12 @@ const navButtons = {
   report: document.querySelector("#nav-report"),
 };
 let liveRecordUrl;
+let sourcePatchUrl;
+let selectedSourceFiles = [];
+let latestSourceSelection = [];
+let uploadedLocalSourceFiles = [];
+let reviewedSourceFiles = [];
+let sourceReviewBusy = false;
 let reportRenderSequence = 0;
 let activeLiveRunId = null;
 let workflowInProgress = false;
@@ -121,6 +148,21 @@ window.visualViewport?.addEventListener("scroll", repositionOpenHelpTooltips);
 const MAX_TARGET_SITE_FILES = 200;
 const MAX_TARGET_SITE_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_TARGET_SITE_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_SOURCE_CONTEXT_FILE_BYTES = 512 * 1024;
+const MAX_SOURCE_CONTEXT_REQUEST_BYTES = 5 * 1024 * 1024;
+const MAX_SOURCE_CONTEXT_FILES = 200;
+const SOURCE_CONTEXT_GENERATED_DIRECTORIES = new Set([
+  ".git", ".hg", ".svn", ".next", ".nuxt", ".venv", ".pytest_cache",
+  ".mypy_cache", ".ruff_cache", ".cache", "__pycache__", "bower_components",
+  "build", "coverage", "dist", "node_modules", "out", "Pods", "site-packages",
+  "target", "venv", "vendor",
+]);
+const SOURCE_CONTEXT_BINARY_EXTENSIONS = new Set([
+  ".7z", ".aac", ".avi", ".bin", ".bmp", ".class", ".dll", ".dylib",
+  ".eot", ".exe", ".flac", ".gif", ".gz", ".ico", ".jpeg", ".jpg",
+  ".mp3", ".mp4", ".otf", ".pdf", ".png", ".so", ".sqlite", ".tar",
+  ".ttf", ".wav", ".webm", ".webp", ".woff", ".woff2", ".zip",
+]);
 /** setActiveView keeps one focused app screen visible without scrolling the document. */
 function setActiveView(view) {
   const activeView = view === "live" ? "report" : view;
@@ -150,6 +192,7 @@ async function loadLatestRunReport() {
     if (!record || typeof record.id !== "string" || !record.id) return;
     latestRunRecord = record;
     renderRunReport(record, liveRunReport);
+    renderSourceReview(record, null);
     const serialized = JSON.stringify(record, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -288,22 +331,13 @@ function setRunStage(value, label, message) {
   liveProgressPercent.textContent = String(value);
   liveProgressLabel.textContent = label;
   if (message) {
-    const entry = document.createElement("li");
-    const time = document.createElement("time");
-    time.textContent = new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    }).format(new Date());
-    const text = document.createElement("span");
-    text.textContent = message;
-    entry.append(time, text);
-    terminalLog.append(entry);
+    appendTerminalEntry(message);
   }
 }
 
-/** appendTerminalActivity adds one safe, timestamped line to the live run log. */
-function appendTerminalActivity(message) {
+/** appendTerminalEntry adds a safe log line and follows new output only when already at the bottom. */
+function appendTerminalEntry(message) {
+  const followsOutput = terminalLog.scrollHeight - terminalLog.scrollTop - terminalLog.clientHeight < 24;
   const entry = document.createElement("li");
   const time = document.createElement("time");
   time.textContent = new Intl.DateTimeFormat(undefined, {
@@ -315,7 +349,12 @@ function appendTerminalActivity(message) {
   text.textContent = message;
   entry.append(time, text);
   terminalLog.append(entry);
-  entry.scrollIntoView({ block: "nearest" });
+  if (followsOutput) terminalLog.scrollTop = terminalLog.scrollHeight;
+}
+
+/** appendTerminalActivity adds one safe, timestamped line to the live run log. */
+function appendTerminalActivity(message) {
+  appendTerminalEntry(message);
 }
 
 /** setError keeps the visible message and the field's programmatic invalid state aligned. */
@@ -399,6 +438,369 @@ function updateRecognizedTargetLabel() {
     : "No page URL selected";
 }
 
+function collectSourceSelection() {
+  const entries = [...(sourceContextFilesInput.files ?? [])].map((file) => ({ file, path: file.name, selectionType: "file" }));
+  for (const file of sourceContextDirectoryInput.files ?? []) {
+    const relative = file.webkitRelativePath || file.name;
+    entries.push({ file, path: relative.includes("/") ? relative.slice(relative.indexOf("/") + 1) : relative, selectionType: "directory" });
+  }
+  return entries;
+}
+
+function sourceSkipReason(entry) {
+  const parts = entry.path.split("/");
+  if (!entry.path || entry.path.startsWith("/") || entry.path.includes("\\") || entry.path.includes("\0") || parts.some((part) => !part || part === "." || part === "..")) return "unsafe-path";
+  if (parts.slice(0, -1).some((part) => SOURCE_CONTEXT_GENERATED_DIRECTORIES.has(part))) return "generated-directory";
+  if (isSensitiveSourcePath(entry.path)) return "sensitive-file";
+  if (entry.file.size > MAX_SOURCE_CONTEXT_FILE_BYTES) return "file-size-limit";
+  const name = parts.at(-1).toLowerCase();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  if (SOURCE_CONTEXT_BINARY_EXTENSIONS.has(extension)) return "binary-content";
+  return null;
+}
+
+function analyzeSourceSelection(entries) {
+  const skipped = [];
+  const candidates = [];
+  const seen = new Set();
+  const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path));
+  for (const entry of sorted) {
+    const reason = sourceSkipReason(entry);
+    if (reason) { skipped.push({ path: entry.path, reason }); continue; }
+    if (seen.has(entry.path)) { skipped.push({ path: entry.path, reason: "duplicate-path" }); continue; }
+    seen.add(entry.path);
+    candidates.push(entry);
+  }
+  for (const entry of candidates.slice(MAX_SOURCE_CONTEXT_FILES)) skipped.push({ path: entry.path, reason: "file-count-limit" });
+  return { selectedCount: entries.length, candidates: candidates.slice(0, MAX_SOURCE_CONTEXT_FILES), skipped };
+}
+
+function updateSourceContextSelection() {
+  const explicit = collectSourceSelection();
+  selectedSourceFiles = explicit.length ? explicit : uploadedLocalSourceFiles;
+  const selection = analyzeSourceSelection(selectedSourceFiles);
+  sourceContextStatus.textContent = selection.selectedCount
+    ? `${selection.selectedCount} file${selection.selectedCount === 1 ? "" : "s"} selected.`
+    : "No files selected.";
+  if (latestRunRecord) {
+    latestSourceSelection = ["BLOCKED", "COMPLETED", "INCONCLUSIVE"].includes(String(latestRunRecord.status).toUpperCase()) ? selection.candidates : [];
+    renderSourceReview(latestRunRecord, latestSourceSelection.length ? selection : null);
+  }
+}
+
+async function prepareSourceContext(entries) {
+  const selection = analyzeSourceSelection(entries);
+  const files = [];
+  const skipped = [...selection.skipped];
+  const encoder = new TextEncoder();
+  let requestBytes = encoder.encode('{"sourceContext":{"files":[]}}').byteLength;
+  let readCount = 0;
+  for (const entry of selection.candidates) {
+    let content;
+    try {
+      const bytes = await entry.file.arrayBuffer();
+      readCount += 1;
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      skipped.push({ path: entry.path, reason: "unsupported-text" });
+      continue;
+    }
+    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(content)) {
+      skipped.push({ path: entry.path, reason: "binary-content" });
+      continue;
+    }
+    const candidate = { path: entry.path, content };
+    const size = encoder.encode(JSON.stringify(candidate)).byteLength + (files.length ? 1 : 0);
+    if (requestBytes + size > MAX_SOURCE_CONTEXT_REQUEST_BYTES) {
+      skipped.push({ path: entry.path, reason: "request-size-limit" });
+      continue;
+    }
+    requestBytes += size;
+    files.push(candidate);
+  }
+  return { files, selectedCount: selection.selectedCount, readCount, skipped, body: JSON.stringify({ sourceContext: { files } }) };
+}
+
+function appendSafeTextItems(list, entries) {
+  const fragment = document.createDocumentFragment();
+  for (const text of entries) { const item = document.createElement("li"); item.textContent = text; fragment.append(item); }
+  list.replaceChildren(fragment);
+}
+
+function renderSourceReview(record, selection) {
+  const review = record?.sourceReview && typeof record.sourceReview === "object" ? record.sourceReview : {};
+  const status = String(review.status || "NOT_REQUESTED").toUpperCase();
+  const hasSelection = Boolean(selection?.candidates?.length);
+  const canWriteFiles = typeof window.showDirectoryPicker === "function"
+    || typeof window.showOpenFilePicker === "function";
+  const terminal = ["BLOCKED", "COMPLETED", "INCONCLUSIVE"].includes(String(record?.status).toUpperCase());
+  const coverage = record?.evidenceHandoff?.stats?.coverage ?? record?.stoppingPoint?.coverage ?? {};
+  const observed = Number.isFinite(coverage.controlsObserved) ? coverage.controlsObserved : coverage.areasObserved;
+  const expected = Number.isFinite(coverage.controlsExpected) ? coverage.controlsExpected : coverage.areasExpected;
+  const score = Number.isFinite(coverage.scorePercentage)
+    ? coverage.scorePercentage
+    : Number.isFinite(observed) && Number.isFinite(expected) && expected > 0
+      ? Math.round((observed / expected) * 100) : null;
+  const needsFix = score !== null && score < 100;
+  const hasSavedBaseline = status === "PATCH_READY" && hasPersistedSourceBaseline(review);
+  const actions = getSourceReviewActions(status, hasSelection, reviewedSourceFiles.length > 0 || hasSavedBaseline);
+  sourceReviewResult.hidden = !actions.showSavedReview && !(terminal && needsFix);
+  if (sourceReviewResult.hidden) return;
+  const labels = { NOT_REQUESTED: "Ready to review", IN_PROGRESS: "Review in progress", PATCH_READY: "Patch ready", NO_PATCH: "No patch produced", FAILED: "Review failed", CANCELLED: "Review cancelled" };
+  sourceReviewFixButton.hidden = !actions.showFix && !(terminal && needsFix && status === "NOT_REQUESTED");
+  sourceReviewFixButton.textContent = status === "NOT_REQUESTED" ? "Fix" : "Retry Fix";
+  sourceReviewFixButton.disabled = sourceReviewBusy || !hasSelection;
+  sourceReviewApproveButton.hidden = !actions.showApprove || !canWriteFiles;
+  sourceReviewApproveButton.disabled = sourceReviewBusy;
+  sourceReviewStatus.textContent = !hasSelection && needsFix && status === "NOT_REQUESTED" ? "Source files needed" : labels[status] || "Review ended";
+  sourceReviewStatus.dataset.status = status.toLowerCase();
+  sourceReviewSummary.textContent = typeof review.summary === "string" && review.summary
+    ? review.summary
+    : hasSelection ? "Ready to review."
+      : "Select source files, then press Fix.";
+  if (status === "PATCH_READY" && !canWriteFiles) {
+    sourceReviewActionStatus.textContent = "This browser blocks direct file writes. Download the patch to apply the reviewed changes.";
+  }
+  sourceReviewRootCauseBlock.hidden = typeof review.rootCause !== "string" || !review.rootCause.trim();
+  sourceReviewRootCause.textContent = sourceReviewRootCauseBlock.hidden ? "" : review.rootCause;
+  sourceReviewProposedFixBlock.hidden = typeof review.proposedFix !== "string" || !review.proposedFix.trim();
+  sourceReviewProposedFix.textContent = sourceReviewProposedFixBlock.hidden ? "" : review.proposedFix;
+  const patch = typeof review.patch === "string" ? review.patch : "";
+  const changedPaths = [...patch.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map(([, , path]) => path);
+  const paths = status === "PATCH_READY"
+    ? changedPaths
+    : Array.isArray(review.relevantPaths) ? review.relevantPaths.filter((path) => typeof path === "string") : [];
+  sourceReviewRelevantBlock.hidden = !paths.length;
+  sourceReviewFilesLabel.textContent = status === "PATCH_READY" ? "Files to change" : "Files reviewed";
+  appendSafeTextItems(sourceReviewRelevantPaths, paths);
+  sourceReviewPatchBlock.hidden = status !== "PATCH_READY" || !patch.trim();
+  sourceReviewPatch.textContent = sourceReviewPatchBlock.hidden ? "" : patch;
+  sourcePatchDownload.hidden = sourceReviewPatchBlock.hidden;
+  if (sourcePatchUrl) URL.revokeObjectURL(sourcePatchUrl);
+  sourcePatchUrl = null;
+  if (!sourceReviewPatchBlock.hidden) {
+    sourcePatchUrl = URL.createObjectURL(new Blob([patch], { type: "text/x-diff;charset=utf-8" }));
+    sourcePatchDownload.href = sourcePatchUrl;
+    sourcePatchDownload.download = "access-trace-source-review.patch";
+  } else sourcePatchDownload.removeAttribute("href");
+}
+
+async function handleSourceFix() {
+  if (!latestRunRecord?.id || sourceReviewBusy || workflowInProgress || !latestSourceSelection.length) return;
+  const runId = latestRunRecord.id;
+  sourceReviewBusy = true;
+  sourceReviewFixButton.disabled = true;
+  sourceReviewActionStatus.textContent = "Reviewing files…";
+  try {
+    const prepared = await prepareSourceContext(latestSourceSelection);
+    if (!prepared.files.length) throw new Error("No eligible text files were available for review.");
+    if (latestRunRecord?.id !== runId) throw new Error("The active report changed. Run Fix again on the current report.");
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-review`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: prepared.body,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message || "The source review could not be completed.");
+    if (latestRunRecord?.id !== runId || result?.id !== runId) throw new Error("The source review response did not match the active report.");
+    latestRunRecord = result;
+    reviewedSourceFiles = prepared.files.map(({ path, content }) => ({ path, content }));
+    renderSourceReview(result, { ...prepared, candidates: latestSourceSelection });
+    const serialized = JSON.stringify(result, null, 2);
+    liveRecordJson.textContent = serialized;
+    if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
+    liveRecordUrl = URL.createObjectURL(new Blob([serialized], { type: "application/json" }));
+    liveRecordDownload.href = liveRecordUrl;
+    liveRecordDownload.hidden = false;
+    sourceReviewActionStatus.textContent = result.sourceReview?.status === "FAILED"
+      ? "Review failed. You can retry Fix."
+      : result.sourceReview?.status === "PATCH_READY"
+        && typeof window.showDirectoryPicker !== "function"
+        && typeof window.showOpenFilePicker !== "function"
+        ? "Review complete. This browser blocks direct file writes; download the patch to apply it manually."
+        : "Review the patch, then approve.";
+    sourceReviewResult.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (error) {
+    sourceReviewResult.hidden = false;
+    sourceReviewStatus.textContent = "Review failed";
+    sourceReviewSummary.textContent = error instanceof Error ? error.message : "The source review could not be completed.";
+    sourceReviewFixButton.hidden = false;
+    sourceReviewFixButton.textContent = "Retry Fix";
+    sourceReviewApproveButton.hidden = true;
+    sourceReviewActionStatus.textContent = "You can retry Fix.";
+  } finally {
+    sourceReviewBusy = false;
+    sourceReviewFixButton.disabled = false;
+    sourceReviewApproveButton.disabled = false;
+  }
+}
+
+async function lookupDirectoryFile(rootHandle, path) {
+  if (!isSafeSourcePath(path)) throw new Error(`Unsafe file path in approved patch: ${path}`);
+  const parts = path.split("/");
+  let directory = rootHandle;
+  for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+  return directory.getFileHandle(parts.at(-1));
+}
+
+async function sha256Text(value) {
+  if (!window.crypto?.subtle) throw new Error("This browser cannot verify the saved source baseline. Download the patch to apply it manually.");
+  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function refreshUploadedAssessmentCopy(changedFiles) {
+  let target;
+  try { target = new URL(targetInput.value); } catch { return false; }
+  const match = target.pathname.match(/^\/sites\/[^/]+\/(.+)$/);
+  if (!match || !uploadedLocalSourceFiles.length) return false;
+  const entrypoint = decodeURIComponent(match[1]);
+  const byPath = new Map(changedFiles.map((file) => [file.path, file]));
+  if ([...byPath.keys()].some((path) => !uploadedLocalSourceFiles.some((file) => file.path === path))) return false;
+
+  const entries = [];
+  for (const original of uploadedLocalSourceFiles) {
+    const changed = byPath.get(original.path);
+    const file = changed ? await changed.handle.getFile() : original.file;
+    entries.push({ file, path: original.path, selectionType: "page" });
+  }
+  if (!entries.some((entry) => entry.path === entrypoint)) return false;
+
+  const body = new FormData();
+  body.append("entrypoint", entrypoint);
+  for (const { file, path } of entries) body.append("files", file, path);
+  const response = await fetch("/api/sites", { method: "POST", body });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result?.error?.message || "Assessment copy could not be refreshed.");
+
+  targetInput.value = result.targetUrl;
+  uploadedLocalSourceFiles = entries;
+  updateRecognizedTargetLabel();
+  clearTargetValidationError();
+  targetSiteStatus.textContent = "Assessment copy updated. Run it again to verify the fix.";
+  return true;
+}
+
+async function handleSourceFixApproval() {
+  if (!latestRunRecord?.id || sourceReviewBusy || !canApproveSourceReview(reviewedSourceFiles.length, latestRunRecord?.sourceReview)) return;
+  const runId = latestRunRecord.id;
+  const review = latestRunRecord.sourceReview;
+  const reviewSnapshot = JSON.stringify(review);
+  const baselines = reviewedSourceFiles.map(({ path, content }) => ({ path, content }));
+  const assertCurrent = () => {
+    if (latestRunRecord?.id !== runId || latestRunRecord.sourceReview !== review || JSON.stringify(review) !== reviewSnapshot) {
+      throw new Error("The report or proposal changed during approval. Review it again before applying.");
+    }
+  };
+  const canPickDirectory = typeof window.showDirectoryPicker === "function";
+  const canPickFiles = typeof window.showOpenFilePicker === "function";
+  if (!canPickDirectory && !canPickFiles) {
+    sourceReviewActionStatus.textContent = "This browser does not allow AccessTrace to write selected files. Use Download patch to apply the reviewed changes.";
+    return;
+  }
+  sourceReviewBusy = true;
+  sourceReviewFixButton.disabled = true;
+  sourceReviewApproveButton.disabled = true;
+  let root;
+  try {
+    const fileHandles = canPickDirectory ? null : await window.showOpenFilePicker({ multiple: true });
+    if (canPickDirectory) {
+      root = await window.showDirectoryPicker({ mode: "readwrite" });
+      let permission = typeof root.queryPermission === "function" ? await root.queryPermission({ mode: "readwrite" }) : "prompt";
+      if (permission !== "granted" && typeof root.requestPermission === "function") permission = await root.requestPermission({ mode: "readwrite" });
+      if (permission !== "granted") throw new Error("Write access was not granted. No files were changed.");
+    }
+    assertCurrent();
+    let sources = baselines;
+    const handles = new Map();
+    if (!sources.length) {
+      const paths = Array.isArray(review.relevantPaths) ? review.relevantPaths : [];
+      const digests = review.sourceDigests || {};
+      if (!paths.length || paths.some((path) => typeof digests[path] !== "string")) throw new Error("The saved proposal has no verifiable source baseline. Download the patch to apply it manually.");
+      sources = [];
+      for (const path of paths) {
+        const candidates = canPickDirectory
+          ? [await lookupDirectoryFile(root, path)]
+          : fileHandles.filter((handle) => handle.name === path.split("/").at(-1));
+        if (candidates.length !== 1) throw new Error(`Select exactly one reviewed file named ${path.split("/").at(-1)}. No files were changed.`);
+        const handle = candidates[0];
+        if (!canPickDirectory) {
+          let permission = typeof handle.queryPermission === "function" ? await handle.queryPermission({ mode: "readwrite" }) : "prompt";
+          if (permission !== "granted" && typeof handle.requestPermission === "function") permission = await handle.requestPermission({ mode: "readwrite" });
+          if (permission !== "granted") throw new Error(`Write access was not granted for ${path}. No files were changed.`);
+        }
+        const content = await (await handle.getFile()).text();
+        if (await sha256Text(content) !== digests[path]) throw new Error(`${path} differs from the saved review. No files were changed.`);
+        sources.push({ path, content });
+        handles.set(path, handle);
+      }
+    }
+    for (const baseline of sources) {
+      let handle = handles.get(baseline.path);
+      if (!handle) {
+        const candidates = canPickDirectory
+          ? [await lookupDirectoryFile(root, baseline.path)]
+          : fileHandles.filter((item) => item.name === baseline.path.split("/").at(-1));
+        if (candidates.length !== 1) throw new Error(`Select exactly one reviewed file named ${baseline.path.split("/").at(-1)}. No files were changed.`);
+        [handle] = candidates;
+        if (!canPickDirectory) {
+          let permission = typeof handle.queryPermission === "function" ? await handle.queryPermission({ mode: "readwrite" }) : "prompt";
+          if (permission !== "granted" && typeof handle.requestPermission === "function") permission = await handle.requestPermission({ mode: "readwrite" });
+          if (permission !== "granted") throw new Error(`Write access was not granted for ${baseline.path}. No files were changed.`);
+        }
+      }
+      if (await (await handle.getFile()).text() !== baseline.content) throw new Error(`${baseline.path} changed since review. No files were changed; run Fix again.`);
+      handles.set(baseline.path, handle);
+    }
+    assertCurrent();
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-fix-approve`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceContext: { files: sources } }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message || "The approved patch could not be prepared.");
+    assertCurrent();
+    const changedFiles = validateApplicableFiles(sources, result.appliableFiles);
+    const writable = [];
+    for (const changed of changedFiles) {
+      const baseline = sources.find((file) => file.path === changed.path);
+      const handle = handles.get(changed.path);
+      if (!baseline || !handle) throw new Error(`The patch refers to an unreviewed file: ${changed.path}. No files were changed.`);
+      if (await (await handle.getFile()).text() !== baseline.content) throw new Error(`${changed.path} changed since review. No files were changed; run Fix again.`);
+      writable.push({ path: changed.path, content: changed.content, handle });
+    }
+    const written = [];
+    for (const target of writable) {
+      const stream = await target.handle.createWritable();
+      try {
+        await stream.write(target.content);
+        await stream.close();
+        written.push(target.path);
+      } catch (error) {
+        try { await stream.abort(error); } catch {}
+        const detail = error instanceof Error ? error.message : "Write failed.";
+        throw new Error(written.length
+          ? `Writing stopped at ${target.path}; already changed: ${written.join(", ")}. ${detail}`
+          : `Could not write ${target.path}; no files were changed. ${detail}`);
+      }
+    }
+    sourceReviewStatus.textContent = "Retest needed";
+    sourceReviewStatus.dataset.status = "applied";
+    sourceReviewApproveButton.hidden = true;
+    try {
+      const refreshed = await refreshUploadedAssessmentCopy(writable);
+      sourceReviewActionStatus.textContent = refreshed
+        ? `Applied to ${written.join(", ")}. Assessment copy updated; run it again to verify.`
+        : `Applied to ${written.join(", ")}. Re-upload the changed files before retesting.`;
+    } catch {
+      sourceReviewActionStatus.textContent = `Applied to ${written.join(", ")}; assessment copy not refreshed. Re-upload the changed files to retest.`;
+    }
+  } catch (error) {
+    sourceReviewActionStatus.textContent = error instanceof Error ? error.message : "The patch could not be applied. No files were changed.";
+  } finally {
+    sourceReviewBusy = false;
+    sourceReviewFixButton.disabled = false;
+    sourceReviewApproveButton.disabled = false;
+  }
+}
+
 /** uploadLocalPage makes chosen HTML and its relative assets available at an isolated local URL. */
 async function uploadLocalPage(input) {
   const selected = [...(input.files ?? [])];
@@ -443,6 +845,8 @@ async function uploadLocalPage(input) {
     const result = await response.json();
     if (!response.ok) throw new Error(result?.error?.message || "Page files could not be uploaded.");
     targetInput.value = result.targetUrl;
+    uploadedLocalSourceFiles = entries.map(({ file, path }) => ({ file, path, selectionType: "page" }));
+    updateSourceContextSelection();
     updateRecognizedTargetLabel();
     clearTargetValidationError();
     clearStaleViews();
@@ -784,7 +1188,6 @@ function renderRunReport(record, root) {
   const proposedFix = typeof reporting.proposedFix === "string" ? reporting.proposedFix.trim() : "";
   fixBlock.hidden = !availableReview || !proposedFix;
   if (!fixBlock.hidden) setField(report, "fix", proposedFix);
-
   const referencesList = report.querySelector('[data-field="review-references"]');
   const references = availableReview && Array.isArray(reporting.evidenceReferences)
     ? reporting.evidenceReferences
@@ -797,11 +1200,13 @@ function renderRunReport(record, root) {
 async function handleLiveAssessment() {
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
+  const sourceSelectionForRun = analyzeSourceSelection(selectedSourceFiles).candidates;
 
   setActiveView("live");
   setWorkflowBusy(true);
   liveTerminal.hidden = false;
   liveResult.hidden = true;
+  sourceReviewResult.hidden = true;
   terminalLog.replaceChildren();
   setRunStage(25, "Settings checked", "Page URL and assessment settings checked.");
   liveAssessmentStatus.textContent = "Creating a fresh local run…";
@@ -843,7 +1248,13 @@ async function handleLiveAssessment() {
     setRunStage(100, "Result saved", `Run saved with status ${result.status}.`);
     liveAssessmentStatus.textContent = `Run ${result.id} finished: ${result.status}.`;
     latestRunRecord = result;
+    latestSourceSelection = ["BLOCKED", "COMPLETED", "INCONCLUSIVE"].includes(String(result.status).toUpperCase())
+      ? sourceSelectionForRun : [];
+    reviewedSourceFiles = [];
     renderRunReport(result, liveRunReport);
+    renderSourceReview(result, latestSourceSelection.length
+      ? { selectedCount: sourceSelectionForRun.length, candidates: latestSourceSelection, skipped: analyzeSourceSelection(selectedSourceFiles).skipped }
+      : null);
     const serialized = JSON.stringify(result, null, 2);
     liveRecordJson.textContent = serialized;
     if (liveRecordUrl) URL.revokeObjectURL(liveRecordUrl);
@@ -919,8 +1330,20 @@ chooseLocalFilesButton.addEventListener("click", () => {
   targetSiteFilesInput.click();
 });
 targetSiteFilesInput.addEventListener("change", () => void uploadLocalPage(targetSiteFilesInput));
+sourceContextFilesInput.addEventListener("change", () => {
+  sourceContextDirectoryInput.value = "";
+  updateSourceContextSelection();
+});
+sourceContextDirectoryInput.addEventListener("change", () => {
+  sourceContextFilesInput.value = "";
+  updateSourceContextSelection();
+});
+sourceReviewFixButton.addEventListener("click", handleSourceFix);
+sourceReviewApproveButton.addEventListener("click", handleSourceFixApproval);
 cancelLiveAssessmentButton.addEventListener("click", handleCancelLiveAssessment);
 targetInput.addEventListener("input", () => {
+  uploadedLocalSourceFiles = [];
+  updateSourceContextSelection();
   updateRecognizedTargetLabel();
   clearTargetValidationError();
   targetSiteStatus.textContent = "Using the page URL above.";
