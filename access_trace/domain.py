@@ -1,4 +1,4 @@
-"""Public data contract for the first Journey & Evidence run boundary."""
+"""Run requests and initial evidence for web and uploaded-page assessments."""
 
 import os
 import re
@@ -11,17 +11,11 @@ from urllib.parse import urlsplit
 from .evidence import attach_evidence_handoff
 
 
-SUPPORTED_GOAL = "Submit the contact form"
 INTERACTION_PROFILE = "keyboard-only"
 DEFAULT_SIMULATION_MODE = True
 DEFAULT_MAX_SITE_PAGES = 25
 CONTROLLED_SCHEME = "http"
-DEMO_TITLE = "AccessTrace Contact form"
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
-SUPPORTED_TARGET_PATHS = {
-    "/docs/demos/fixed/index.html": "fixed",
-    "/docs/demos/broken/index.html": "broken",
-}
 LOCAL_HTML_TARGET_PATTERN = re.compile(r"^/sites/([0-9a-f]{32})/(.+)$")
 
 
@@ -81,13 +75,11 @@ def validate_target_url(
         and effective_port == controlled_port
     )
     uploaded_site = LOCAL_HTML_TARGET_PATTERN.fullmatch(path)
-    if is_controlled_origin and path in SUPPORTED_TARGET_PATHS:
-        target_version = SUPPORTED_TARGET_PATHS[path]
-    elif is_controlled_origin and uploaded_site:
+    if is_controlled_origin and uploaded_site:
         target_version = "local"
     else:
         if host in LOOPBACK_HOSTS:
-            raise ValidationError("targetUrl must use a supported controlled page")
+            raise ValidationError("targetUrl must use an uploaded local page")
         target_version = "web"
 
     normalized = parsed.geturl()
@@ -153,66 +145,21 @@ def build_run_request(
     }
 
 
-def _controls() -> list:
-    return [
-        {
-            "role": "textbox",
-            "accessibleName": "Name",
-            "tag": "input",
-            "stableId": "name",
-            "focusable": True,
-            "characterCount": 0,
-            "acceptedInput": None,
-            "validationState": "not-observed",
-        },
-        {
-            "role": "textbox",
-            "accessibleName": "Email",
-            "tag": "input",
-            "stableId": "email",
-            "focusable": True,
-            "characterCount": 0,
-            "acceptedInput": None,
-            "validationState": "not-observed",
-        },
-        {
-            "role": "textbox",
-            "accessibleName": "Message",
-            "tag": "textarea",
-            "stableId": "message",
-            "focusable": True,
-            "characterCount": 0,
-            "acceptedInput": None,
-            "validationState": "not-observed",
-        },
-        {
-            "role": "button",
-            "accessibleName": "Submit",
-            "tag": "button",
-            "stableId": "submit",
-            "focusable": True,
-        },
-    ]
-
-
 def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
     goal = run_request["goal"]
-    target_version = run_request["targetVersion"]
-    is_controlled_demo = target_version in {"fixed", "broken"}
-    supports_contact_goal = is_controlled_demo
     observation = {
         "kind": "settled-observation",
         "observedAt": utc_now(),
         "url": run_request["targetUrl"],
-        "title": DEMO_TITLE if is_controlled_demo else None,
+        "title": None,
         "focus": {
             "role": "document",
-            "accessibleName": "Fictional contact form" if is_controlled_demo else None,
+            "accessibleName": None,
             "tag": "body",
             "stableId": "document",
             "isStable": True,
         },
-        "controls": _controls() if is_controlled_demo else [],
+        "controls": [],
         "warnings": [],
         "lifecycle": {
             "pageOpen": None,
@@ -243,20 +190,14 @@ def first_observation(run_request: Dict[str, Any]) -> Dict[str, Any]:
         }
     else:
         observation["success"] = {
-            "condition": "Message sent"
-            if supports_contact_goal and goal == SUPPORTED_GOAL
-            else None,
+            "condition": None,
             "matched": False,
         }
         observation["goalProgress"] = {
             "goal": goal,
             "status": "not-started",
             "completed": False,
-            "support": (
-                "supported"
-                if supports_contact_goal and goal == SUPPORTED_GOAL
-                else "agent-evaluates"
-            ),
+            "support": "agent-evaluates",
         }
         observation["coverage"] = None
 
@@ -283,12 +224,7 @@ def create_run(
         "pageOnly": run_request["pageOnly"],
         "headedMode": run_request["headedMode"],
         "sitePageLimit": run_request["sitePageLimit"],
-        "successCondition": (
-            "Message sent"
-            if run_request["targetVersion"] in {"fixed", "broken"}
-            and run_request["goal"] == SUPPORTED_GOAL
-            else None
-        ),
+        "successCondition": None,
         "simulationMode": run_request["simulationMode"],
         "interactionProfile": INTERACTION_PROFILE,
         "browserSession": {

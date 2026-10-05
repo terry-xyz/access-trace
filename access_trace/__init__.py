@@ -1,4 +1,4 @@
-"""Local-first controlled target for the AccessTrace journey."""
+"""Local-first keyboard accessibility assessments."""
 
 from .server import create_server
 

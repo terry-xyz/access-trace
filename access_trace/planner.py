@@ -91,53 +91,8 @@ WINDOWS_CHILD_ENVIRONMENT = {
     "APPDATA",
     "LOCALAPPDATA",
 }
-ACTION_SCHEMA = {
-    "oneOf": [
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["kind", "key"],
-            "properties": {
-                "kind": {"const": "key"},
-                "key": {"enum": sorted(PERMITTED_KEYS)},
-                "tabSteps": {"type": "integer", "minimum": 1, "maximum": 8},
-                "goalStatus": {"type": ["string", "null"], "enum": sorted(GOAL_STATUSES) + [None]},
-                "goalReason": {"type": ["string", "null"], "maxLength": 240},
-            },
-        },
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["kind", "field", "text"],
-            "properties": {
-                "kind": {"const": "type"},
-                "field": {"type": "string", "maxLength": MAX_PLANNER_FIELD_LENGTH},
-                "text": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": MAX_PLANNER_FIELD_LENGTH,
-                    "pattern": "^[^\\r\\n\\t]+$",
-                },
-                "goalStatus": {"type": ["string", "null"], "enum": sorted(GOAL_STATUSES) + [None]},
-                "goalReason": {"type": ["string", "null"], "maxLength": 240},
-            },
-        },
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["kind"],
-            "properties": {
-                "kind": {"const": "complete"},
-                "goalStatus": {"type": ["string", "null"], "enum": sorted(GOAL_STATUSES) + [None]},
-                "goalReason": {"type": ["string", "null"], "maxLength": 240},
-            },
-        },
-    ]
-}
-
-# Codex's structured-output mode requires every property to be present. Keep
-# this transport shape nullable, then normalize it into ACTION_SCHEMA's compact
-# union and validate that union independently before any browser action.
+# Codex requires every structured-output property to be present. Normalize
+# nullable fields before validating the permitted action in validate_action.
 CODEX_OUTPUT_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",

@@ -13,19 +13,19 @@ from access_trace.planner import PlannerError, validate_action
 
 
 CONTROLLED_PORT = 4173
-FIXED_URL = "http://127.0.0.1:4173/docs/demos/fixed/index.html"
+LOCAL_URL = "http://127.0.0.1:4173/sites/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/index.html"
 
 
 class AssessmentContractTests(unittest.TestCase):
     def test_run_creation_preserves_scope_and_builds_a_versioned_evidence_handoff(self):
         run = create_run(
-            {"targetUrl": FIXED_URL, "goal": "Submit the contact form"},
+            {"targetUrl": LOCAL_URL, "goal": "Submit the contact form"},
             CONTROLLED_PORT,
         )
 
         self.assertEqual("goal-focused", run["assessmentScope"])
         self.assertEqual("Submit the contact form", run["goal"])
-        self.assertEqual("fixed", run["targetVersion"])
+        self.assertEqual("local", run["targetVersion"])
         self.assertEqual("access-trace.evidence.v1", run["evidenceHandoff"]["schema"])
         self.assertEqual(run["id"], run["evidenceHandoff"]["runId"])
         self.assertEqual("IN_PROGRESS", run["evidenceHandoff"]["terminal"]["status"])
@@ -46,7 +46,7 @@ class AssessmentContractTests(unittest.TestCase):
             {"targetUrl": ""},
             {"targetUrl": "javascript:alert(1)"},
             {"targetUrl": "https://user:pass@example.test/"},
-            {"targetUrl": FIXED_URL, "assessmentScope": "whole-site", "goal": "Submit the contact form"},
+            {"targetUrl": LOCAL_URL, "assessmentScope": "whole-site", "goal": "Submit the contact form"},
         ]
         for payload in invalid_payloads:
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
@@ -55,9 +55,9 @@ class AssessmentContractTests(unittest.TestCase):
     def test_run_page_limit_and_simulation_mode_are_strictly_validated(self):
         for value in (-1, 501, True, 1.5):
             with self.subTest(sitePageLimit=value), self.assertRaises(ValidationError):
-                create_run({"targetUrl": FIXED_URL, "sitePageLimit": value}, CONTROLLED_PORT)
+                create_run({"targetUrl": LOCAL_URL, "sitePageLimit": value}, CONTROLLED_PORT)
         with self.assertRaises(ValidationError):
-            create_run({"targetUrl": FIXED_URL, "simulationMode": "true"}, CONTROLLED_PORT)
+            create_run({"targetUrl": LOCAL_URL, "simulationMode": "true"}, CONTROLLED_PORT)
 
     def test_site_page_limit_configuration_is_bounded_and_zero_means_uncapped(self):
         with patch.dict("os.environ", {"ACCESS_TRACE_MAX_SITE_PAGES": "0"}):
@@ -68,7 +68,7 @@ class AssessmentContractTests(unittest.TestCase):
             self.assertEqual(25, configured_site_page_limit())
 
     def test_evidence_handoff_refresh_keeps_run_scope_and_privacy_bounds(self):
-        run = create_run({"targetUrl": FIXED_URL}, CONTROLLED_PORT)
+        run = create_run({"targetUrl": LOCAL_URL}, CONTROLLED_PORT)
         handoff = build_evidence_handoff(run)
 
         self.assertEqual(run["id"], handoff["runId"])

@@ -180,14 +180,10 @@ OBSERVATION_SCRIPT = r"""
   const controls = allControls.slice(0, 8).map(control);
   let active = document.activeElement || document.body;
   while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-  const statuses = composedElements.filter((node) => node.matches('[role="status"]'));
   const dialogOpen = composedElements.filter((node) => node.matches(
     'dialog[open], [role="dialog"], [aria-modal="true"], [data-overlay], '
     + '[data-modal], .overlay, .modal, [class*="overlay"], [class*="modal"]'
   )).some(visible);
-  const successMatched = statuses.some(
-    (node) => visible(node) && compact(node.textContent) === "Message sent"
-  );
   return {
     url: String(window.location.href).slice(0, 256),
     title: compact(document.title),
@@ -202,7 +198,6 @@ OBSERVATION_SCRIPT = r"""
         node.matches("img, svg, canvas, video") && visible(node)
       )
     ),
-    successMatched,
     lifecycle: {
       dialogOpen,
     },
@@ -664,7 +659,7 @@ class _UploadedPageRequestPolicy:
         self.connection = connection
         self.target = urlsplit(target_url)
         site_match = re.match(
-            r"^(/sites/[0-9a-f]{32}|/docs/demos/(?:fixed|broken))/",
+            r"^(/sites/[0-9a-f]{32})/",
             self.target.path,
         )
         self.site_prefix = site_match.group(1) + "/" if site_match else ""
@@ -1499,7 +1494,6 @@ class IsolatedKeyboardBrowser:
             "title": None,
             "focus": {},
             "controls": [],
-            "successMatched": False,
             "lifecycle": self._lifecycle(),
         }
 
@@ -2102,7 +2096,6 @@ class IsolatedKeyboardBrowser:
             "controlsTruncated": cache.get("controlsTruncated", False),
             "pageContentVisible": self._page_content_visible is not False,
             "accessibilityTreeNodeCount": cache.get("treeNodeCount"),
-            "successMatched": False,
             "lifecycle": self._lifecycle(page_url, self._dom_dialog_open),
         }
 

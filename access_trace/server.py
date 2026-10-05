@@ -1,4 +1,4 @@
-"""HTTP boundary for page inputs and first-run assessment evidence."""
+"""HTTP boundary for page inputs and assessment evidence."""
 
 import hashlib
 import json
@@ -55,7 +55,6 @@ STATIC_ASSETS = {
     "/src/assessment.mjs": (STATIC_ROOT / "src" / "assessment.mjs", "text/javascript; charset=utf-8"),
     "/src/brand-theme.css": (STATIC_ROOT / "src" / "brand-theme.css", "text/css; charset=utf-8"),
     "/src/main.mjs": (STATIC_ROOT / "src" / "main.mjs", "text/javascript; charset=utf-8"),
-    "/src/site-files.mjs": (STATIC_ROOT / "src" / "site-files.mjs", "text/javascript; charset=utf-8"),
     "/src/source-context.mjs": (STATIC_ROOT / "src" / "source-context.mjs", "text/javascript; charset=utf-8"),
     "/src/source-apply.mjs": (STATIC_ROOT / "src" / "source-apply.mjs", "text/javascript; charset=utf-8"),
     "/src/styles.css": (STATIC_ROOT / "src" / "styles.css", "text/css; charset=utf-8"),
@@ -205,9 +204,6 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
         if asset is not None:
             self.send_file(asset[0], asset[1])
             return
-        if path.startswith("/docs/demos/"):
-            self.get_demo_document(path)
-            return
         local_site_match = LOCAL_SITE_PATH_PATTERN.fullmatch(path)
         if local_site_match:
             site_id = local_site_match.group(1)
@@ -285,21 +281,6 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
 
         self.send_json(HTTPStatus.CREATED, run)
 
-    def get_demo_document(self, request_path: str):
-        relative_path = unquote(request_path[len("/docs/demos/") :])
-        try:
-            safe_path = _safe_site_path(relative_path)
-            root = (STATIC_ROOT / "docs" / "demos").resolve(strict=True)
-            document = root.joinpath(*PurePosixPath(safe_path).parts).resolve(strict=True)
-            document.relative_to(root)
-            if not document.is_file():
-                raise FileNotFoundError
-            content_type = mimetypes.guess_type(document.name)[0] or "application/octet-stream"
-            if content_type.startswith("text/") or content_type in {"application/javascript"}:
-                content_type += "; charset=utf-8"
-            self.send_file(document, content_type)
-        except (ValidationError, OSError, ValueError):
-            self.send_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Demo document not found"}})
 
     def upload_local_site(self):
         content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
@@ -940,14 +921,6 @@ class AccessTraceHandler(BaseHTTPRequestHandler):
     def base_url(self) -> str:
         return self.server.controlled_origin
 
-    def send_html(self, body: str):
-        encoded = body.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(encoded)
 
     def send_local_html(self, contents: bytes):
         self.send_response(HTTPStatus.OK)

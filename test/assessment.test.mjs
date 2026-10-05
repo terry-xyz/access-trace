@@ -2,17 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  CONTROLLED_TARGET_URL,
-  calculateWebsiteScore,
   getAssessmentScope,
   validateAssessmentGoal,
   validateTargetUrl,
 } from "../src/assessment.mjs";
 
 test("target validation accepts absolute HTTP and HTTPS URLs and normalizes them", () => {
-  assert.deepEqual(validateTargetUrl(CONTROLLED_TARGET_URL), {
+  const targetUrl = "https://example.test/";
+  assert.deepEqual(validateTargetUrl(targetUrl), {
     valid: true,
-    normalizedUrl: CONTROLLED_TARGET_URL,
+    normalizedUrl: targetUrl,
     message: "",
   });
   assert.equal(validateTargetUrl(" https://example.test/path ").normalizedUrl,
@@ -50,25 +49,4 @@ test("goal length is bounded while other goal wording is passed through", () => 
   const tooLong = validateAssessmentGoal("x".repeat(501));
   assert.equal(tooLong.valid, false);
   assert.equal(tooLong.reason, "too-long");
-});
-
-test("website scores use passed over attempted checks and leave empty runs unscored", () => {
-  assert.deepEqual(calculateWebsiteScore(18, 22), {
-    passed: 18,
-    attempted: 22,
-    percentage: 82,
-    label: "18 of 22 website checks passed",
-  });
-  assert.deepEqual(calculateWebsiteScore(0, 0), {
-    passed: 0,
-    attempted: 0,
-    percentage: null,
-    label: "No website checks attempted",
-  });
-});
-
-test("invalid website-check counts cannot produce a score", () => {
-  for (const [passed, attempted] of [[-1, 4], [5, 4], [1.5, 4], [0, NaN]]) {
-    assert.throws(() => calculateWebsiteScore(passed, attempted), RangeError);
-  }
 });

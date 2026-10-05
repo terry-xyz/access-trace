@@ -50,12 +50,19 @@ class ServerSecurityTests(unittest.TestCase):
             self.assertNotIn("allow-same-origin", response.headers["Content-Security-Policy"])
 
     def test_site_file_safety_module_is_served(self):
-        for module_path in ("/src/site-files.mjs", "/src/source-context.mjs", "/src/source-apply.mjs"):
+        for module_path in ("/src/source-context.mjs", "/src/source-apply.mjs"):
             with self.subTest(module_path=module_path):
                 with urlopen(self.base_url + module_path, timeout=2) as response:
                     self.assertEqual(200, response.status)
                     self.assertEqual("text/javascript; charset=utf-8", response.headers["Content-Type"])
                     self.assertIn(b"export ", response.read())
+
+    def test_retired_demo_and_sample_routes_are_not_served(self):
+        for path in ("/docs/demos/fixed/index.html", "/docs/demos/broken/index.html", "/src/sample-report.mjs", "/src/site-files.mjs"):
+            with self.subTest(path=path), self.assertRaises(HTTPError) as failure:
+                urlopen(self.base_url + path, timeout=2)
+            self.assertEqual(404, failure.exception.code)
+            failure.exception.close()
 
     def test_oversized_upload_returns_bad_request(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)

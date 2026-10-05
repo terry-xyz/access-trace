@@ -16,6 +16,8 @@ class PublicDestinationTests(unittest.TestCase):
     def test_rejects_loopback_urls_outside_controlled_pages(self):
         for url in (
             "http://localhost:8080/admin",
+            "http://127.0.0.1:8080/docs/demos/fixed/index.html",
+            "http://127.0.0.1:8080/docs/demos/broken/index.html",
             "http://127.0.0.1:9999/docs/demos/fixed/index.html",
         ):
             with self.subTest(url=url), self.assertRaises(ValidationError):

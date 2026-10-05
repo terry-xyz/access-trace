@@ -1,4 +1,4 @@
-"""The contact-form keyboard journeys and redacted evidence lifecycle."""
+"""Keyboard assessments and their redacted evidence lifecycle."""
 
 import copy
 import logging
@@ -20,9 +20,7 @@ from .browser import (
     MAX_PLANNER_SCREENSHOT_BYTES,
 )
 from .domain import (
-    DEMO_TITLE,
     LOOPBACK_HOSTS,
-    SUPPORTED_GOAL,
     configured_site_page_limit,
     utc_now,
 )
@@ -158,64 +156,6 @@ def _focus_snapshot(observation: Dict[str, Any]) -> Dict[str, Any]:
         "validationState": _bounded_page_string(
             focus.get("validationState", "not-observed")
         ),
-    }
-
-
-def _goal_progress(
-    observation: Dict[str, Any],
-    goal: Optional[str] = SUPPORTED_GOAL,
-    success_condition: Optional[str] = "Message sent",
-) -> Optional[Dict[str, Any]]:
-    if goal is None:
-        return None
-    if goal != SUPPORTED_GOAL:
-        return {
-            "goal": goal,
-            "status": "not-started",
-            "completed": False,
-            "support": "agent-evaluates",
-        }
-    controls = observation.get("controls", [])
-    if not isinstance(controls, list):
-        controls = []
-    focus = observation.get("focus", {})
-    if not isinstance(focus, dict):
-        focus = {}
-    fields = {}
-    for control in controls:
-        if not isinstance(control, dict):
-            continue
-        stable_id = control.get("stableId")
-        if not isinstance(stable_id, str):
-            continue
-        if stable_id not in {"name", "email", "message"}:
-            continue
-        fields[stable_id] = {
-            "characterCount": _bounded_character_count(
-                control.get("characterCount", 0)
-            ),
-            "acceptedInput": _optional_bool(control.get("acceptedInput")),
-            "validationState": _bounded_page_string(
-                control.get("validationState", "not-observed")
-            ),
-        }
-    completed_fields = sum(1 for field in fields.values() if field["acceptedInput"])
-    success_matched = (
-        success_condition == "Message sent"
-        and bool(observation.get("successMatched"))
-    )
-    return {
-        "goal": SUPPORTED_GOAL,
-        "status": (
-            "completed"
-            if success_matched
-            else ("in-progress" if completed_fields else "not-started")
-        ),
-        "completed": success_matched,
-        "completedFields": completed_fields,
-        "expectedFields": 3,
-        "fields": fields,
-        "submitFocused": focus.get("stableId") == "submit",
     }
 
 
@@ -416,8 +356,6 @@ def _redacted_url(
 
 
 def _redacted_title(raw_title: Any) -> Optional[str]:
-    if raw_title == DEMO_TITLE:
-        return DEMO_TITLE
     if isinstance(raw_title, str):
         return "[redacted]"
     return None
@@ -428,9 +366,8 @@ def redacted_observation(
     target_url: str,
     sensitive_values: Optional[Iterable[str]] = None,
     assessment_scope: str = "goal-focused",
-    goal: Optional[str] = SUPPORTED_GOAL,
+    goal: Optional[str] = None,
     covered_focus_ids: Optional[set] = None,
-    success_condition: Optional[str] = "Message sent",
 ) -> Dict[str, Any]:
     bounded_url, navigation_warning = _redacted_url(
         raw.get("url"), target_url, sensitive_values or ()
@@ -494,13 +431,11 @@ def redacted_observation(
         "success": None
         if is_whole_site
         else {
-            "condition": success_condition if goal == SUPPORTED_GOAL else None,
-            "matched": bool(raw.get("successMatched"))
-            if goal == SUPPORTED_GOAL and success_condition == "Message sent"
-            else False,
+            "condition": None,
+            "matched": False,
         },
-        "goalProgress": None if is_whole_site else _goal_progress(
-            raw, goal, success_condition
+        "goalProgress": None if is_whole_site else _agent_goal_progress(
+            goal, "not-started"
         ),
         "coverage": None,
     }
@@ -538,9 +473,6 @@ def redacted_observation(
         _append_warning(observation["warnings"], {"kind": navigation_warning})
         observation["lifecycle"]["navigationRedirect"] = True
     return observation
-
-
-_redacted_observation = redacted_observation
 
 
 def _append_action(
@@ -611,36 +543,6 @@ def _set_terminal_state(
             "observedAt": observation["observedAt"],
         }
         attach_evidence_handoff(run)
-
-
-def _is_submit_focus(observation: Dict[str, Any]) -> bool:
-    focus = observation.get("focus", {})
-    return (
-        isinstance(focus, dict)
-        and focus.get("role") == "button"
-        and focus.get("accessibleName") == "Submit"
-    )
-
-
-def _is_submit_focus_snapshot(focus: Dict[str, Any]) -> bool:
-    return _is_submit_focus({"focus": focus})
-
-
-def _same_submit_focus(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
-    if not _is_submit_focus(left) or not _is_submit_focus(right):
-        return False
-    return _focus_snapshot(left) == _focus_snapshot(right)
-
-
-def _unchanged_goal_progress(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
-    return left.get("goalProgress") == right.get("goalProgress")
-
-
-def _has_relevant_overlay(observation: Dict[str, Any]) -> bool:
-    lifecycle = observation.get("lifecycle", {})
-    return isinstance(lifecycle, dict) and bool(
-        lifecycle.get("dialogOpen") or lifecycle.get("popupObserved")
-    )
 
 
 def _observation_progress_signature(
@@ -803,14 +705,13 @@ def _settle_action(
     except BrowserActionError:
         _append_action(run, action, before, "failed")
         try:
-            current = _redacted_observation(
+            current = redacted_observation(
                 browser.observe(),
                 run["targetUrl"],
                 typed_values.values(),
                 run.get("assessmentScope", "goal-focused"),
                 run.get("goal"),
                 covered_focus_ids,
-                run.get("successCondition"),
             )
             run["observations"].append(current)
             _record_observation_warnings(run, current)
@@ -836,27 +737,18 @@ def _settle_action(
     _append_action(run, action, before, "delivered")
     observe_after_action = getattr(browser, "observe_focus", None)
     if not (
-        (
-            run.get("assessmentScope") == "whole-site"
-            or (
-                run.get("assessmentScope") == "goal-focused"
-                and run.get("goal") is not None
-                and run.get("goal") != SUPPORTED_GOAL
-            )
-        )
-        and action.get("kind") == "key"
+        action.get("kind") == "key"
         and action.get("key") == "Tab"
         and callable(observe_after_action)
     ):
         observe_after_action = browser.observe
-    current = _redacted_observation(
+    current = redacted_observation(
         observe_after_action(),
         run["targetUrl"],
         typed_values.values(),
         run.get("assessmentScope", "goal-focused"),
         run.get("goal"),
         covered_focus_ids,
-        run.get("successCondition"),
     )
     run["observations"].append(current)
     _record_observation_warnings(run, current)
@@ -881,268 +773,6 @@ def _settle_action(
     return current
 
 
-def _settle_barrier_action(
-    run: Dict[str, Any],
-    browser: IsolatedKeyboardBrowser,
-    action: Dict[str, Any],
-    before: Dict[str, Any],
-    typed_values: Dict[str, str],
-    covered_focus_ids: Optional[set] = None,
-) -> Dict[str, Any]:
-    """Retry one barrier-probe delivery once after its fresh observation."""
-    try:
-        return _settle_action(
-            run,
-            browser,
-            action,
-            before,
-            typed_values,
-            covered_focus_ids,
-        )
-    except ActionDeliveryFailure as first_failure:
-        current = first_failure.observation or before
-        if _lifecycle_failure(current) is not None:
-            raise
-        try:
-            return _settle_action(
-                run,
-                browser,
-                action,
-                current,
-                typed_values,
-                covered_focus_ids,
-            )
-        except ActionDeliveryFailure as second_failure:
-            raise ActionDeliveryFailure(
-                "permitted keyboard action failed twice during barrier probing",
-                second_failure.observation or current,
-                attempts=2,
-            ) from second_failure
-
-
-def _record_recovery_step(
-    recovery_actions: list, action: Dict[str, Any], before: Dict[str, Any], after: Dict[str, Any]
-) -> None:
-    recovery_actions.append(
-        {
-            "key": action["key"],
-            "status": "delivered",
-            "focusBefore": _focus_snapshot(before),
-            "focusAfter": _focus_snapshot(after),
-        }
-    )
-
-
-def _dismiss_relevant_overlay(
-    run: Dict[str, Any],
-    browser: IsolatedKeyboardBrowser,
-    current: Dict[str, Any],
-    typed_values: Dict[str, str],
-    recovery_actions: list,
-    covered_focus_ids: Optional[set] = None,
-) -> Tuple[Dict[str, Any], bool]:
-    if not _has_relevant_overlay(current):
-        return current, False
-    after = _settle_barrier_action(
-        run,
-        browser,
-        {"kind": "key", "key": "Escape"},
-        current,
-        typed_values,
-        covered_focus_ids,
-    )
-    _record_recovery_step(
-        recovery_actions,
-        {"kind": "key", "key": "Escape"},
-        current,
-        after,
-    )
-    return after, True
-
-
-def _local_submit_recovery(
-    initial_submit: Dict[str, Any], recovery_actions: list
-) -> bool:
-    navigation = [
-        step
-        for step in recovery_actions
-        if step.get("key") in {"Shift+Tab", "Tab"}
-    ]
-    if len(navigation) != 2 or [step["key"] for step in navigation] != [
-        "Shift+Tab",
-        "Tab",
-    ]:
-        return False
-    controls = initial_submit.get("controls", [])
-    if not isinstance(controls, list):
-        return False
-    control_ids = [
-        control.get("stableId")
-        for control in controls
-        if isinstance(control, dict) and control.get("stableId")
-    ]
-    try:
-        submit_index = control_ids.index("submit")
-    except ValueError:
-        return False
-    if submit_index == 0:
-        return False
-    previous_id = control_ids[submit_index - 1]
-    return (
-        navigation[0]["focusAfter"].get("stableId") == previous_id
-        and _is_submit_focus_snapshot(navigation[1]["focusAfter"])
-    )
-
-
-def _classify_broken_barrier(
-    run: Dict[str, Any],
-    browser: IsolatedKeyboardBrowser,
-    initial_submit: Dict[str, Any],
-    started: float,
-    evidence_directory: Optional[Path],
-    typed_values: Dict[str, str],
-    covered_focus_ids: Optional[set] = None,
-) -> Tuple[str, Dict[str, Any]]:
-    """Probe a semantic Submit stopping point before calling it a barrier."""
-    activation_actions = []
-    activation_focus_consistent = True
-    recovery_actions = []
-    overlay_seen = False
-    current = initial_submit
-
-    current, dismissed_overlay = _dismiss_relevant_overlay(
-        run, browser, current, typed_values, recovery_actions, covered_focus_ids
-    )
-    overlay_seen = dismissed_overlay
-
-    for key in ("Enter", "Space"):
-        before = current
-        action_start = len(run["actions"])
-        current = _settle_barrier_action(
-            run,
-            browser,
-            {"kind": "key", "key": key},
-            before,
-            typed_values,
-            covered_focus_ids,
-        )
-        activation_attempts = run["actions"][action_start:]
-        activation_focus_consistent = activation_focus_consistent and bool(
-            activation_attempts
-        ) and all(
-            action.get("kind") == "key"
-            and action.get("key") == key
-            and _same_submit_focus(
-                initial_submit, {"focus": action.get("focusBefore", {})}
-            )
-            for action in activation_attempts
-        )
-        activation_actions.append(key)
-        if current["success"]["matched"]:
-            if not activation_focus_consistent:
-                run.setdefault("recoveryEvidence", []).append(
-                    {
-                        "kind": "submit-barrier-recovery",
-                        "attemptedActivations": activation_actions,
-                        "activationFocusConsistent": False,
-                        "actions": recovery_actions,
-                        "initialFocus": _focus_snapshot(initial_submit),
-                        "finalFocus": current["focus"],
-                        "unchangedProgress": _unchanged_goal_progress(
-                            initial_submit, current
-                        ),
-                        "sameSubmitFocus": _same_submit_focus(
-                            initial_submit, current
-                        ),
-                        "successMatched": True,
-                    }
-                )
-                _append_warning(
-                    run["warnings"], {"kind": "barrier-evidence-inconclusive"}
-                )
-                _set_terminal_state(run, "INCONCLUSIVE", current, started)
-                return "inconclusive", current
-            if _complete_if_verified(
-                run, current, started, browser, evidence_directory
-            ):
-                return "completed", current
-            return "inconclusive", current
-        current, dismissed_overlay = _dismiss_relevant_overlay(
-            run, browser, current, typed_values, recovery_actions, covered_focus_ids
-        )
-        overlay_seen = overlay_seen or dismissed_overlay
-        if not _same_submit_focus(initial_submit, current) or not _unchanged_goal_progress(
-            initial_submit, current
-        ):
-            break
-
-    for key in ("Shift+Tab", "Tab"):
-        after = _settle_barrier_action(
-            run,
-            browser,
-            {"kind": "key", "key": key},
-            current,
-            typed_values,
-            covered_focus_ids,
-        )
-        _record_recovery_step(
-            recovery_actions,
-            {"kind": "key", "key": key},
-            current,
-            after,
-        )
-        current = after
-
-    unchanged_progress = _unchanged_goal_progress(initial_submit, current)
-    same_submit_focus = _same_submit_focus(initial_submit, current)
-    local_focus_recovery = _local_submit_recovery(initial_submit, recovery_actions)
-    whole_page_wrapped = not local_focus_recovery
-    recovery_record = {
-        "kind": "submit-barrier-recovery",
-        "attemptedActivations": activation_actions,
-        "activationFocusConsistent": activation_focus_consistent,
-        "actions": recovery_actions,
-        "initialFocus": _focus_snapshot(initial_submit),
-        "finalFocus": _focus_snapshot(current),
-        "unchangedProgress": unchanged_progress,
-        "sameSubmitFocus": same_submit_focus,
-        "localFocusRecovery": local_focus_recovery,
-        "wholePageWrapped": whole_page_wrapped,
-        "successMatched": bool(current["success"]["matched"]),
-    }
-    run.setdefault("recoveryEvidence", []).append(recovery_record)
-
-    if (
-        len(activation_actions) == 2
-        and activation_actions == ["Enter", "Space"]
-        and not overlay_seen
-        and not whole_page_wrapped
-        and not current["success"]["matched"]
-        and unchanged_progress
-        and same_submit_focus
-        and activation_focus_consistent
-    ):
-        _persist_stopping_screenshot(run, browser, evidence_directory)
-        _set_terminal_state(run, "BLOCKED", current, started)
-        return "blocked", current
-
-    run["warnings"].append({"kind": "barrier-evidence-inconclusive"})
-    _set_terminal_state(run, "INCONCLUSIVE", current, started)
-    return "inconclusive", current
-
-
-def _submit_activation_observed(run: Dict[str, Any]) -> bool:
-    if not run.get("actions"):
-        return False
-    action = run["actions"][-1]
-    focus = action.get("focusBefore", {})
-    return (
-        action.get("kind") == "key"
-        and action.get("key") in {"Enter", "Space"}
-        and _is_submit_focus_snapshot(focus)
-    )
-
-
 def _complete_with_screenshot(
     run: Dict[str, Any],
     observation: Dict[str, Any],
@@ -1153,7 +783,6 @@ def _complete_with_screenshot(
     keyboard_only_goal = (
         run.get("assessmentScope") == "goal-focused"
         and run.get("goal") is not None
-        and run.get("goal") != SUPPORTED_GOAL
         and not _goal_needs_visual_evidence(run.get("goal"))
     )
     if not keyboard_only_goal:
@@ -1171,35 +800,6 @@ def _complete_with_screenshot(
             )
     _set_terminal_state(run, "COMPLETED", observation, started)
     return True
-
-
-def _complete_if_verified(
-    run: Dict[str, Any],
-    observation: Dict[str, Any],
-    started: float,
-    browser: IsolatedKeyboardBrowser,
-    evidence_directory: Optional[Path],
-) -> bool:
-    if not observation["success"]["matched"] or not _submit_activation_observed(run):
-        return False
-    return _complete_with_screenshot(
-        run, observation, started, browser, evidence_directory
-    )
-
-
-def _complete_whole_site_if_verified(
-    run: Dict[str, Any],
-    observation: Dict[str, Any],
-    started: float,
-    browser: IsolatedKeyboardBrowser,
-    evidence_directory: Optional[Path],
-) -> bool:
-    coverage = observation.get("coverage")
-    if not isinstance(coverage, dict) or coverage.get("completed") is not True:
-        return False
-    return _complete_with_screenshot(
-        run, observation, started, browser, evidence_directory
-    )
 
 
 def execute_assessment(
@@ -1269,32 +869,10 @@ def _raise_if_run_cancelled() -> None:
         raise RunCancelled()
 
 
-def execute_contact_goal(
-    run: Dict[str, Any],
-    evidence_directory: Optional[Path] = None,
-    planner: Optional[Any] = None,
-) -> Dict[str, Any]:
-    """Execute the supported fixed or broken contact-form goal."""
-    if run.get("goal") != SUPPORTED_GOAL:
-        raise ValueError("this lifecycle only supports the fixed contact-form goal")
-    return execute_assessment(run, evidence_directory, planner)
-
-
-def execute_fixed_goal(
-    run: Dict[str, Any],
-    evidence_directory: Optional[Path] = None,
-    planner: Optional[Any] = None,
-) -> Dict[str, Any]:
-    """Backward-compatible public entry point for the fixed contact form."""
-    if run.get("targetVersion") != "fixed":
-        raise ValueError("this lifecycle only supports the fixed contact-form goal")
-    return execute_contact_goal(run, evidence_directory, planner)
-
-
 def _execute_assessment(
     run: Dict[str, Any], evidence_directory: Optional[Path], planner: Optional[Any]
 ) -> Dict[str, Any]:
-    if run.get("targetVersion") not in {"fixed", "broken", "local", "web"}:
+    if run.get("targetVersion") not in {"local", "web"}:
         raise ValueError("run has an unsupported target")
     if run.get("assessmentScope") not in {"whole-site", "goal-focused"}:
         raise ValueError("run has an unsupported assessment scope")
@@ -1331,7 +909,7 @@ def _execute_assessment(
     try:
         _raise_if_run_cancelled()
         _report_run_progress("Starting the isolated browser session.")
-        if run.get("targetVersion") in {"local", "fixed", "broken"}:
+        if run.get("targetVersion") == "local":
             browser = IsolatedKeyboardBrowser(
                 run["targetUrl"],
                 restrict_network=True,
@@ -1356,14 +934,13 @@ def _execute_assessment(
                 "The page readiness wait is capped at %.0f seconds.",
                 HEADED_PAGE_READINESS_TIMEOUT,
             )
-            headless_observation = _redacted_observation(
+            headless_observation = redacted_observation(
                 current_raw,
                 run["targetUrl"],
                 typed_values.values(),
                 run["assessmentScope"],
                 run.get("goal"),
                 covered_focus_ids,
-                run.get("successCondition"),
             )
             run["observations"] = [headless_observation]
             headless_browser = browser
@@ -1384,7 +961,7 @@ def _execute_assessment(
                 failure = {"kind": "headful-retry-failed", "message": reason[:160]}
                 _append_warning(run["warnings"], failure)
                 run["browserFailure"] = failure
-                if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+                if run.get("goal"):
                     headless_observation["goalProgress"] = _agent_goal_progress(
                         run["goal"], "not-possible", reason
                     )
@@ -1392,14 +969,13 @@ def _execute_assessment(
                     run, "INCONCLUSIVE", headless_observation, started
                 )
                 return run
-        current = _redacted_observation(
+        current = redacted_observation(
             current_raw,
             run["targetUrl"],
             typed_values.values(),
             run["assessmentScope"],
             run.get("goal"),
             covered_focus_ids,
-            run.get("successCondition"),
         )
         run["observations"] = [current]
         _record_observation_warnings(run, current)
@@ -1551,14 +1127,13 @@ def _execute_assessment(
                     )
                     continue
                 covered_focus_ids.clear()
-                next_observation = _redacted_observation(
+                next_observation = redacted_observation(
                     next_raw_observation,
                     run["targetUrl"],
                     typed_values.values(),
                     run["assessmentScope"],
                     run.get("goal"),
                     covered_focus_ids,
-                    run.get("successCondition"),
                 )
                 run["observations"].append(next_observation)
                 _record_observation_warnings(run, next_observation)
@@ -1705,7 +1280,6 @@ def _execute_assessment(
 
             if (
                 run.get("assessmentScope") == "goal-focused"
-                and run.get("goal") != SUPPORTED_GOAL
                 and _goal_is_keyboard_audit(run.get("goal"))
                 and not keyboard_audit_traversal_done
             ):
@@ -1758,23 +1332,6 @@ def _execute_assessment(
                 )
                 return run
 
-            if (
-                run.get("assessmentScope") == "goal-focused"
-                and run.get("goal") == SUPPORTED_GOAL
-                and run.get("targetVersion") == "broken"
-                and _is_submit_focus(current)
-            ):
-                barrier_status, current = _classify_broken_barrier(
-                    run,
-                    browser,
-                    current,
-                    started,
-                    evidence_directory,
-                    typed_values,
-                    covered_focus_ids,
-                )
-                if barrier_status in {"blocked", "completed", "inconclusive"}:
-                    return run
 
             screenshot_data_url = None
             capture_planner_screenshot = getattr(
@@ -1838,14 +1395,13 @@ def _execute_assessment(
             try:
                 action = _planner_action(planner, bounded_for_planner)
             except PlannerError:
-                current = _redacted_observation(
+                current = redacted_observation(
                     browser.observe(),
                     run["targetUrl"],
                     typed_values.values(),
                     run.get("assessmentScope", "goal-focused"),
                     run.get("goal"),
                     covered_focus_ids,
-                    run.get("successCondition"),
                 )
                 run["observations"].append(current)
                 _record_observation_warnings(run, current)
@@ -1854,106 +1410,53 @@ def _execute_assessment(
                     raise BrowserError(lifecycle_failure)
                 raise
             if action["kind"] == "complete":
-                current = _redacted_observation(
+                current = redacted_observation(
                     browser.observe(),
                     run["targetUrl"],
                     typed_values.values(),
                     run.get("assessmentScope", "goal-focused"),
                     run.get("goal"),
                     covered_focus_ids,
-                    run.get("successCondition"),
                 )
                 run["observations"].append(current)
                 _record_observation_warnings(run, current)
                 lifecycle_failure = _lifecycle_failure(current)
                 if lifecycle_failure is not None:
                     raise BrowserError(lifecycle_failure)
-                if run.get("assessmentScope") == "whole-site":
-                    coverage = current.get("coverage")
-                    if isinstance(coverage, dict):
-                        coverage["status"] = "partial"
-                        _append_warning(
-                            run["warnings"],
-                            {
-                                "kind": "incomplete-coverage",
-                                "message": "The keyboard run completed with partial coverage; the score reports detected controls reached.",
-                            },
-                        )
-                        _complete_with_screenshot(
-                            run, current, started, browser, evidence_directory
-                        )
-                        return run
-                    _append_warning(run["warnings"], {"kind": "incomplete-coverage"})
-                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
-                    return run
                 goal = run.get("goal")
                 goal_status = action.get("goalStatus")
                 goal_reason = action.get("goalReason")
-                if goal is not None and goal != SUPPORTED_GOAL:
-                    if goal_status == "completed":
-                        current["goalProgress"] = _agent_goal_progress(
-                            goal, "completed"
-                        )
-                        _complete_with_screenshot(
-                            run, current, started, browser, evidence_directory
-                        )
-                    elif goal_status == "not-accessibility-related":
-                        reason = goal_reason or "This goal is unrelated to website accessibility."
-                        current["goalProgress"] = _agent_goal_progress(
-                            goal, "not-accessibility-related", reason
-                        )
-                        _append_warning(
-                            run["warnings"],
-                            {"kind": "unrelated-goal", "message": reason[:240]},
-                        )
-                        _set_terminal_state(run, "INCONCLUSIVE", current, started)
-                    else:
-                        reason = goal_reason or (
-                            "The agent could not complete this goal with the available browser actions."
-                        )
-                        current["goalProgress"] = _agent_goal_progress(
-                            goal, "not-possible", reason
-                        )
-                        _append_warning(
-                            run["warnings"],
-                            {"kind": "goal-not-possible", "message": reason[:240]},
-                        )
-                        _set_terminal_state(run, "INCONCLUSIVE", current, started)
-                    return run
-                if _complete_if_verified(
-                    run, current, started, browser, evidence_directory
-                ):
-                    return run
-                if goal_status == "not-possible":
-                    reason = goal_reason or "The agent could not complete the requested goal."
+                if goal_status == "completed":
                     current["goalProgress"] = _agent_goal_progress(
-                        goal or SUPPORTED_GOAL, "not-possible", reason
+                        goal, "completed"
+                    )
+                    _complete_with_screenshot(
+                        run, current, started, browser, evidence_directory
+                    )
+                elif goal_status == "not-accessibility-related":
+                    reason = goal_reason or "This goal is unrelated to website accessibility."
+                    current["goalProgress"] = _agent_goal_progress(
+                        goal, "not-accessibility-related", reason
+                    )
+                    _append_warning(
+                        run["warnings"],
+                        {"kind": "unrelated-goal", "message": reason[:240]},
+                    )
+                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
+                else:
+                    reason = goal_reason or (
+                        "The agent could not complete this goal with the available browser actions."
+                    )
+                    current["goalProgress"] = _agent_goal_progress(
+                        goal, "not-possible", reason
                     )
                     _append_warning(
                         run["warnings"],
                         {"kind": "goal-not-possible", "message": reason[:240]},
                     )
                     _set_terminal_state(run, "INCONCLUSIVE", current, started)
-                    return run
-                if goal_status == "completed":
-                    current["goalProgress"] = _agent_goal_progress(
-                        goal or SUPPORTED_GOAL,
-                        "not-possible",
-                        "The page did not show the expected success condition.",
-                    )
-                    _set_terminal_state(run, "INCONCLUSIVE", current, started)
-                    return run
-                raise PlannerError("planner stopped without locally verified success")
+                return run
             try:
-                # A page-only review inspects controls without following links
-                # or submitting forms that could leave the selected URL.
-                if (
-                    run.get("pageOnly") is True
-                    and run.get("goal") is None
-                    and action.get("kind") == "key"
-                    and action.get("key") in {"Enter", "Return", "Space"}
-                ):
-                    action = {"kind": "key", "key": "Tab"}
                 tab_steps = (
                     action.get("tabSteps", 1)
                     if action.get("kind") == "key" and action.get("key") == "Tab"
@@ -1968,7 +1471,6 @@ def _execute_assessment(
                 if (
                     run.get("assessmentScope") == "goal-focused"
                     and run.get("goal") is not None
-                    and run.get("goal") != SUPPORTED_GOAL
                     and action.get("kind") == "key"
                     and action.get("key") == "Tab"
                 ):
@@ -1994,10 +1496,7 @@ def _execute_assessment(
                         typed_values,
                         covered_focus_ids,
                     )
-                    if (
-                        run.get("goal") is not None
-                        and run.get("goal") != SUPPORTED_GOAL
-                    ):
+                    if run.get("goal") is not None:
                         current["goalProgress"] = _agent_goal_progress(
                             run["goal"],
                             action.get("goalStatus") or "in-progress",
@@ -2030,7 +1529,7 @@ def _execute_assessment(
                     }
                     _append_warning(run["warnings"], failure)
                     run["browserFailure"] = failure
-                    if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+                    if run.get("goal"):
                         current["goalProgress"] = _agent_goal_progress(
                             run["goal"], "not-possible", lifecycle_failure
                         )
@@ -2041,29 +1540,13 @@ def _execute_assessment(
                     _set_terminal_state(run, "INCONCLUSIVE", current, started)
                     return run
                 if consecutive_action_failures >= 2:
-                    if run.get("assessmentScope") == "whole-site":
-                        coverage = current.get("coverage")
-                        if isinstance(coverage, dict):
-                            coverage["status"] = "partial"
-                        _append_warning(
-                            run["warnings"],
-                            {
-                                "kind": "incomplete-coverage",
-                                "message": "Keyboard focus traversal stopped after repeated action failures; the scan continued to other pages where possible.",
-                            },
-                        )
-                        consecutive_action_failures = 0
-                        if finish_whole_site_page():
-                            return run
-                        current = run["observations"][-1]
-                        continue
                     failure = {
                         "kind": "action-delivery-failure",
                         "attempts": consecutive_action_failures,
                     }
                     _append_warning(run["warnings"], failure)
                     run["browserFailure"] = failure
-                    if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+                    if run.get("goal"):
                         reason = "The browser could not complete the requested goal action after two delivery attempts."
                         current["goalProgress"] = _agent_goal_progress(
                             run["goal"], "not-possible", reason
@@ -2076,23 +1559,13 @@ def _execute_assessment(
                     return run
                 continue
             consecutive_action_failures = 0
-            if run.get("assessmentScope") == "whole-site":
-                if _complete_whole_site_if_verified(
-                    run, current, started, browser, evidence_directory
-                ):
-                    return run
-                continue
-            if _complete_if_verified(
-                run, current, started, browser, evidence_directory
-            ):
-                return run
 
     except PlannerError as error:
         planner_failure = _planner_failure_evidence(error)
         _append_warning(run["warnings"], planner_failure)
         run["agentFailure"] = planner_failure
         fallback = run["observations"][-1]
-        if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+        if run.get("goal"):
             reason = "The agent could not evaluate this goal because it did not return a usable action."
             fallback["goalProgress"] = _agent_goal_progress(
                 run["goal"], "not-possible", reason
@@ -2111,7 +1584,7 @@ def _execute_assessment(
         _append_warning(run["warnings"], failure)
         run["browserFailure"] = failure
         fallback = error.observation or run["observations"][-1]
-        if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+        if run.get("goal"):
             reason = "The browser could not complete the requested goal action."
             fallback["goalProgress"] = _agent_goal_progress(
                 run["goal"], "not-possible", reason
@@ -2157,9 +1630,7 @@ def _execute_assessment(
                 None
                 if run.get("assessmentScope") == "whole-site"
                 else {
-                    "condition": "Message sent"
-                    if run.get("goal") == SUPPORTED_GOAL
-                    else None,
+                    "condition": None,
                     "matched": False,
                 }
             ),
@@ -2172,13 +1643,11 @@ def _execute_assessment(
                     "completed": False,
                     "support": "agent-evaluates",
                 }
-                if run.get("goal") != SUPPORTED_GOAL
-                else {}
             ),
             "coverage": None,
             "observedAt": utc_now(),
         }
-        if run.get("goal") and run.get("goal") != SUPPORTED_GOAL:
+        if run.get("goal"):
             reason = (
                 "The browser showed a network error page instead of the selected website."
                 if fallback.get("lifecycle", {}).get("browserLoadError")

@@ -94,6 +94,7 @@ class SourceReviewApiTests(unittest.TestCase):
             urlopen(request, timeout=3)
         self.assertEqual(409, failure.exception.code)
         self.assertIn("changed since the proposal", failure.exception.read().decode("utf-8"))
+        failure.exception.close()
 
 
 if __name__ == "__main__":

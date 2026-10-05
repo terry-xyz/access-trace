@@ -3,8 +3,7 @@ import {
   validateAssessmentGoal,
   validateTargetUrl,
 } from "./assessment.mjs";
-import { filterSensitiveSiteFiles } from "./site-files.mjs";
-import { isSensitiveSourcePath } from "./source-context.mjs";
+import { filterSensitiveFiles, isSensitiveSourcePath } from "./source-context.mjs";
 import { canApproveSourceReview, getSourceReviewActions, hasPersistedSourceBaseline, isSafeSourcePath, validateApplicableFiles } from "./source-apply.mjs";
 
 const form = document.querySelector("#assessment-form");
@@ -394,7 +393,7 @@ function validateCurrentConfiguration() {
   setError(goalInput, goalError, "");
   setError(sitePageLimitInput, sitePageLimitError, "");
 
-  const validation = validateTargetUrl(targetInput.value, window.location.origin);
+  const validation = validateTargetUrl(targetInput.value);
   if (!validation.valid) {
     setError(targetInput, targetError, validation.message);
     targetInput.focus();
@@ -434,7 +433,7 @@ function handleAssessmentSubmit(event) {
 
 /** updateRecognizedTargetLabel mirrors the active page URL without retaining stale text. */
 function updateRecognizedTargetLabel() {
-  const validation = validateTargetUrl(targetInput.value, window.location.origin);
+  const validation = validateTargetUrl(targetInput.value);
   recognizedTarget.textContent = validation.valid
     ? validation.normalizedUrl
     : "No page URL selected";
@@ -814,7 +813,7 @@ async function uploadLocalPage(input) {
 
   targetSiteStatus.textContent = "Preparing local page files…";
   const selectedEntries = selected.map((file) => ({ file, path: file.name }));
-  const { entries, skippedCount } = filterSensitiveSiteFiles(selectedEntries);
+  const { entries, skippedCount } = filterSensitiveFiles(selectedEntries);
   if (!entries.length) {
     targetSiteStatus.textContent = "No page files remain after excluding likely credentials and private keys.";
     return;

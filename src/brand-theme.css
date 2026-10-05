@@ -57,9 +57,6 @@ a:hover { color: #fff; }
 .form-actions .secondary-button { display: inline-flex; }
 .report-section,
 .outcome-card,
-.explanation-card,
-.fix-card,
-.report-panel,
 .live-outcome-card,
 .live-evidence-card { border-color: #343b25; }
 
@@ -333,13 +330,9 @@ summary,
 }
 .tooltip { border-color: #444; background: #101010; }
 
-/* Frosted glass surfaces: translucent charcoal, a soft inner edge, and blur. */
-.setup-card,
+/* Frosted glass surfaces: translucent charcoal, a soft inner edge, and blur. */.setup-card,
 .report-section,
-.report-panel,
 .outcome-card,
-.explanation-card,
-.fix-card,
 .live-outcome-card,
 .live-evidence-card,
 .terminal-window {
@@ -452,8 +445,7 @@ main#main-content.page-shell { width: 100%; max-width: none; }
 .live-evidence-card h3 { margin: 0 0 14px; color: #f4f4f4; font-size: 22px; font-weight: 500; }
 .live-outcome-card > .card-kicker,
 .live-evidence-card > .card-kicker { margin-bottom: 14px; }
-.report-subtitle,
-.report-wcag-limitation { display: none; }
+
 .coverage-score-layout { display: flex; align-items: center; gap: 24px; margin: 24px 0 30px; }
 .coverage-score-pie {
   position: relative;

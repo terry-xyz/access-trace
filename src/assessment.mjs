@@ -1,8 +1,7 @@
-export const CONTROLLED_TARGET_URL = "http://127.0.0.1:4173/";
 const MAX_GOAL_LENGTH = 500;
 
 /** validateTargetUrl accepts absolute web URLs and uploaded local site routes. */
-export function validateTargetUrl(value, baseOrigin = CONTROLLED_TARGET_URL) {
+export function validateTargetUrl(value) {
   const candidate = typeof value === "string" ? value.trim() : "";
 
   if (candidate === "") {
@@ -66,33 +65,4 @@ export function validateAssessmentGoal(value) {
   }
 
   return { valid: true, scope, goal: candidate, reason: "", message: "" };
-}
-
-/** calculateWebsiteScore reports the passed-to-attempted website-check ratio without grading agent failures. */
-export function calculateWebsiteScore(passed, attempted) {
-  if (
-    !Number.isSafeInteger(passed) ||
-    !Number.isSafeInteger(attempted) ||
-    passed < 0 ||
-    attempted < 0 ||
-    passed > attempted
-  ) {
-    throw new RangeError("Website check counts must be non-negative whole numbers, with passed no greater than attempted.");
-  }
-
-  if (attempted === 0) {
-    return {
-      passed: 0,
-      attempted: 0,
-      percentage: null,
-      label: "No website checks attempted",
-    };
-  }
-
-  return {
-    passed,
-    attempted,
-    percentage: Math.round((passed / attempted) * 100),
-    label: `${passed} of ${attempted} website checks passed`,
-  };
 }
