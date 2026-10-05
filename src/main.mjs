@@ -6,6 +6,9 @@ import {
 import { filterSensitiveFiles, isSensitiveSourcePath } from "./source-context.mjs";
 import { canApproveSourceReview, getSourceReviewActions, hasPersistedSourceBaseline, isSafeSourcePath, validateApplicableFiles } from "./source-apply.mjs";
 
+const demo = document.documentElement.dataset.demo === "true" ? await import("./demo.mjs") : null;
+const apiFetch = demo?.demoFetch ?? fetch;
+
 const form = document.querySelector("#assessment-form");
 const targetInput = document.querySelector("#target-url");
 const pageOnlyInput = document.querySelector("#page-only");
@@ -183,10 +186,10 @@ function showReportView() {
   reportEmptyState.hidden = Boolean(latestRunRecord);
 }
 
-/** loadLatestRunReport restores the latest saved real run after a page reload. */
+/** loadLatestRunReport restores the latest saved run after a page reload. */
 async function loadLatestRunReport() {
   try {
-    const response = await fetch("/api/runs/latest");
+    const response = await apiFetch("/api/runs/latest");
     if (!response.ok) return;
     const record = await response.json();
     if (!record || typeof record.id !== "string" || !record.id) return;
@@ -210,7 +213,7 @@ async function loadLatestRunReport() {
 /** loadSitePageLimitDefault reflects the developer's default unless the user edits the field first. */
 async function loadSitePageLimitDefault() {
   try {
-    const response = await fetch("/api/config");
+    const response = await apiFetch("/api/config");
     if (!response.ok) return;
     const configuration = await response.json();
     const value = configuration?.defaultSitePageLimit;
@@ -251,13 +254,13 @@ async function waitForRunTerminal(runId, shouldContinue, onTerminal) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1500);
     try {
-      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+      const response = await apiFetch(`/api/runs/${encodeURIComponent(runId)}`, {
         signal: controller.signal,
       });
       if (response.ok) {
         const record = await response.json();
         if (record && typeof record.status === "string") {
-          const activityResponse = await fetch(
+          const activityResponse = await apiFetch(
             `/api/runs/${encodeURIComponent(runId)}/activity`,
             { signal: controller.signal },
           );
@@ -295,7 +298,7 @@ async function executeRun(runId) {
   });
 
   try {
-    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/execute`, {
+    const response = await apiFetch(`/api/runs/${encodeURIComponent(runId)}/execute`, {
       method: "POST",
     });
     const result = await readResponseJson(response);
@@ -597,7 +600,7 @@ async function handleSourceFix() {
     const prepared = await prepareSourceContext(latestSourceSelection);
     if (!prepared.files.length) throw new Error("No eligible text files were available for review.");
     if (latestRunRecord?.id !== runId) throw new Error("The active report changed. Run Fix again on the current report.");
-    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-review`, {
+    const response = await apiFetch(`/api/runs/${encodeURIComponent(runId)}/source-review`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: prepared.body,
     });
     const result = await response.json();
@@ -669,7 +672,7 @@ async function refreshUploadedAssessmentCopy(changedFiles) {
   const body = new FormData();
   body.append("entrypoint", entrypoint);
   for (const { file, path } of entries) body.append("files", file, path);
-  const response = await fetch("/api/sites", { method: "POST", body });
+  const response = await apiFetch("/api/sites", { method: "POST", body });
   const result = await response.json();
   if (!response.ok) throw new Error(result?.error?.message || "Assessment copy could not be refreshed.");
 
@@ -754,7 +757,7 @@ async function handleSourceFixApproval() {
       handles.set(baseline.path, handle);
     }
     assertCurrent();
-    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/source-fix-approve`, {
+    const response = await apiFetch(`/api/runs/${encodeURIComponent(runId)}/source-fix-approve`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceContext: { files: sources } }),
     });
     const result = await response.json();
@@ -846,7 +849,7 @@ async function uploadLocalPage(input) {
   for (const { file, path } of entries) body.append("files", file, path);
   targetSiteStatus.textContent = `Uploading ${entries.length} page files…`;
   try {
-    const response = await fetch("/api/sites", { method: "POST", body });
+    const response = await apiFetch("/api/sites", { method: "POST", body });
     const result = await response.json();
     if (!response.ok) throw new Error(result?.error?.message || "Page files could not be uploaded.");
     targetInput.value = result.targetUrl;
@@ -1249,7 +1252,7 @@ function countValidationIssues(observations) {
   };
 }
 
-/** handleLiveAssessment creates and executes one real run, then exposes its redacted JSON record. */
+/** handleLiveAssessment creates and executes a run, then exposes its redacted JSON record. */
 async function handleLiveAssessment() {
   const configuration = validateCurrentConfiguration();
   if (!configuration) return;
@@ -1262,11 +1265,11 @@ async function handleLiveAssessment() {
   sourceReviewResult.hidden = true;
   terminalLog.replaceChildren();
   setRunStage(25, "Settings checked", "Page URL and assessment settings checked.");
-  liveAssessmentStatus.textContent = "Creating a fresh local run…";
+  liveAssessmentStatus.textContent = demo ? "Preparing the illustrative example…" : "Creating a fresh local run…";
   liveRecordDownload.hidden = true;
   liveRecordDetails.hidden = true;
   try {
-    const createResponse = await fetch("/api/runs", {
+    const createResponse = await apiFetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1286,12 +1289,16 @@ async function handleLiveAssessment() {
       throw new Error("The server did not return a run identifier.");
     }
 
-    setRunStage(50, "Run created", "Local run record created.");
+    setRunStage(50, "Run created", demo ? "Illustrative example loaded." : "Local run record created.");
     setCancelableRun(created.id);
-    setRunStage(75, "Assessment running", configuration.headedMode
+    setRunStage(75, demo ? "Replaying example" : "Assessment running", demo
+      ? "Replaying illustrative keyboard observations."
+      : configuration.headedMode
       ? "Visible isolated keyboard assessment started."
       : "Isolated keyboard assessment started.");
-    liveAssessmentStatus.textContent = configuration.headedMode
+    liveAssessmentStatus.textContent = demo
+      ? "Replaying the example Tab sequence…"
+      : configuration.headedMode
       ? "The visible isolated browser is checking the page…"
       : "The isolated browser is checking the page…";
     const { response: executeResponse, result: executeResult } = await executeRun(created.id);
@@ -1346,7 +1353,7 @@ async function handleCancelLiveAssessment() {
   button.disabled = true;
   setRunStatus("Requesting cancellation…");
   try {
-    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+    const response = await apiFetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
       method: "POST",
     });
     const result = await readResponseJson(response);
@@ -1416,5 +1423,6 @@ targetInput.value = "";
 updateRecognizedTargetLabel();
 
 updateScopePreview();
+if (demo) demo.configureDemo();
 void loadLatestRunReport();
 void loadSitePageLimitDefault();

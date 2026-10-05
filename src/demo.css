@@ -1,0 +1,23 @@
+.demo-banner {
+  width: min(900px, 100%);
+  padding: 16px 20px;
+  border: 1px solid var(--brand-emerald);
+  border-radius: 8px;
+  color: #e6fff4;
+  background: #0b1713;
+  font: 14px/1.6 "Segoe UI", Arial, sans-serif;
+}
+.demo-banner p { margin: 0; }
+.demo-banner a { color: #8af0ca; }
+html[data-demo] main#main-content.page-shell { flex-direction: column; justify-content: flex-start; gap: 24px; padding-top: 120px; }
+html[data-demo] .setup-card { margin: 0; }
+html[data-demo] .source-fields { grid-template-columns: 1fr; }
+html[data-demo] .local-site-field,
+html[data-demo] .page-only-option,
+html[data-demo] .page-scan-options,
+html[data-demo] .assessment-fields,
+html[data-demo] .privacy-help,
+html[data-demo] #headed-mode-hint,
+html[data-demo] #cancel-live-assessment,
+html[data-demo] .source-context-picker,
+html[data-demo] .source-review-actions { display: none !important; }

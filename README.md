@@ -4,6 +4,9 @@ AccessTrace assesses keyboard accessibility on web pages and uploaded local site
 It records browser actions and focus, reviews the evidence with Codex, and suggests
 source fixes for approval. Results are not a full accessibility or WCAG conformance audit.
 
+[Try the interactive demo](https://terry-xyz.github.io/access-trace/). It uses clearly
+labeled illustrative results; live assessments require the local app below.
+
 ## Run AccessTrace
 
 Requirements: Python 3.9+, Google Chrome or Chromium, and the Codex CLI signed in
