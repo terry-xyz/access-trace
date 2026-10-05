@@ -1,10 +1,12 @@
 # AccessTrace
 
+Completed in two days for [Open Hackathon 2026](https://open-hackathon.gr/).
+
 AccessTrace assesses keyboard accessibility on web pages and uploaded local sites.
 It records browser actions and focus, reviews the evidence with Codex, and suggests
 source fixes for approval. Results are not a full accessibility or WCAG conformance audit.
 
-[Try the interactive demo](https://terry-xyz.github.io/access-trace/). It uses clearly
+⭐ [Try the interactive demo](https://terry-xyz.github.io/access-trace/). It uses clearly
 labeled illustrative results; live assessments require the local app below.
 
 ## Run AccessTrace
